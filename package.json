@@ -1,0 +1,55 @@
+{
+  "name": "kryptoniq",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local day-trading assistant: crypto + macro news sentiment, economic calendar, Slingshot System charts and exchange positions.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c green,blue \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "node scripts/check-node.mjs && NODE_USE_ENV_PROXY=1 node --watch src/server/main.ts",
+    "dev:web": "vite",
+    "build": "vite build",
+    "start": "node scripts/check-node.mjs && npm run build && NODE_ENV=production NODE_USE_ENV_PROXY=1 node src/server/main.ts",
+    "serve": "node scripts/check-node.mjs && NODE_ENV=production NODE_USE_ENV_PROXY=1 node src/server/main.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "NODE_USE_ENV_PROXY=1 node scripts/smoke.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.133.0",
+    "@fastify/static": "10.1.6",
+    "@fontsource-variable/geist": "5.3.0",
+    "@fontsource-variable/geist-mono": "5.3.0",
+    "@huggingface/transformers": "4.3.1",
+    "@web3icons/core": "4.0.58",
+    "ccxt": "4.5.85",
+    "fast-xml-parser": "5.11.2",
+    "fastify": "5.12.5",
+    "he": "2.0.0",
+    "zod": "4.6.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@tanstack/react-query": "5.104.2",
+    "@types/he": "1.2.3",
+    "@types/node": "26.6.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "clsx": "2.1.1",
+    "concurrently": "10.0.6",
+    "lightweight-charts": "5.2.1",
+    "lucide-react": "1.55.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router": "8.4.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.4"
+  }
+}

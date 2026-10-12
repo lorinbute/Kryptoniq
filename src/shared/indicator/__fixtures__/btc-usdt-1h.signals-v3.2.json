@@ -1,0 +1,160 @@
+{
+ "signals": [
+  {
+   "bar": 406,
+   "confirmBar": 407,
+   "entryLow": 64364.1,
+   "sl": 64102.969427823184,
+   "tp": 65287.630572176815,
+   "outcome": "tp",
+   "outcomeReason": "takeProfitSignal",
+   "closedBar": 427
+  },
+  {
+   "bar": 467,
+   "confirmBar": 472,
+   "entryLow": 64728.6,
+   "sl": 64640.99018625674,
+   "tp": 65274.60981374326,
+   "outcome": "tp",
+   "outcomeReason": "takeProfitSignal",
+   "closedBar": 477
+  },
+  {
+   "bar": 805,
+   "confirmBar": 809,
+   "entryLow": 75558,
+   "sl": 75072.24979193801,
+   "tp": 78032.45020806199,
+   "outcome": "tp",
+   "outcomeReason": "takeProfitSignal",
+   "closedBar": 813
+  },
+  {
+   "bar": 828,
+   "confirmBar": 830,
+   "entryLow": 76674.1,
+   "sl": 76184.21092241733,
+   "tp": 78544.48907758268,
+   "outcome": "tp",
+   "outcomeReason": "takeProfitSignal",
+   "closedBar": 835
+  },
+  {
+   "bar": 861,
+   "confirmBar": 864,
+   "entryLow": 78124.7,
+   "sl": 77441.54850225642,
+   "tp": 81952.55149774357,
+   "outcome": "tp",
+   "outcomeReason": "takeProfitSignal",
+   "closedBar": 921
+  },
+  {
+   "bar": 930,
+   "confirmBar": 932,
+   "entryLow": 79010.1,
+   "sl": 78583.33094248046,
+   "tp": 81895.76905751954,
+   "outcome": "sl",
+   "outcomeReason": "stopLoss",
+   "closedBar": 934
+  },
+  {
+   "bar": 1144,
+   "confirmBar": 1145,
+   "entryLow": 79775.4,
+   "sl": 79574.14596202281,
+   "tp": 80409.75403797718,
+   "outcome": "sl",
+   "outcomeReason": "stopLoss",
+   "closedBar": 1150
+  },
+  {
+   "bar": 1475,
+   "confirmBar": 1483,
+   "entryLow": 80138.5,
+   "sl": 79853.72533273986,
+   "tp": 82221.27466726014,
+   "outcome": "tp",
+   "outcomeReason": "takeProfitSignal",
+   "closedBar": 1497
+  },
+  {
+   "bar": 1560,
+   "confirmBar": 1563,
+   "entryLow": 83517.1,
+   "sl": 82943.71517570356,
+   "tp": 87850.18482429645,
+   "outcome": "sl",
+   "outcomeReason": "stopLoss",
+   "closedBar": 1577
+  },
+  {
+   "bar": 1657,
+   "confirmBar": 1658,
+   "entryLow": 84351.4,
+   "sl": 84092.3418860174,
+   "tp": 85409.45811398259,
+   "outcome": "sl",
+   "outcomeReason": "stopLoss",
+   "closedBar": 1665
+  },
+  {
+   "bar": 1837,
+   "confirmBar": 1839,
+   "entryLow": 85427.2,
+   "sl": 85079.42665279347,
+   "tp": 87333.97334720653,
+   "outcome": "sl",
+   "outcomeReason": "stopLoss",
+   "closedBar": 1848
+  }
+ ],
+ "longMarkers": [
+  [
+   406,
+   "tp"
+  ],
+  [
+   467,
+   "tp"
+  ],
+  [
+   805,
+   "tp"
+  ],
+  [
+   828,
+   "tp"
+  ],
+  [
+   861,
+   "tp"
+  ],
+  [
+   930,
+   "sl"
+  ],
+  [
+   1144,
+   "sl"
+  ],
+  [
+   1475,
+   "tp"
+  ],
+  [
+   1560,
+   "sl"
+  ],
+  [
+   1657,
+   "sl"
+  ],
+  [
+   1837,
+   "sl"
+  ]
+ ]
+}

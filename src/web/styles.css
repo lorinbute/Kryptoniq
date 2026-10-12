@@ -1,0 +1,292 @@
+@import '@fontsource-variable/geist/wght.css';
+@import '@fontsource-variable/geist-mono/wght.css';
+@import 'tailwindcss';
+
+/* Kryptoniq "Cockpit" (FD-REDESIGN / TD-REDESIGN): deep black, tiles, brass as the brand accent; bull/bear
+   only ever mean up/down. Token names are kept from v1 so every page keeps working. */
+@theme {
+  --color-ink: #07090e;
+  --color-ink-2: #0a0d13;
+  --color-panel: #0d1118;
+  --color-panel-2: #121722;
+  --color-panel-3: #161c28;
+  --color-line: #1a202b;
+  --color-line-soft: #161b25;
+  --color-line-strong: #262d3a;
+  --color-text: #edeff3;
+  --color-muted: #8d96a8;
+  --color-faint: #7a8395;
+  --color-brass: #e2b866;
+  --color-brass-dim: #a8823c;
+  --color-bull: #3ddc97;
+  --color-bull-raw: #00ffaa;
+  --color-bear: #ff5d5d;
+  --color-bear-raw: #ff5252;
+  --color-neutral-bar: #2b3346;
+  --color-warn: #f0a04b;
+  --color-link: #7aa2ff;
+  --color-impact-high: #ff5d5d;
+  --color-impact-medium: #f0a04b;
+  --color-impact-low: #c9b458;
+  --color-impact-holiday: #6b778c;
+
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+  --radius-panel: 20px;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+  body {
+    @apply bg-ink text-text font-sans antialiased;
+    font-size: 14px;
+    line-height: 1.45;
+    font-feature-settings: 'tnum' 1;
+  }
+  a {
+    @apply text-link;
+  }
+  a:hover {
+    text-decoration: underline;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-brass);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--color-brass) 35%, transparent);
+  }
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.02em;
+  }
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea {
+    @apply bg-panel-2 border border-line-strong rounded-[10px] px-3 py-2 text-text;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    @apply text-faint;
+  }
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: var(--color-brass);
+    width: 16px;
+    height: 16px;
+  }
+  input:not([type='checkbox']):not([type='radio']):focus,
+  select:focus,
+  textarea:focus {
+    @apply border-brass-dim outline-none;
+  }
+  /* Tailwind 4's preflight gives buttons the default arrow: everything you can press shows the hand. */
+  a[href],
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']),
+  [role='option'],
+  summary,
+  select:not(:disabled),
+  input[type='checkbox']:not(:disabled),
+  input[type='radio']:not(:disabled),
+  input[type='color']:not(:disabled),
+  label:has(> input[type='checkbox']:not(:disabled)),
+  label:has(> input[type='radio']:not(:disabled)) {
+    cursor: pointer;
+  }
+  button:disabled,
+  select:disabled,
+  input:disabled {
+    cursor: not-allowed;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}
+
+/* Market strip ticker (TD-ICONS): the content plus enough inert copies to fill the width move left by one
+   copy's width (--ticker-shift), so the loop has no jump. It pauses under the pointer or keyboard focus; with reduced motion it does not move at all and the
+   strip scrolls by hand. */
+@keyframes ticker {
+  to {
+    transform: translateX(calc(-1 * var(--ticker-shift)));
+  }
+}
+.ticker-track {
+  animation: ticker var(--ticker-duration, 60s) linear infinite;
+}
+.ticker:hover .ticker-track,
+.ticker:focus-within .ticker-track {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ticker {
+    overflow-x: auto;
+  }
+  .ticker-track {
+    animation: none;
+  }
+  .ticker-copy {
+    display: none;
+  }
+}
+
+@layer components {
+  /* A tile. */
+  .panel {
+    @apply bg-panel border border-line min-w-0;
+    border-radius: var(--radius-panel);
+  }
+  /* Tiles label themselves quietly; the content is the headline. */
+  .panel-title {
+    @apply text-[13px] font-medium text-muted;
+    letter-spacing: 0;
+  }
+  .page-title {
+    @apply text-[28px] leading-tight font-[650];
+    letter-spacing: -0.03em;
+  }
+  .link-accent {
+    @apply text-[12.5px] font-medium text-brass no-underline;
+  }
+  .link-accent:hover {
+    @apply text-[#ecc87e] no-underline;
+  }
+  .btn {
+    @apply inline-flex min-h-[38px] items-center justify-center gap-2 rounded-[10px] border border-line-strong bg-panel-2 px-3.5 text-[13px] font-semibold text-text no-underline transition-colors;
+  }
+  .btn:hover {
+    @apply border-brass-dim bg-panel-3 no-underline;
+  }
+  .btn:disabled {
+    @apply opacity-50 cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply border-brass bg-brass text-ink;
+  }
+  .btn-primary:hover {
+    @apply border-[#ecc87e] bg-[#ecc87e];
+  }
+  .btn-danger {
+    @apply border-bear/50 bg-transparent text-bear;
+  }
+  .btn-danger:hover {
+    @apply border-bear bg-bear/10;
+  }
+  /* Segmented control: the selected option is filled with brass. */
+  .seg {
+    @apply inline-flex max-w-full flex-wrap rounded-[10px] border border-line bg-panel p-[3px];
+  }
+  .seg > button {
+    @apply min-h-[30px] min-w-[36px] rounded-[7px] px-2.5 text-[12.5px] text-muted transition-colors;
+  }
+  .seg > button:hover {
+    @apply text-text;
+  }
+  .seg > button[aria-pressed='true'],
+  .seg > button[aria-selected='true'] {
+    @apply bg-brass font-bold text-ink;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-line-strong px-3 py-0.5 text-[12.5px] text-muted no-underline transition-colors;
+  }
+  button.chip,
+  a.chip {
+    @apply min-h-[30px];
+  }
+  button.chip:hover,
+  a.chip:hover {
+    @apply text-text no-underline;
+  }
+  .chip[aria-pressed='true'],
+  .chip[aria-current='page'] {
+    @apply border-brass bg-brass/10 font-semibold text-text;
+  }
+  /* Quiet toggle chip (category / sentiment filters): selected = raised, not brass. */
+  .chip-soft {
+    @apply inline-flex min-h-[30px] items-center rounded-full border border-transparent px-3 text-[12.5px] text-muted transition-colors;
+  }
+  .chip-soft:hover {
+    @apply text-text;
+  }
+  .chip-soft[aria-pressed='true'] {
+    @apply border-line-strong bg-panel-2 font-semibold text-text;
+  }
+  .tag {
+    @apply inline-flex h-5 items-center rounded-[5px] border border-line-strong px-1.5 text-[11.5px] font-medium text-text;
+  }
+  .table {
+    @apply w-full border-collapse text-[13px];
+  }
+  .table th {
+    @apply text-left text-[12px] font-medium text-faint px-3 py-2.5 border-b border-line whitespace-nowrap;
+  }
+  .table td {
+    @apply px-3 py-2.5 border-b border-line-soft align-top;
+  }
+  .table tr:last-child td {
+    @apply border-b-0;
+  }
+  .panel-flush .table th:first-child,
+  .panel-flush .table td:first-child {
+    @apply pl-5;
+  }
+  .panel-flush .table th:last-child,
+  .panel-flush .table td:last-child {
+    @apply pr-5;
+  }
+  .panel-flush > :not(.table):not(table):not(.table-wrap) {
+    @apply px-5;
+  }
+  /* Tables that scroll sideways keep a usable width instead of squeezing their columns into tall rows
+     (a phone scrolls them horizontally). */
+  .panel-flush .table,
+  .overflow-x-auto > .table,
+  .table-wrap > .table {
+    min-width: 640px;
+  }
+  /* Tables inside a padded tile line up with its title. */
+  .panel > .px-5 .table th:first-child,
+  .panel > .px-5 .table td:first-child {
+    @apply pl-0;
+  }
+  .panel > .px-5 .table th:last-child,
+  .panel > .px-5 .table td:last-child {
+    @apply pr-0;
+  }
+  /* Numbers: prices, times, scores, countdowns. */
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  /* Very large figures stay in the sans face. */
+  .num-display {
+    font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.05em;
+  }
+  @media (pointer: coarse) {
+    .btn {
+      @apply min-h-[44px];
+    }
+    .seg > button {
+      @apply min-h-[40px];
+    }
+    button.chip,
+    a.chip,
+    .chip-soft {
+      @apply min-h-[36px];
+    }
+  }
+}
