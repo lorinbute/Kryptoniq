@@ -114,19 +114,22 @@ export class ClaudeEngine implements SentimentEngine {
       if (!item || seen.has(n)) continue;
       seen.add(n);
       const score = clampScore(r.score);
+      const impact = Number.isFinite(r.impact) ? Math.max(1, Math.min(3, Math.round(r.impact))) : undefined;
       out.push({
         id: item.id,
         score,
         label: labelFor(score),
         engine: this.id,
-        meta: { impact: Math.max(1, Math.min(3, Math.round(r.impact))) },
+        impact,
+        meta: { impact },
       });
     }
     return out;
   }
 }
 
-function describeError(err: unknown): string {
+/** A Claude API error in Romanian (also used by the day summary). */
+export function describeError(err: unknown): string {
   if (err instanceof Anthropic.AuthenticationError) return 'cheia API Anthropic este invalidă';
   if (err instanceof Anthropic.PermissionDeniedError) return 'cheia API nu are acces la acest model';
   if (err instanceof Anthropic.RateLimitError) return 'limită de cereri Anthropic atinsă';

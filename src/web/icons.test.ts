@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { coinHue, eventKind, newsTopic } from './icons.ts';
 
-// Headlines taken from the news collected by Kryptoniq on 12 Oct 2026.
+// Headlines taken from the news collected by the app (then Kryptoniq) on 12 Oct 2026.
 describe('newsTopic', () => {
   const t = (title: string, category = 'macro', coins: string[] = [], summary = '') => newsTopic(title, summary, category, coins);
 
@@ -44,6 +44,10 @@ describe('newsTopic', () => {
 
 describe('eventKind', () => {
   const k = (title: string, impact = 'High', source = 'ff') => eventKind(title, impact, source);
+  it('company results have their own kind, whatever the title says (FD-SENTIQ §4.5)', () => {
+    expect(k('Rezultate trimestriale Retail Opportunity Investments', 'High', 'earn')).toBe('earnings');
+    expect(newsTopic('Apple unveils a new iPhone', '', 'stocks', [])).toBe('earnings');
+  });
   it('maps ForexFactory titles to a kind', () => {
     expect(k('Core CPI m/m')).toBe('inflation');
     expect(k('PPI m/m')).toBe('inflation');

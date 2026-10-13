@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 export type FullscreenMode = 'off' | 'native' | 'css';
 
 /** Sent by the app (e.g. ⌘K) when something must be visible above the chart. */
-export const EXIT_FULLSCREEN_EVENT = 'kryptoniq:exit-fullscreen';
+export const EXIT_FULLSCREEN_EVENT = 'sentiq:exit-fullscreen';
 
 type FsDocument = Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => Promise<void> | void };
 type FsElement = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };

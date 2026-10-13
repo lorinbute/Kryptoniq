@@ -56,7 +56,7 @@ const WEAK: [NewsTopic, RegExp][] = [
   ['defi', /\b(defi|protocol|blockchain|layer[- ]?2|staking|validators?|mainnet|testnet|on-?chain|dex|tvl|tokeni[sz](?:ed|ation))\b/i],
 ];
 
-const CATEGORY_TOPIC: Record<string, NewsTopic> = { crypto: 'crypto', macro: 'macro', geopolitics: 'geopolitics' };
+const CATEGORY_TOPIC: Record<string, NewsTopic> = { crypto: 'crypto', macro: 'macro', geopolitics: 'geopolitics', stocks: 'earnings' };
 
 /** The icon topic of a news item. A coin logo is used when the story is about a coin (see STRONG / WEAK). */
 export function newsTopic(title: string, summary: string | null | undefined, category: string, coins: readonly string[]): NewsTopic {
@@ -70,6 +70,7 @@ export function newsTopic(title: string, summary: string | null | undefined, cat
 export type EventKind =
   | 'holiday'
   | 'custom'
+  | 'earnings'
   | 'manufacturing'
   | 'housing'
   | 'retail'
@@ -101,6 +102,8 @@ const EVENT_RULES: [EventKind, RegExp][] = [
 
 export function eventKind(title: string, impact: string, source: string): EventKind {
   if (source === 'custom') return 'custom';
+  // Quarterly results of a watchlist stock (FD-SENTIQ §4.5).
+  if (source === 'earn') return 'earnings';
   if (impact === 'Holiday' || /\bholiday\b/i.test(title)) return 'holiday';
   for (const [kind, re] of EVENT_RULES) if (re.test(title)) return kind;
   return 'other';

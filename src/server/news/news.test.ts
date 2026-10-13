@@ -9,7 +9,8 @@ import { backoffMs, FETCH_INTERVAL_MS, MAX_BACKOFF_MS } from './fetcher.ts';
 import { ingestItems, newsId } from './ingest.ts';
 import { canonicalUrl, effectivePublishedAt, MAX_ITEM_AGE_MS, parseFeedDate, safeHttpUrl, toPlainText } from './normalize.ts';
 import { FeedParseError, parseFeed, type ParsedItem } from './parser.ts';
-import { seedSources } from './sources.ts';
+import { nasdaqFeedUrl, seedSources, syncStockSources } from './sources.ts';
+import { newsQuerySchema } from './query.ts';
 
 const fixture = (name: string) => readFileSync(fileURLToPath(new URL(`./__fixtures__/${name}`, import.meta.url)), 'utf8');
 
@@ -184,7 +185,7 @@ describe('classify', () => {
   });
   it('geopolitics counts only with market-moving terms', () => {
     expect(classify('geopolitics', 'Royal wedding draws crowds', '', [])).toMatchObject({ relevance: 0, flags: ['lowRelevance'] });
-    expect(classify('geopolitics', 'Missile strikes hit oil facilities', '', [])).toMatchObject({ relevance: 0.6, impact: 2 });
+    expect(classify('geopolitics', 'Missile strikes hit oil facilities', '', [])).toMatchObject({ relevance: 0.8, impact: 2 }); // 0.6 before FD-IMPACT
     expect(classify('geopolitics', 'US-Iran war escalates', '', []).impact).toBe(3);
   });
   it('flags sponsored, speculative and recap pieces', () => {
@@ -267,6 +268,91 @@ describe('ingest', () => {
     seedSources(db);
     expect(db.get("SELECT count(*) AS n FROM sources WHERE url = 'https://cointelegraph.com/rss'")).toEqual({ n: 1 });
     expect(db.get("SELECT id FROM sources WHERE id = 'cointelegraph'")).toBeUndefined();
+    db.close();
+  });
+});
+
+describe('stocks in the news (FD-SENTIQ §4.4)', () => {
+  const det = new CoinDetector([{ symbol: 'AAPL', names: ['Apple Token Network'] }], { SOL: [] }, { AAPL: ['Apple'], NVDA: ['NVIDIA'], 'BRK.B': ['Berkshire Hathaway'], F: ['Ford Motor'], AI: ['C3.ai'], META: ['Meta Platforms', 'Meta'], TGT: ['Target'], NOW: ['ServiceNow'] });
+  const tags = (t: string) => detectCoins(det, t, '');
+
+  it('finds a company by its name in its own case, in capitals or in Title Case, never in lower case', () => {
+    expect(tags('Apple unveils a new iPhone')).toEqual(['AAPL']);
+    expect(tags('an apple a day')).toEqual([]);
+    expect(tags('Nvidia beats estimates')).toEqual(['NVDA']);
+    expect(tags('Retailers hit their target')).toEqual([]);
+    expect(tags('Target lifts guidance')).toEqual(['TGT']);
+  });
+
+  it('accepts $TICKER and (EXCHANGE: TICKER) always, bare tickers only outside the plain-word list', () => {
+    expect(tags('Ford (NYSE: F) recalls trucks')).toEqual(['F']);
+    expect(tags('BRK.B and $F rally')).toEqual(['BRK.B', 'F']);
+    expect(tags('Berkshire Hathaway (NYSE:BRK.B) buys more')).toEqual(['BRK.B']);
+    expect(tags('AI stocks soar as investors pile in')).toEqual([]);
+    expect(tags('$AI jumps after earnings')).toEqual(['AI']);
+    // "NOW" is a plain word: the ServiceNow ticker counts only as $NOW or after an exchange.
+    expect(tags('Stocks to buy NOW, analysts say')).toEqual([]);
+    expect(tags('ServiceNow (NYSE: NOW) beats')).toEqual(['NOW']);
+    // The company name in capitals still counts.
+    expect(tags('META hits a record')).toEqual(['META']);
+    expect(tags('Shares of NVDA slide')).toEqual(['NVDA']);
+    // ALL-CAPS headlines: no bare tickers, names still count.
+    expect(tags('JUST IN: APPLE AND NVDA SURGE TODAY')).toEqual(['AAPL']);
+  });
+
+  it('stock index tickers are not coins, unless the user follows that coin', () => {
+    const d = new CoinDetector([{ symbol: 'SPX', names: ['SPX6900'] }]);
+    expect(detectCoins(d, 'Stocks settle lower', 'The S&P 500 Index ($SPX) closed down 0.05%')).toEqual([]);
+    const mine = new CoinDetector([{ symbol: 'SPX', names: ['SPX6900'] }], { SPX: [] });
+    expect(detectCoins(mine, 'Traders pile into $SPX', '')).toEqual(['SPX']);
+  });
+
+  it('the news filter takes dotted tickers too', () => {
+    expect(newsQuerySchema.parse({ coins: 'brk.b,SOL,bad!', category: 'stocks' })).toMatchObject({ coins: ['BRK.B', 'SOL'], category: 'stocks' });
+  });
+
+  it('stock news count fully when about a share or the market', () => {
+    expect(classify('stocks', 'Apple unveils a new iPhone', '', ['AAPL'])).toMatchObject({ relevance: 1 });
+    expect(classify('stocks', 'Stocks settle lower as chipmakers fall', '', [])).toMatchObject({ relevance: 1 });
+    expect(classify('stocks', 'Corn gets a dead cat bounce on Monday', '', [])).toMatchObject({ relevance: 0.8 });
+  });
+
+  it('keeps one Nasdaq feed per watchlist stock, and lets a removed stock\'s feed go with its news', () => {
+    const db = new Db(':memory:');
+    seedSources(db);
+    expect(db.all("SELECT id FROM sources WHERE category = 'stocks' ORDER BY id")).toEqual([{ id: 'cnbc-business' }, { id: 'investing-stocks' }, { id: 'nasdaq-stocks' }]);
+    const add = (coin: string) => db.run("INSERT INTO watchlist(coin, quote, position, aliases, added_at, kind) VALUES (?, 'USD', 0, '[]', 1, 'stock')", [coin]);
+    add('AAPL');
+    add('BRK.B');
+    syncStockSources(db, 'AAPL');
+    expect(db.all("SELECT id, url, auto, enabled, builtin FROM sources WHERE auto IS NOT NULL ORDER BY id")).toEqual([
+      { id: 'nasdaq-aapl', url: nasdaqFeedUrl('AAPL'), auto: 'nasdaq:AAPL', enabled: 1, builtin: 1 },
+      { id: 'nasdaq-brk-b', url: 'https://www.nasdaq.com/feed/rssoutbound?symbol=BRK.B', auto: 'nasdaq:BRK.B', enabled: 1, builtin: 1 },
+    ]);
+    // The user switched AAPL's feed off: it stays off, unless AAPL is added again.
+    db.run("UPDATE sources SET enabled = 0 WHERE id = 'nasdaq-aapl'");
+    syncStockSources(db);
+    expect(db.get("SELECT enabled FROM sources WHERE id = 'nasdaq-aapl'")).toEqual({ enabled: 0 });
+    syncStockSources(db, 'AAPL');
+    expect(db.get("SELECT enabled FROM sources WHERE id = 'nasdaq-aapl'")).toEqual({ enabled: 1 });
+    // Removed: a feed with news is switched off (its news stay), one without news is deleted.
+    db.run("INSERT INTO news(id, source_id, title, published_at, fetched_at, category, relevance, impact, cluster_id) VALUES ('n1', 'nasdaq-aapl', 'Apple', 1, 1, 'stocks', 1, 1, 'c1')");
+    db.run("DELETE FROM watchlist WHERE coin IN ('AAPL', 'BRK.B')");
+    syncStockSources(db);
+    expect(db.all('SELECT id, enabled FROM sources WHERE auto IS NOT NULL')).toEqual([{ id: 'nasdaq-aapl', enabled: 0 }]);
+    // Once retention removed its news, the next sync deletes it.
+    db.run("DELETE FROM news WHERE id = 'n1'");
+    syncStockSources(db);
+    expect(db.all('SELECT id FROM sources WHERE auto IS NOT NULL')).toEqual([]);
+    db.close();
+  });
+
+  it('does not duplicate a feed the user already added by hand', () => {
+    const db = new Db(':memory:');
+    db.run("INSERT INTO sources(id, name, url, category) VALUES ('mine', 'Apple news', ?, 'stocks')", [nasdaqFeedUrl('AAPL')]);
+    db.run("INSERT INTO watchlist(coin, quote, position, aliases, added_at, kind) VALUES ('AAPL', 'USD', 0, '[]', 1, 'stock')");
+    syncStockSources(db, 'AAPL');
+    expect(db.all('SELECT id FROM sources')).toEqual([{ id: 'mine' }]);
     db.close();
   });
 });

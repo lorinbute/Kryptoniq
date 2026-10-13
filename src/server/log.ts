@@ -21,7 +21,7 @@ export function createLogger(dir: string | null, quiet = false): Logger {
     if (!quiet) (level === 'ERROR' ? console.error : console.log)(line);
     if (dir) {
       try {
-        appendFileSync(path.join(dir, `kryptoniq-${line.slice(0, 10)}.log`), line + '\n');
+        appendFileSync(path.join(dir, `sentiq-${line.slice(0, 10)}.log`), line + '\n');
       } catch {
         // logging must never crash the app
       }

@@ -5,7 +5,8 @@ import { Db } from '../db/database.ts';
 import { silentLogger } from '../log.ts';
 import { explain } from './glossary.ts';
 import { ffWeekRange, formatTv, matchEvents, mergeCalendar, normalizeTitle, parseValue } from './merge.ts';
-import { CalendarService, FF_JOB } from './service.ts';
+import { CalendarService, earningsDays, earningsEvent, FF_JOB, quarterRo } from './service.ts';
+import type { EarningsRow } from '../market/stocks.ts';
 import { parseForexFactory, parseTradingView, RateLimitedError, type RawEvent } from './sources.ts';
 import { readJobData } from '../jobs/scheduler.ts';
 
@@ -136,18 +137,22 @@ describe('CalendarService', () => {
     const svc = new CalendarService(db, silentLogger);
     await svc.refreshForexFactory(now, async () => ff);
     await svc.refreshTradingView(now, async () => tv);
-    const id = svc.addCustom({ title: 'ETH upgrade', ts: Date.parse('2026-10-15T10:00:00Z'), impact: 'High' });
+    const id = svc.addCustom(1, { title: 'ETH upgrade', ts: Date.parse('2026-10-15T10:00:00Z'), impact: 'High' });
     const from = Date.parse('2026-10-14T00:00:00Z');
     const to = Date.parse('2026-10-16T00:00:00Z');
-    const events = svc.query({ from, to, impacts: ['High'], currencies: ['USD'] });
+    const events = svc.query({ userId: 1, from, to, impacts: ['High'], currencies: ['USD'] });
     expect(events.every((e) => e.ts >= from && e.ts < to)).toBe(true);
     expect(events.every((e) => e.source === 'custom' || (e.impact === 'High' && e.currency === 'USD'))).toBe(true);
     const cpi = events.find((e) => e.title === 'CPI m/m')!;
     expect(cpi.matched).toBe(true);
     expect(cpi.note).toMatch(/Inflația/);
     expect(events.find((e) => e.id === `custom:${id}`)).toMatchObject({ title: 'ETH upgrade', currency: 'CRYPTO' });
-    expect(svc.deleteCustom(id)).toBe(true);
-    expect(() => svc.addCustom({ title: '', ts: 1 })).toThrow();
+    // FD-USERS §2: somebody else's custom events are neither shown nor deletable.
+    const other = db.run("INSERT INTO users(email, name, role, created_at) VALUES ('b@example.com', 'B', 'user', 1)").lastInsertRowid;
+    expect(svc.query({ userId: other, from, to }).some((e) => e.source === 'custom')).toBe(false);
+    expect(svc.deleteCustom(other, id)).toBe(false);
+    expect(svc.deleteCustom(1, id)).toBe(true);
+    expect(() => svc.addCustom(1, { title: '', ts: 1 })).toThrow();
     db.close();
   });
 
@@ -168,5 +173,59 @@ describe('glossary', () => {
     expect(explain('Non-Farm Employment Change')).toMatch(/NFP/);
     expect(explain('ECB Lane Speech')).toMatch(/Discurs/);
     expect(explain('Random thing')).toBeNull();
+  });
+});
+
+describe('earnings of the watchlist stocks (FD-SENTIQ §4.5)', () => {
+  const row = (symbol: string, time: EarningsRow['time']): EarningsRow => ({ symbol, name: symbol, time, quarter: 'Sep/2026', epsForecast: '$1.11', lastYearEps: '$1.06' });
+
+  it('looks at the next weekdays in New York', () => {
+    // Friday evening in New York (Saturday in UTC): Friday is still "today".
+    expect(earningsDays(Date.parse('2026-10-17T01:00:00Z'), 3)).toEqual(['2026-10-16', '2026-10-19', '2026-10-20']);
+  });
+
+  it('places pre-market at 08:00 ET, after-hours at 16:30 ET, unknown as all day', () => {
+    expect(earningsEvent('2026-10-14', row('BAC', 'pre'))).toMatchObject({ source: 'earn', extId: 'BAC:2026-10-14', ts: Date.parse('2026-10-14T12:00:00Z'), allDay: false, impact: 'High', forecast: '$1.11', previous: '$1.06' });
+    expect(earningsEvent('2026-12-03', row('X', 'after')).ts).toBe(Date.parse('2026-12-03T21:30:00Z'));
+    expect(earningsEvent('2026-10-14', row('X', 'unknown'))).toMatchObject({ ts: Date.parse('2026-10-14T04:00:00Z'), allDay: true });
+    expect(quarterRo('Sep/2026')).toBe('septembrie 2026');
+  });
+
+  it('stores only watchlist stocks, replaces a day only when its request worked, and follows the watchlist', async () => {
+    const db = new Db(':memory:');
+    const cal = new CalendarService(db, silentLogger);
+    const now = Date.parse('2026-10-13T12:00:00Z');
+    db.run("INSERT INTO watchlist(coin, quote, position, aliases, added_at, kind, name) VALUES ('BAC', 'USD', 0, '[]', 1, 'stock', 'Bank of America Corporation Common Stock')");
+    const fetchDay = async (day: string) => {
+      if (day === '2026-10-15') throw new Error('HTTP 503');
+      return day === '2026-10-14' ? [row('BAC', 'pre'), row('MS', 'pre')] : [];
+    };
+    expect(await cal.refreshEarnings(['BAC'], fetchDay, now)).toBe(1);
+    const q = { userId: 1, from: now, to: now + 7 * 86_400_000 };
+    const events = cal.query({ ...q, impacts: ['High'], currencies: ['EUR'] });
+    expect(events.map((e) => [e.title, e.currency, e.source])).toEqual([['Rezultate trimestriale Bank of America', 'BAC', 'earn']]);
+    expect(events[0]?.note).toContain('septembrie 2026');
+    expect(cal.query({ ...q, earnings: false })).toEqual([]);
+    expect(cal.lastUpdate().earn).toBe(now);
+    // FD-USERS §2: results show only for those who follow the stock.
+    const other = db.run("INSERT INTO users(email, name, role, created_at) VALUES ('b@example.com', 'B', 'user', 1)").lastInsertRowid;
+    expect(cal.query({ ...q, userId: other })).toEqual([]);
+    // Out of the watchlist: hidden at once, deleted at the next refresh.
+    db.run("DELETE FROM watchlist WHERE coin = 'BAC'");
+    expect(cal.query(q)).toEqual([]);
+    await cal.refreshEarnings([], fetchDay, now);
+    expect(db.get("SELECT count(*) AS n FROM calendar_raw WHERE source = 'earn'")).toEqual({ n: 0 });
+    // Every day failing is an error for the job.
+    await expect(cal.refreshEarnings(['BAC'], async () => Promise.reject(new Error('down')), now)).rejects.toThrow(/Nasdaq earnings/);
+    db.close();
+  });
+
+  it('earnings never drive the TradingView bursts', async () => {
+    const db = new Db(':memory:');
+    const cal = new CalendarService(db, silentLogger);
+    const now = Date.parse('2026-10-14T11:00:00Z');
+    await cal.refreshEarnings(['BAC'], async (d) => (d === '2026-10-14' ? [row('BAC', 'pre')] : []), now);
+    expect(cal.nextImportant(now)).toBeNull();
+    db.close();
   });
 });

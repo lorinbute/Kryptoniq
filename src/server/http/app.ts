@@ -8,13 +8,21 @@ import { HttpError } from '../net/http.ts';
 import { MarketError } from '../market/market.ts';
 import { ValidationError } from '../settings.ts';
 import type { AppContext } from '../context.ts';
-import { registerSecurity } from './security.ts';
+import { HostAllowlist, registerSecurity } from './security.ts';
 import { registerRoutes } from './routes.ts';
+import { registerAuth } from './auth.ts';
+import { registerAuthRoutes } from './auth-routes.ts';
 import { ConflictError, NotFoundError } from './errors.ts';
+import { UserError, UserMissingError } from '../auth/users.ts';
+import { PasskeyError } from '../auth/passkeys.ts';
+import { SummaryCooldownError, SummaryFailedError, SummaryUnavailableError } from '../summary/service.ts';
+import { BEARER_ROUTES, registerMcp, registerMcpApi } from '../mcp/routes.ts';
 
 export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 256 * 1024, trustProxy: false });
-  registerSecurity(app);
+  registerSecurity(app, new HostAllowlist(ctx.config.allowedHosts), { bearerRoutes: ctx.oauth ? BEARER_ROUTES : undefined });
+  // After the Host / Origin / CSRF checks: who is asking (FD-USERS).
+  registerAuth(app, ctx);
 
   // JSON bodies; an empty body (e.g. DELETE sent with a JSON content type) is simply "no body".
   app.removeContentTypeParser('application/json');
@@ -36,6 +44,12 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
       const details = err instanceof ValidationError ? err.details : err.issues;
       return reply.code(400).send({ error: { code: 'VALIDATION', message: err.message, details } });
     }
+    if (err instanceof UserError) return reply.code(400).send({ error: { code: 'USER', message: err.message } });
+    if (err instanceof UserMissingError) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: err.message } });
+    if (err instanceof PasskeyError) return reply.code(400).send({ error: { code: 'PASSKEY', message: err.message } });
+    if (err instanceof SummaryUnavailableError) return reply.code(400).send({ error: { code: 'NO_CLAUDE_KEY', message: err.message } });
+    if (err instanceof SummaryCooldownError) return reply.code(429).send({ error: { code: 'TOO_SOON', message: err.message, details: { retryAt: err.retryAt } } });
+    if (err instanceof SummaryFailedError) return reply.code(502).send({ error: { code: 'SUMMARY_FAILED', message: err.message } });
     if (err instanceof NotFoundError) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: err.message } });
     if (err instanceof ConflictError) return reply.code(409).send({ error: { code: 'CONFLICT', message: err.message } });
     if (err instanceof MarketError) {
@@ -51,7 +65,11 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     return reply.code(500).send({ error: { code: 'INTERNAL', message: 'Eroare internă (detalii în data/logs)' } });
   });
 
+  await registerAuthRoutes(app, ctx);
   await registerRoutes(app, ctx);
+  // FD-MCP: the Claude connector exists only when it is on (TD-MCP §4); its page API always answers.
+  registerMcpApi(app, ctx.oauth);
+  if (ctx.oauth) await registerMcp(app, ctx, ctx.oauth);
 
   const webDist = ctx.config.webDist;
   const hasWeb = existsSync(path.join(webDist, 'index.html'));
@@ -71,14 +89,16 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   }
 
   app.setNotFoundHandler((req, reply) => {
-    if (req.url.startsWith('/api/') || req.method !== 'GET') {
+    // The connector's addresses are never the page (FD-MCP §2): off, they simply do not exist. Its consent page is.
+    const connector = /^\/(?:\.well-known\/|mcp(?:[/?]|$)|oauth\/(?!consent(?:[/?]|$)))/.test(req.url);
+    if (req.url.startsWith('/api/') || req.method !== 'GET' || connector) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: `Ruta ${req.method} ${req.url.split('?')[0]} nu există` } });
     }
     if (!hasWeb) {
       return reply
         .code(404)
         .type('text/plain; charset=utf-8')
-        .send('Kryptoniq: web build missing. Run `npm start` (build + serve) or `npm run dev` and open http://127.0.0.1:5317');
+        .send('Sentiq: web build missing. Run `npm start` (build + serve) or `npm run dev` and open http://localhost:5317');
     }
     // A missing file (e.g. a JS chunk of an older build) is a real 404: answering with the page would hand
     // the browser HTML where it expects JavaScript, leaving a blank screen.

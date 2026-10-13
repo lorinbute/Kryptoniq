@@ -14,14 +14,14 @@ export class SecretBox {
   }
 
   /**
-   * Loads the master key from KRYPTONIQ_MASTER_KEY (base64) or `<dataDir>/master.key`,
+   * Loads the master key from SENTIQ_MASTER_KEY (or KRYPTONIQ_MASTER_KEY, its name before the rename; base64) or `<dataDir>/master.key`,
    * generating the file (mode 0600) on first run.
    */
   static load(dataDir: string, env: NodeJS.ProcessEnv = process.env): SecretBox {
-    const fromEnv = env.KRYPTONIQ_MASTER_KEY;
+    const fromEnv = env.SENTIQ_MASTER_KEY ?? env.KRYPTONIQ_MASTER_KEY;
     if (fromEnv) {
       const key = Buffer.from(fromEnv, 'base64');
-      if (key.length !== 32) throw new Error('KRYPTONIQ_MASTER_KEY must be 32 bytes, base64 encoded');
+      if (key.length !== 32) throw new Error('SENTIQ_MASTER_KEY must be 32 bytes, base64 encoded');
       return new SecretBox(key);
     }
     const file = path.join(dataDir, 'master.key');

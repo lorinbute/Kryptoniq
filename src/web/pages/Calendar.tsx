@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react';
+import { Building2, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react';
 import type { CalendarEvent, CalendarResponse } from '../../shared/api-types.ts';
 import { CALENDAR_CURRENCIES, IMPACTS, type SettingsView } from '../../shared/settings.ts';
 import { addDays, dayBounds, dayKey, zonedTimeToUtc } from '../../shared/time.ts';
@@ -106,11 +106,11 @@ function EventCard({ e, now, tz, next, onDelete }: { e: CalendarEvent; now: numb
     <article
       className={clsx(
         'rounded-[10px] border text-[13px] transition-colors',
-        live ? 'border-brass bg-brass/10' : high && !past ? 'border-bear/35 bg-bear/[0.07]' : 'border-transparent bg-panel-2',
+        live ? 'border-accent bg-accent/10' : high && !past ? 'border-bear/35 bg-bear/[0.07]' : 'border-line-soft bg-panel-2',
       )}
     >
       <Summary
-        className="flex w-full flex-col gap-1 px-2.5 py-2 text-left"
+        className={clsx('flex w-full flex-col gap-1 rounded-[9px] px-2.5 py-2 text-left', hasDetails && 'transition-colors hover:bg-hover')}
         {...(hasDetails ? { type: 'button' as const, onClick: () => setOpen((o) => !o), 'aria-expanded': open } : {})}
       >
         <span className="flex w-full items-center justify-between gap-2 text-[12px]">
@@ -138,7 +138,7 @@ function EventCard({ e, now, tz, next, onDelete }: { e: CalendarEvent; now: numb
             {e.previous && <span title="Anterior">Ant. {e.previous}</span>}
           </span>
         )}
-        {next && !past && <span className="num text-[12px] font-semibold text-brass">în {fmtCountdown(e.ts, now)}</span>}
+        {next && !past && <span className="num text-[12px] font-semibold text-accent">în {fmtCountdown(e.ts, now)}</span>}
       </Summary>
       {open && hasDetails && (
         <div className="flex flex-col gap-1.5 border-t border-line-strong/60 px-2.5 py-2 text-[12px]">
@@ -168,16 +168,18 @@ export default function CalendarPage() {
   const [adding, setAdding] = useState(false);
   const impacts = settings.data?.calendar.impacts ?? ['High', 'Medium'];
   const currencies = settings.data?.calendar.currencies ?? ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'ALL'];
+  // Quarterly results of the watchlist stocks (FD-SENTIQ §4.5); on unless switched off.
+  const earnings = settings.data?.calendar.earnings !== false;
   const from = dayBounds(week, tz).start;
   const to = dayBounds(addDays(week, 7), tz).start;
   const q = useQuery({
-    queryKey: ['calendar', 'week', from, impacts.join(), currencies.join()],
-    queryFn: () => api.get<CalendarResponse>(`/api/calendar${qs({ from, to, impact: impacts, currencies })}`),
+    queryKey: ['calendar', 'week', from, impacts.join(), currencies.join(), earnings],
+    queryFn: () => api.get<CalendarResponse>(`/api/calendar${qs({ from, to, impact: impacts, currencies, earnings: earnings ? '1' : '0' })}`),
     refetchInterval: 60_000,
     enabled: settings.isSuccess,
   });
   const saveFilters = useMutation({
-    mutationFn: (calendar: { impacts: string[]; currencies: string[] }) => api.put<SettingsView>('/api/settings', { calendar }),
+    mutationFn: (calendar: { impacts: string[]; currencies: string[]; earnings: boolean }) => api.put<SettingsView>('/api/settings', { calendar }),
     // Optimistic: the next click builds on what the user already sees, not on a stale server answer.
     onMutate: (calendar) => {
       const prev = qc.getQueryData<SettingsView>(['settings']);
@@ -236,7 +238,7 @@ export default function CalendarPage() {
             <strong className="font-semibold">
               {nextHigh.currency === 'ALL' ? 'Global' : nextHigh.currency} {nextHigh.title}
             </strong>
-            <span className="num font-semibold text-brass">în {fmtCountdown(nextHigh.ts, now)}</span>
+            <span className="num font-semibold text-accent">în {fmtCountdown(nextHigh.ts, now)}</span>
           </span>
         )}
       </div>
@@ -244,7 +246,7 @@ export default function CalendarPage() {
       <div role="toolbar" aria-label="Filtre" className="panel flex flex-wrap items-center gap-x-5 gap-y-2.5 rounded-[14px] px-3 py-2.5">
         <div role="group" aria-label="Impact" className="flex flex-wrap items-center gap-1.5">
           {IMPACTS.map((i) => (
-            <button key={i} type="button" className="chip" aria-pressed={impacts.includes(i)} onClick={() => saveFilters.mutate({ impacts: toggle(impacts, i), currencies })}>
+            <button key={i} type="button" className="chip" aria-pressed={impacts.includes(i)} onClick={() => saveFilters.mutate({ impacts: toggle(impacts, i), currencies, earnings })}>
               {IMPACT_RO[i]}
             </button>
           ))}
@@ -252,11 +254,21 @@ export default function CalendarPage() {
         <span className="h-5 w-px bg-line-strong max-sm:hidden" aria-hidden />
         <div role="group" aria-label="Valute" className="flex flex-wrap items-center gap-1.5">
           {CALENDAR_CURRENCIES.map((c) => (
-            <button key={c} type="button" className="chip" aria-pressed={currencies.includes(c)} onClick={() => saveFilters.mutate({ impacts, currencies: toggle(currencies, c) })}>
+            <button key={c} type="button" className="chip" aria-pressed={currencies.includes(c)} onClick={() => saveFilters.mutate({ impacts, currencies: toggle(currencies, c), earnings })}>
               {c === 'ALL' ? 'Global' : c}
             </button>
           ))}
         </div>
+        <span className="h-5 w-px bg-line-strong max-sm:hidden" aria-hidden />
+        <button
+          type="button"
+          className="chip gap-1.5"
+          aria-pressed={earnings}
+          title="Rezultatele trimestriale ale acțiunilor favorite (Nasdaq)"
+          onClick={() => saveFilters.mutate({ impacts, currencies, earnings: !earnings })}
+        >
+          <Building2 size={14} aria-hidden /> Rezultate companii
+        </button>
         <button className="btn ml-auto" onClick={() => setAdding((a) => !a)} aria-expanded={adding}>
           <Plus size={16} aria-hidden /> Eveniment personal
         </button>
@@ -286,11 +298,11 @@ export default function CalendarPage() {
               <section
                 key={day}
                 aria-label={`${capitalize(fmtWeekday(dayBounds(day, tz).start, tz))}${isToday ? ', azi' : ''}`}
-                className={clsx('panel flex flex-col gap-2 rounded-2xl p-3', isToday && 'border-brass-dim/70')}
+                className={clsx('panel flex flex-col gap-2 rounded-2xl p-3', isToday && 'border-accent-dim/70')}
               >
                 <div className="flex items-baseline justify-between gap-2 px-0.5">
-                  <span className={clsx('font-semibold', isToday && 'text-brass')}>{DAY_SHORT(day)}</span>
-                  <span className={clsx('text-[11.5px]', isToday ? 'text-brass' : 'text-faint')}>{isToday ? 'azi' : events.length > 0 ? events.length : ''}</span>
+                  <span className={clsx('font-semibold', isToday && 'text-accent')}>{DAY_SHORT(day)}</span>
+                  <span className={clsx('text-[11.5px]', isToday ? 'text-accent' : 'text-faint')}>{isToday ? 'azi' : events.length > 0 ? events.length : ''}</span>
                 </div>
                 {events.length === 0 ? (
                   <p className="px-0.5 py-2 text-[12.5px] text-faint">Niciun eveniment pentru filtrele alese.</p>

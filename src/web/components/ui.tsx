@@ -16,7 +16,10 @@ export function Panel({
   flush,
   labelledBy,
   icon: Icon,
+  id,
 }: {
+  /** Anchor for links such as /settings#market. */
+  id?: string;
   icon?: LucideIcon;
   title?: ReactNode;
   actions?: ReactNode;
@@ -27,7 +30,7 @@ export function Panel({
   labelledBy?: string;
 }) {
   return (
-    <section className={clsx('panel', className)} aria-labelledby={labelledBy}>
+    <section id={id} className={clsx('panel', className)} aria-labelledby={labelledBy}>
       {(title || actions) && (
         <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 pt-4 pb-2.5">
           {title ? (
@@ -49,7 +52,7 @@ export function Panel({
 export function Loading({ label = 'Se încarcă…' }: { label?: string }) {
   return (
     <div className="flex items-center gap-2 py-6 text-muted" role="status">
-      <Loader2 size={16} className="animate-spin text-brass" aria-hidden />
+      <Loader2 size={16} className="animate-spin text-accent" aria-hidden />
       {label}
     </div>
   );

@@ -5,23 +5,23 @@ import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import type { NewsItemDto, NewsPage, SourceRow } from '../../shared/api-types.ts';
 import { dayKey } from '../../shared/time.ts';
 import { api, qs } from '../api.ts';
-import { fmtAgo, fmtDate, fmtDateTime, fmtTime } from '../format.ts';
-import { useTz, useWatchlist } from '../hooks.ts';
+import { fmtAgo, fmtDate, fmtDateTime, fmtNum, fmtTime } from '../format.ts';
+import { useStockSet, useTz, useWatchlist } from '../hooks.ts';
 import { useSearchParams } from 'react-router';
 import { Empty, ErrorNote, Loading, ScoreBar, Seg } from '../components/ui.tsx';
 import { CoinLogo, TopicIcon } from '../components/icons.tsx';
 
 type Range = '24h' | 'today' | 'yesterday' | '7d';
-type Cat = '' | 'crypto' | 'macro' | 'geopolitics';
+type Cat = '' | 'crypto' | 'stocks' | 'macro' | 'geopolitics';
 type Sent = '' | 'positive' | 'neutral' | 'negative' | 'pending';
 
 /** Items first seen within this window carry the "nou" badge. */
 const NEW_MS = 15 * 60_000;
-const CAT_LABEL: Record<string, string> = { crypto: 'Crypto', macro: 'Macro', geopolitics: 'Geopolitică' };
+const CAT_LABEL: Record<string, string> = { crypto: 'Crypto', stocks: 'Acțiuni', macro: 'Macro', geopolitics: 'Geopolitică' };
 const FLAG_LABEL: Record<string, string> = { sponsored: 'sponsorizat', speculative: 'speculativ', recap: 'rezumat', lowRelevance: 'relevanță scăzută' };
 const ENGINE_LABEL = (e: string) => (e === 'local' ? 'model local + reguli' : e === 'rules' ? 'doar reguli' : e.startsWith('claude:') ? `Claude (${e.slice(7)})` : e);
 
-function NewsRow({ item, tz }: { item: NewsItemDto; tz: string }) {
+function NewsRow({ item, tz, stocks }: { item: NewsItemDto; tz: string; stocks: ReadonlySet<string> }) {
   const [open, setOpen] = useState(false);
   const meta = item.sentiment?.meta as { model?: number | null; rules?: { id: string; score: number; text: string; negated: boolean }[]; impact?: number } | null;
   const today = dayKey(item.publishedAt, tz) === dayKey(Date.now(), tz);
@@ -37,14 +37,14 @@ function NewsRow({ item, tz }: { item: NewsItemDto; tz: string }) {
         <span>{fmtTime(item.publishedAt, tz)}</span>
       </div>
       <div className="max-sm:hidden">
-        <TopicIcon title={item.title} summary={item.summary} category={item.category} coins={item.coins} size={16} boxed />
+        <TopicIcon title={item.title} summary={item.summary} category={item.category} coins={item.coins} size={16} boxed stocks={stocks} />
       </div>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-2 text-[12px] text-faint">
           <span className="inline-flex sm:hidden">
-            <TopicIcon title={item.title} summary={item.summary} category={item.category} coins={item.coins} size={13} />
+            <TopicIcon title={item.title} summary={item.summary} category={item.category} coins={item.coins} size={13} stocks={stocks} />
           </span>
-          {Date.now() - item.fetchedAt < NEW_MS && <span className="rounded-[5px] bg-brass/15 px-1.5 font-semibold text-brass">nou</span>}
+          {Date.now() - item.fetchedAt < NEW_MS && <span className="rounded-[5px] bg-accent/15 px-1.5 font-semibold text-accent">nou</span>}
           <span className="text-muted">{item.source.name}</span>
           <span>{CAT_LABEL[item.category] ?? item.category}</span>
           {item.flags.map((f) => (
@@ -68,7 +68,7 @@ function NewsRow({ item, tz }: { item: NewsItemDto; tz: string }) {
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
             {item.coins.map((c) => (
               <span key={c} className="tag gap-1 pl-1">
-                <CoinLogo coin={c} size={12} />
+                <CoinLogo coin={c} size={12} badge={stocks.has(c)} square={stocks.has(c)} />
                 {c}
               </span>
             ))}
@@ -80,7 +80,7 @@ function NewsRow({ item, tz }: { item: NewsItemDto; tz: string }) {
             )}
             {item.sentiment && (
               <details className="text-[12px] text-faint">
-                <summary className="cursor-pointer hover:text-muted">De ce acest scor?</summary>
+                <summary className="cursor-pointer transition-colors hover:text-accent">De ce acest scor?</summary>
                 <div className="mt-1.5 space-y-0.5">
                   <div>Motor: {ENGINE_LABEL(item.sentiment.engine)}</div>
                   {typeof meta?.model === 'number' && <div>Model: {meta.model.toFixed(2)}</div>}
@@ -92,7 +92,12 @@ function NewsRow({ item, tz }: { item: NewsItemDto; tz: string }) {
                     </div>
                   ))}
                   <div>
-                    Relevanță {item.relevance}, impact {item.impact}
+                    Relevanță {fmtNum(item.relevance, 2)}, importanță {fmtNum(item.impact, 1)}{' '}
+                    {item.impactSource === 'ai'
+                      ? item.ruleImpact !== item.impact
+                        ? `(Claude; după cuvinte-cheie ar fi ${fmtNum(item.ruleImpact, 1)})`
+                        : '(Claude)'
+                      : '(după cuvinte-cheie)'}
                   </div>
                 </div>
               </details>
@@ -126,6 +131,7 @@ function NewsRow({ item, tz }: { item: NewsItemDto; tz: string }) {
 const CATEGORIES: { value: Cat; label: string }[] = [
   { value: '', label: 'Toate' },
   { value: 'crypto', label: 'Crypto' },
+  { value: 'stocks', label: 'Acțiuni' },
   { value: 'macro', label: 'Macro' },
   { value: 'geopolitics', label: 'Geopolitică' },
 ];
@@ -140,6 +146,7 @@ const SENTIMENTS: { value: Sent; label: string; cls?: string }[] = [
 export default function NewsPageView() {
   const tz = useTz();
   const watchlist = useWatchlist();
+  const stockSet = useStockSet();
   const sources = useQuery({ queryKey: ['sources'], queryFn: () => api.get<SourceRow[]>('/api/sources'), staleTime: 5 * 60_000 });
   const [urlParams, setUrlParams] = useSearchParams();
   const urlQ = urlParams.get('q') ?? '';
@@ -195,7 +202,7 @@ export default function NewsPageView() {
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
         <h1 className="page-title">Știri</h1>
         <span className="inline-flex items-center gap-2 text-[12.5px] text-muted">
-          <span className="size-[7px] rounded-full bg-bull shadow-[0_0_0_4px_rgb(61_220_151/0.15)]" aria-hidden />
+          <span className="size-[7px] rounded-full bg-bull shadow-[0_0_0_4px_color-mix(in_oklab,var(--color-bull)_15%,transparent)]" aria-hidden />
           {q.isFetching && !q.isFetchingNextPage && q.data ? 'se actualizează…' : 'se actualizează la fiecare minut'}
         </span>
       </div>
@@ -237,10 +244,10 @@ export default function NewsPageView() {
             ))}
         </select>
         {favList.length > 0 && (
-          <div role="group" aria-label="Monedele mele" className="flex flex-wrap items-center gap-1.5">
+          <div role="group" aria-label="Favoritele mele" className="flex flex-wrap items-center gap-1.5">
             {favList.map((c) => (
               <button key={c} type="button" className="chip gap-1.5 pl-1.5" aria-pressed={activeCoins.includes(c)} onClick={() => toggleCoin(c)}>
-                <CoinLogo coin={c} size={16} />
+                <CoinLogo coin={c} size={16} badge={stockSet.has(c)} square={stockSet.has(c)} />
                 {c}
               </button>
             ))}
@@ -251,7 +258,7 @@ export default function NewsPageView() {
           </div>
         )}
         <form
-          className="flex h-8 min-w-[220px] flex-1 items-center gap-2 rounded-[9px] border border-line-strong bg-ink px-2.5 focus-within:border-brass-dim lg:max-w-[300px]"
+          className="flex h-8 min-w-[220px] flex-1 items-center gap-2 rounded-[9px] border border-line-strong bg-ink px-2.5 focus-within:border-accent-dim lg:max-w-[300px]"
           role="search"
           onSubmit={(e) => {
             e.preventDefault();
@@ -272,7 +279,7 @@ export default function NewsPageView() {
       {favList.length > 0 && (onlyFavorites || activeCoins.length > 0) && (
         <p className="text-[12.5px] text-faint">Filtrele schimbă doar lista. Sentimentul zilei se calculează mereu din toate știrile.</p>
       )}
-      {favList.length === 0 && watchlist.data && <p className="text-[12.5px] text-faint">Adaugă monede favorite din Setări ca să poți filtra știrile după ele.</p>}
+      {favList.length === 0 && watchlist.data && <p className="text-[12.5px] text-faint">Adaugă monede sau acțiuni favorite din Setări ca să poți filtra știrile după ele.</p>}
 
       <section className="panel overflow-hidden" aria-label="Lista de știri">
         {!q.data && !q.isError ? (
@@ -293,9 +300,9 @@ export default function NewsPageView() {
           </div>
         ) : (
           <>
-            <ul className="divide-y divide-line-soft">
+            <ul className="rows divide-y divide-line-soft">
               {items.map((it) => (
-                <NewsRow key={it.clusterId} item={it} tz={tz} />
+                <NewsRow key={it.clusterId} item={it} tz={tz} stocks={stockSet} />
               ))}
             </ul>
             {q.hasNextPage && (

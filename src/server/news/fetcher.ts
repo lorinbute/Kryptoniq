@@ -39,7 +39,7 @@ export async function fetchSource(db: Db, coins: CoinRegistry, source: SourceRow
     let inserted = 0;
     if (!res.notModified) {
       const items = parseFeed(res.body);
-      const r = ingestItems(db, source, items, coins.get(), now());
+      const r = ingestItems(db, source, items, coins.get(), now(), coins.classifier());
       inserted = r.inserted;
     }
     const t = now();

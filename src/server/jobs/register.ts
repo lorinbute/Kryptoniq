@@ -5,12 +5,18 @@ import { refreshContext } from '../market/context.ts';
 import type { AppContext } from '../context.ts';
 import { retagRecent } from '../news/ingest.ts';
 import { fetchDueSources } from '../news/fetcher.ts';
-import { FF_JOB, TV_JOB } from '../calendar/service.ts';
+import { EARN_JOB, FF_JOB, TV_JOB } from '../calendar/service.ts';
+import { ECON_JOB, feedingEconomy } from '../economy/service.ts';
+import { refreshStockContext } from '../market/stock-context.ts';
+import { syncStockSources } from '../news/sources.ts';
+import { readJobData, writeJobData } from './scheduler.ts';
+import { MAINTENANCE_JOB } from '../sentiment/daily.ts';
+import { pruneMcp } from '../mcp/oauth.ts';
 
 const MIN = 60_000;
 const LOG_RETENTION_DAYS = 30;
 
-/** Deletes daily log files (kryptoniq-YYYY-MM-DD.log) older than `before`. */
+/** Deletes daily log files (sentiq-YYYY-MM-DD.log, or kryptoniq-… from before the rename) older than `before`. */
 export function pruneLogs(dir: string, before: number): number {
   let removed = 0;
   let files: string[] = [];
@@ -20,7 +26,7 @@ export function pruneLogs(dir: string, before: number): number {
     return 0;
   }
   for (const f of files) {
-    const m = /^kryptoniq-(\d{4}-\d{2}-\d{2})\.log$/.exec(f);
+    const m = /^(?:sentiq|kryptoniq)-(\d{4}-\d{2}-\d{2})\.log$/.exec(f);
     if (m && Date.parse(`${m[1]}T00:00:00Z`) < before) {
       try {
         rmSync(path.join(dir, f));
@@ -66,6 +72,8 @@ export function registerJobs(ctx: AppContext): void {
     everyMs: 2 * MIN,
     runOnStart: true,
     run: async () => {
+      // Once after an update that changes how news weigh (FD-IMPACT §3); then the regular refresh.
+      if (ctx.daily.upgradeHistory()) log.info('sentiment: daily history recomputed with the new weighing');
       ctx.daily.refresh();
     },
   });
@@ -84,7 +92,8 @@ export function registerJobs(ctx: AppContext): void {
     everyMs: 15 * MIN,
     runOnStart: true,
     run: async () => {
-      await ctx.calendar.refreshTradingView();
+      // The same answer keeps the Economy page's values fresh (FD-ECON §3): no request of its own.
+      await ctx.calendar.refreshTradingView(Date.now(), feedingEconomy(ctx.economy, log));
       // Bursts: poll again shortly after important releases until their actual values arrive.
       const now = Date.now();
       if (ctx.calendar.awaitingActual(now) > 0) {
@@ -104,9 +113,45 @@ export function registerJobs(ctx: AppContext): void {
       const r = await refreshContext(db);
       if (r.coinListUpdated) {
         ctx.coins.invalidate();
-        retagRecent(db, ctx.coins.get(), Date.now() - 3 * 86_400_000);
+        retagRecent(db, ctx.coins.get(), Date.now() - 3 * 86_400_000, ctx.coins.classifier());
       }
       if (r.errors.length) throw new Error(r.errors.join('; '));
+    },
+  });
+
+  // FD-SENTIQ §4.5: quarterly results of the watchlist stocks (nothing to do without stocks).
+  scheduler.add({
+    name: EARN_JOB,
+    everyMs: 6 * 60 * MIN,
+    firstDelayMs: 30_000,
+    run: async () => {
+      // Every user's stocks, once (FD-USERS §2): each user then sees only the results of their own.
+      const symbols = db.all<{ coin: string }>("SELECT DISTINCT coin FROM watchlist WHERE kind = 'stock'").map((r) => r.coin);
+      await ctx.calendar.refreshEarnings(symbols, (day) => ctx.stocks.nasdaq.earnings(day));
+    },
+  });
+
+  // FD-ECON §3: ~400 days of indicator history once, then the release schedule beyond the Calendar's two weeks.
+  scheduler.add({
+    name: ECON_JOB,
+    everyMs: 24 * 60 * MIN,
+    firstDelayMs: 30_000,
+    timeoutMs: 15 * MIN,
+    run: async (signal) => {
+      const read = await ctx.economy.backfill(undefined, signal);
+      if (read.length) log.info(`economy: history read for ${read.join(', ')}`);
+      if (!signal.aborted) await ctx.economy.refreshSchedule();
+    },
+  });
+
+  // FD-SENTIQ §4.2: US market state, S&P 500 / Nasdaq 100 / VIX and CNN's Fear & Greed.
+  scheduler.add({
+    name: 'stocks.market',
+    everyMs: 5 * MIN,
+    runOnStart: true,
+    run: async () => {
+      const errors = await refreshStockContext(db, ctx.stocks);
+      if (errors.length) throw new Error(errors.join('; '));
     },
   });
 
@@ -128,8 +173,20 @@ export function registerJobs(ctx: AppContext): void {
       const days = ctx.settings.get().retentionDays;
       const cutoff = Date.now() - days * 86_400_000;
       const removed = db.run('DELETE FROM news WHERE published_at < ?', [cutoff]).changes;
+      // Days before this threshold are no longer complete: a history recomputation keeps them (FD-IMPACT §3).
+      const prev = readJobData(db, MAINTENANCE_JOB, { retentionCutoff: 0 });
+      if (cutoff > prev.retentionCutoff) writeJobData(db, MAINTENANCE_JOB, { ...prev, retentionCutoff: cutoff });
       db.run('DELETE FROM calendar_raw WHERE ts < ?', [Date.now() - 400 * 86_400_000]);
       db.run('UPDATE sources SET item_count = (SELECT count(*) FROM news WHERE source_id = sources.id)');
+      // FD-USERS / FD-INVITE: sign-ins that ended, and account requests nobody answered within 30 days.
+      ctx.sessions.purgeExpired();
+      const purged = ctx.users.purgeOldRequests();
+      if (purged) log.info(`users: removed ${purged} account requests nobody answered`);
+      // Feeds of stocks that left the watchlist go once their news has aged out.
+      syncStockSources(db);
+      ctx.economy.prune();
+      // FD-MCP: old codes, expired tokens, long-ended connections (with the connector off too).
+      pruneMcp(db);
       db.raw.exec('PRAGMA optimize');
       pruneLogs(path.join(ctx.config.dataDir, 'logs'), Date.now() - LOG_RETENTION_DAYS * 86_400_000);
       if (removed) log.info(`retention: removed ${removed} news older than ${days} days`);

@@ -9,7 +9,9 @@ export interface ChartView {
   at: number;
 }
 
-const KEY = 'kryptoniq.chartViews';
+const KEY = 'sentiq.chartViews';
+/** Where the views were kept before the rename (FD-SENTIQ §1); moved to KEY on first use. */
+const LEGACY_KEY = 'kryptoniq.chartViews';
 export const MAX_VIEWS = 60;
 
 const valid = (v: unknown): v is ChartView => {
@@ -24,7 +26,15 @@ const valid = (v: unknown): v is ChartView => {
 
 function readAll(storage: Storage | null): Record<string, ChartView> {
   try {
-    const raw = storage?.getItem(KEY);
+    let raw = storage?.getItem(KEY);
+    if (!raw && storage) {
+      const legacy = storage.getItem(LEGACY_KEY);
+      if (legacy) {
+        storage.setItem(KEY, legacy);
+        storage.removeItem(LEGACY_KEY);
+        raw = legacy;
+      }
+    }
     const parsed: unknown = raw ? JSON.parse(raw) : {};
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
     const out: Record<string, ChartView> = {};

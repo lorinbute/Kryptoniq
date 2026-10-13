@@ -7,6 +7,9 @@ import type { PriceLineSpec } from './CandleChart.tsx';
 export const DUST_VALUE = 1;
 
 export const PNL_COLORS = { entry: '#E2B866', sl: '#FF5C5C', tp: '#00FFAA', other: '#8FB3FF', liquidation: '#FF5C5C' } as const;
+/** The same roles on the light theme (FD-THEME §1): darker, to stand out on white. */
+export const PNL_COLORS_LIGHT = { entry: '#0B6F80', sl: '#C2332B', tp: '#0F7444', other: '#1F5BC4', liquidation: '#C2332B' } as const;
+export type PnlPalette = { readonly [K in keyof typeof PNL_COLORS]: string };
 
 interface Trade {
   market: 'futures' | 'spot';
@@ -33,6 +36,8 @@ export interface PnlInput {
   orders: OrderRow[];
   /** The account's name, added to every title when several accounts are shown. */
   account?: string;
+  /** A share at a broker (FD-SENTIQ): its holding is no "spot" trade, just shares. */
+  stock?: boolean;
 }
 
 const signed = (v: number, digits: number) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${fmtNum(Math.abs(v), digits, digits)}`;
@@ -85,7 +90,7 @@ export function roleOf(o: OrderRow, t: Trade, lastPrice: number | null): 'sl' | 
 }
 
 /** The trade's lines: entry, liquidation, SL / TP orders with their PnL, and the PnL at the current price. */
-export function pnlLines(input: PnlInput): { lines: PriceLineSpec[]; usedOrders: Set<string> } {
+export function pnlLines(input: PnlInput, colors: PnlPalette = PNL_COLORS): { lines: PriceLineSpec[]; usedOrders: Set<string> } {
   const lines: PriceLineSpec[] = [];
   const used = new Set<string>();
   const trades = tradesOf(input);
@@ -97,11 +102,11 @@ export function pnlLines(input: PnlInput): { lines: PriceLineSpec[]; usedOrders:
     const pnlAt = (price: number, qty: number) => (t.long ? price - t.entry : t.entry - price) * qty;
     lines.push({
       price: t.entry,
-      color: PNL_COLORS.entry,
-      title: `Intrare ${t.market === 'spot' ? 'spot' : side}${t.market === 'futures' && both ? ' futures' : ''} ${fmtNum(t.qty, 8)} ${input.base}${acct}`,
+      color: colors.entry,
+      title: `Intrare ${t.market === 'spot' ? (input.stock ? '' : 'spot ') : `${side} `}${t.market === 'futures' && both && !input.stock ? 'futures ' : ''}${fmtNum(t.qty, 8)} ${input.base}${acct}`,
       style: 'solid',
     });
-    if (t.liquidation) lines.push({ price: t.liquidation, color: PNL_COLORS.liquidation, title: `Lichidare${tag}`, style: 'dotted' });
+    if (t.liquidation) lines.push({ price: t.liquidation, color: colors.liquidation, title: `Lichidare${tag}`, style: 'dotted' });
     for (const o of input.orders) {
       const role = roleOf(o, t, input.lastPrice);
       if (!role) continue;
@@ -113,7 +118,7 @@ export function pnlLines(input: PnlInput): { lines: PriceLineSpec[]; usedOrders:
       used.add(`${o.market}:${o.id}`);
       lines.push({
         price,
-        color: role === 'sl' ? PNL_COLORS.sl : PNL_COLORS.tp,
+        color: role === 'sl' ? colors.sl : colors.tp,
         title: `${role === 'sl' ? 'SL' : 'TP'}${tag} ${pnlText(pnl, t.entry * orderQty, t.quote)}`,
         style: 'dashed',
       });
@@ -122,7 +127,7 @@ export function pnlLines(input: PnlInput): { lines: PriceLineSpec[]; usedOrders:
       const pnl = pnlAt(input.lastPrice, t.qty);
       lines.push({
         price: input.lastPrice,
-        color: pnl >= 0 ? PNL_COLORS.tp : PNL_COLORS.sl,
+        color: pnl >= 0 ? colors.tp : colors.sl,
         title: `PnL${tag} ${pnlText(pnl, t.entry * t.qty, t.quote)}`,
         style: 'solid',
         // The library draws a price line's title only with its axis label: the label sits on the current price.

@@ -1,7 +1,7 @@
 // Built-in news sources (verified live on 2026-10-12, see docs/research.md §1).
 import type { Db } from '../db/database.ts';
 
-export type SourceCategory = 'crypto' | 'macro' | 'geopolitics';
+export type SourceCategory = 'crypto' | 'macro' | 'geopolitics' | 'stocks';
 
 export interface SourceDef {
   id: string;
@@ -44,7 +44,45 @@ export const BUILTIN_SOURCES: SourceDef[] = [
   { id: 'cnbc-world', name: 'CNBC International', url: 'https://www.cnbc.com/id/100727362/device/rss/rss.html', category: 'geopolitics', weight: 1 },
   { id: 'cnbc-politics', name: 'CNBC Politics & Policy', url: 'https://www.cnbc.com/id/10000113/device/rss/rss.html', category: 'geopolitics', weight: 0.9 },
   { id: 'guardian-economics', name: 'The Guardian Economics', url: 'https://www.theguardian.com/business/economics/rss', category: 'geopolitics', weight: 0.8 },
+  // Stocks (FD-SENTIQ §4.4, docs/research.md §8)
+  { id: 'nasdaq-stocks', name: 'Nasdaq Stocks', url: 'https://www.nasdaq.com/feed/rssoutbound?category=Stocks', category: 'stocks', weight: 0.9 },
+  { id: 'investing-stocks', name: 'Investing.com Stock News', url: 'https://www.investing.com/rss/news_25.rss', category: 'stocks', weight: 0.8 },
+  { id: 'cnbc-business', name: 'CNBC Business', url: 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10001147', category: 'stocks', weight: 0.9 },
 ];
+
+/** The Nasdaq feed of one stock, managed together with the watchlist (`auto = 'nasdaq:AAPL'`). */
+export const nasdaqFeedUrl = (sym: string) => `https://www.nasdaq.com/feed/rssoutbound?symbol=${encodeURIComponent(sym)}`;
+const autoId = (sym: string) => `nasdaq-${sym.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+
+/**
+ * Keeps one Nasdaq feed per watchlist stock. `added` re-enables the feed of a stock the user has just added;
+ * otherwise a feed the user disabled stays disabled. The feed of a stock that left the watchlist is deleted when
+ * it has no news left (its news would go with it), or disabled until the retention job removes them.
+ */
+export function syncStockSources(db: Db, added?: string): void {
+  db.tx(() => {
+    const stocks = new Set(db.all<{ coin: string }>("SELECT coin FROM watchlist WHERE kind = 'stock'").map((r) => r.coin));
+    for (const sym of stocks) {
+      const auto = `nasdaq:${sym}`;
+      const url = nasdaqFeedUrl(sym);
+      const own = db.get<{ id: string }>('SELECT id FROM sources WHERE auto = ?', [auto]);
+      if (own) {
+        if (sym === added) db.run('UPDATE sources SET enabled = 1, next_fetch_at = 0 WHERE id = ?', [own.id]);
+        continue;
+      }
+      // A custom source with the same address already brings this feed.
+      if (db.get('SELECT id FROM sources WHERE url = ?', [url])) continue;
+      let id = autoId(sym);
+      if (db.get('SELECT id FROM sources WHERE id = ?', [id])) id = `${id}-${Date.now().toString(36)}`;
+      db.run(`INSERT INTO sources(id, name, url, category, enabled, weight, builtin, auto) VALUES (?, ?, ?, 'stocks', 1, 1, 1, ?)`, [id, `Nasdaq: ${sym}`, url, auto]);
+    }
+    for (const s of db.all<{ id: string; auto: string }>("SELECT id, auto FROM sources WHERE auto LIKE 'nasdaq:%'")) {
+      if (stocks.has(s.auto.slice('nasdaq:'.length))) continue;
+      if (db.get('SELECT 1 AS x FROM news WHERE source_id = ? LIMIT 1', [s.id])) db.run('UPDATE sources SET enabled = 0 WHERE id = ?', [s.id]);
+      else db.run('DELETE FROM sources WHERE id = ?', [s.id]);
+    }
+  });
+}
 
 /** Inserts missing built-in sources; never overrides the user's enable/weight choices. */
 export function seedSources(db: Db): void {
@@ -80,4 +118,6 @@ export interface SourceRow {
   failures: number;
   next_fetch_at: number;
   item_count: number;
+  /** Set on sources the app manages by itself (`nasdaq:AAPL`). */
+  auto: string | null;
 }

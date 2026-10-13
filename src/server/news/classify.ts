@@ -20,6 +20,9 @@ const IMPACT_3_SEC_ETF = /\b(sec|cftc)\b[\s\S]*\betfs?\b|\betfs?\b[\s\S]*\b(sec|
 const IMPACT_2 =
   /\b(etfs?|regulat\w*|yields?|treasur(y|ies)|dollar|dxy|stablecoins?|sec|cftc|gdp|ppi|pce|unemployment|jobless|earnings|nvidia|apple|microsoft|tesla|blackrock|microstrategy|strategy inc|coinbase|binance|tether|circle|ecb|boj|pboc|opec|oil)\b/i;
 
+/** Relevance of a geopolitical item linked to markets (FD-IMPACT §2; 0.6 before 13 Oct 2026). */
+export const GEO_RELEVANCE = 0.8;
+
 export const TOP10 = new Set(['BTC', 'ETH', 'XRP', 'BNB', 'SOL', 'DOGE', 'ADA', 'TRX', 'LINK', 'AVAX', 'TON', 'SUI', 'HYPE']);
 const STABLES = new Set(['USDT', 'USDC', 'DAI', 'FDUSD', 'TUSD', 'USDE', 'PYUSD', 'USDS', 'USD1']);
 
@@ -38,8 +41,11 @@ export function classify(category: SourceCategory, title: string, summary: strin
 
   let relevance: number;
   if (category === 'crypto') relevance = 1;
+  // Stock feeds also carry commodity pieces ("Corn gets a dead cat bounce"): full weight for a tagged share or the market.
+  else if (category === 'stocks') relevance = coins.length > 0 || MARKET_TERMS.test(text) ? 1 : 0.8;
   else if (category === 'macro') relevance = MARKET_TERMS.test(text) ? 1 : 0.8;
-  else relevance = GEO_MARKET_TERMS.test(text) ? 0.6 : 0;
+  // Geopolitics moves markets more than it used to (tariffs, sanctions, wars, statements: FD-IMPACT §2).
+  else relevance = GEO_MARKET_TERMS.test(text) ? GEO_RELEVANCE : 0;
   if (relevance === 0) flags.push('lowRelevance');
 
   const majorCoins = coins.filter((c) => !STABLES.has(c));

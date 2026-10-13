@@ -5,7 +5,6 @@ import { lmaParamsSchema } from './indicator/lma-params.ts';
 import { TIMEFRAMES } from './time.ts';
 
 export const MARKET_EXCHANGES = ['kucoin', 'binance', 'bybit', 'okx'] as const;
-export const ACCOUNT_EXCHANGES = ['kucoin'] as const;
 export const IMPACTS = ['High', 'Medium', 'Low', 'Holiday'] as const;
 export type Impact = (typeof IMPACTS)[number];
 export const CALENDAR_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'CAD', 'AUD', 'NZD', 'CHF', 'ALL'] as const;
@@ -14,7 +13,8 @@ export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5';
 export const CLAUDE_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'] as const;
 
 /** A spot pair as the charts address it (BASE/QUOTE in capitals). */
-export const CHART_SYMBOL_RE = /^[A-Z0-9][A-Z0-9._-]{0,29}\/[A-Z0-9]{1,15}$/;
+/** The pair of a crypto chart ("BTC/USDT") or, since FD-SENTIQ, a stock ("stock:AAPL"). */
+export const CHART_SYMBOL_RE = /^(?:[A-Z0-9][A-Z0-9._-]{0,29}\/[A-Z0-9]{1,15}|stock:[A-Z][A-Z0-9.-]{0,9})$/;
 
 export const settingsSchema = z.object({
   timezone: z.string().min(1).max(64).default('UTC'),
@@ -37,6 +37,8 @@ export const settingsSchema = z.object({
     .object({
       impacts: z.array(z.enum(IMPACTS)).max(IMPACTS.length).default(['High', 'Medium']),
       currencies: z.array(z.enum(CALENDAR_CURRENCIES)).max(CALENDAR_CURRENCIES.length).default(['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'ALL']),
+      /** Quarterly results of the watchlist stocks (FD-SENTIQ §4.5). */
+      earnings: z.boolean().default(true),
     })
     .prefault({}),
   indicator: slingshotParamsSchema.prefault({}),
@@ -47,6 +49,8 @@ export const settingsSchema = z.object({
       symbol: z.union([z.literal(''), z.string().regex(CHART_SYMBOL_RE)]).default(''),
       showPositions: z.boolean().default(true),
       showLma: z.boolean().default(true),
+      /** Slingshot drawn on the chart (FD-CHARTFAV §1); the panels below the chart stay. */
+      showSlingshot: z.boolean().default(true),
       /** Share of the chart height given to the LMA pane. */
       lmaPane: z.number().min(0.1).max(0.7).default(0.25),
     })
@@ -59,4 +63,12 @@ export type Settings = z.infer<typeof settingsSchema>;
 export interface SettingsView extends Settings {
   claudeKeySet: boolean;
   claudeKeyHint: string | null;
+  twelveDataKeySet: boolean;
+  twelveDataKeyHint: string | null;
+  /** FD-USERS §4: the Resend key (hint only for the admin) and the sender. Absent from a server before FD-USERS. */
+  resendKeySet?: boolean;
+  resendKeyHint?: string | null;
+  resendFrom?: string;
+  /** Mail reaches only the Resend account's owner (no key, or Resend's test sender). */
+  resendDev?: boolean;
 }

@@ -6,7 +6,7 @@ import { findCluster, titleTokens, type ClusterCandidate } from './cluster.ts';
 import { detectCoins, type CoinDetector } from './coins.ts';
 import { canonicalUrl, effectivePublishedAt } from './normalize.ts';
 import type { ParsedItem } from './parser.ts';
-import type { SourceRow } from './sources.ts';
+import type { SourceCategory, SourceRow } from './sources.ts';
 
 export const CLUSTER_WINDOW_MS = 36 * 3_600_000;
 
@@ -30,7 +30,20 @@ export interface IngestResult {
   skipped: number;
 }
 
-export function ingestItems(db: Db, source: Pick<SourceRow, 'id' | 'category'>, items: ParsedItem[], detector: CoinDetector, now: number): IngestResult {
+/**
+ * `detector` tags the news (`news_coins`); `classifier` gives the coins that weigh them in the common sentiment
+ * (FD-USERS §2: the coin list and the admin's favourites; the same detector when there is only one).
+ */
+export function ingestItems(
+  db: Db,
+  source: Pick<SourceRow, 'id' | 'category'>,
+  items: ParsedItem[],
+  detector: CoinDetector,
+  now: number,
+  classifier: CoinDetector = detector,
+): IngestResult {
+  const weigh = (title: string, summary: string, coins: string[]) =>
+    classify(source.category, title, summary, classifier === detector ? coins : detectCoins(classifier, title, summary));
   const res: IngestResult = { inserted: 0, updated: 0, skipped: 0 };
   if (items.length === 0) return res;
   db.tx(() => {
@@ -48,10 +61,10 @@ export function ingestItems(db: Db, source: Pick<SourceRow, 'id' | 'category'>, 
       if (existing) {
         if (existing.title !== item.title) {
           const coins = detectCoins(detector, item.title, item.summary);
-          const cls = classify(source.category, item.title, item.summary, coins);
+          const cls = weigh(item.title, item.summary, coins);
           db.run(
             `UPDATE news SET title = ?, summary = ?, relevance = ?, impact = ?, flags = ?,
-               sentiment = NULL, sentiment_label = NULL, sentiment_engine = NULL, sentiment_meta = NULL, scored_at = NULL
+               sentiment = NULL, sentiment_label = NULL, sentiment_engine = NULL, sentiment_meta = NULL, sentiment_impact = NULL, scored_at = NULL
              WHERE id = ?`,
             [item.title, item.summary, cls.relevance, cls.impact, JSON.stringify(cls.flags), id],
           );
@@ -76,7 +89,7 @@ export function ingestItems(db: Db, source: Pick<SourceRow, 'id' | 'category'>, 
         continue;
       }
       const coins = detectCoins(detector, item.title, item.summary);
-      const cls = classify(source.category, item.title, item.summary, coins);
+      const cls = weigh(item.title, item.summary, coins);
       const tokens = titleTokens(item.title);
       const clusterId = findCluster(tokens, coins, candidates) ?? id;
       db.run(
@@ -93,16 +106,16 @@ export function ingestItems(db: Db, source: Pick<SourceRow, 'id' | 'category'>, 
   return res;
 }
 
-/** Re-tags coins and re-classifies recent news (after the coin list or the watchlist changes). */
-export function retagRecent(db: Db, detector: CoinDetector, since: number): number {
-  const rows = db.all<{ id: string; title: string; summary: string; category: 'crypto' | 'macro' | 'geopolitics' }>(
+/** Re-tags coins and re-classifies recent news (after the coin list or the watchlist changes); see `ingestItems`. */
+export function retagRecent(db: Db, detector: CoinDetector, since: number, classifier: CoinDetector = detector): number {
+  const rows = db.all<{ id: string; title: string; summary: string; category: SourceCategory }>(
     'SELECT id, title, summary, category FROM news WHERE published_at >= ?',
     [since],
   );
   db.tx(() => {
     for (const r of rows) {
       const coins = detectCoins(detector, r.title, r.summary);
-      const cls = classify(r.category, r.title, r.summary, coins);
+      const cls = classify(r.category, r.title, r.summary, classifier === detector ? coins : detectCoins(classifier, r.title, r.summary));
       db.run('UPDATE news SET relevance = ?, impact = ?, flags = ? WHERE id = ?', [cls.relevance, cls.impact, JSON.stringify(cls.flags), r.id]);
       db.run('DELETE FROM news_coins WHERE news_id = ?', [r.id]);
       for (const c of coins) db.run('INSERT OR IGNORE INTO news_coins(news_id, coin) VALUES (?, ?)', [r.id, c]);

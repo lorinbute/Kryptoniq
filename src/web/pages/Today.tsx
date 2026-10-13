@@ -3,12 +3,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { clsx } from 'clsx';
-import type { CalendarResponse, DaySentiment, HistoryPoint, NewsPage, ScanResult, ScanRow } from '../../shared/api-types.ts';
+import type { CalendarResponse, DaySentiment, HistoryPoint, NewsPage, ScanResult, ScanRow, WatchItem } from '../../shared/api-types.ts';
 import { addDays, dayBounds, dayKey } from '../../shared/time.ts';
 import { api, qs } from '../api.ts';
 import { confidenceLabel, fmtAgo, fmtCountdown, fmtDate, fmtPct, fmtPrice, fmtTime, fmtWeekday, indexLabel, indexTone, type Tone } from '../format.ts';
-import { useNextHighImpact, useNow, useSettings, useTz, useWatchlist } from '../hooks.ts';
-import { Sparkline, useSparks } from '../components/MarketStrip.tsx';
+import { useNextHighImpact, useNow, useSettings, useStockSet, useTz, useWatchlist } from '../hooks.ts';
+import { Sparkline, useSparks, useStockQuotes, useStockSparks } from '../components/MarketStrip.tsx';
+import { chartPathOf } from '../chart/paths.ts';
 import { sparkChange } from '../spark.ts';
 import { ErrorNote, fmtScore, Loading } from '../components/ui.tsx';
 import { CoinLogo, EventIcon, TopicIcon } from '../components/icons.tsx';
@@ -57,7 +58,7 @@ function Tile({
   accent?: boolean;
 }) {
   return (
-    <section aria-labelledby={labelId} className={clsx('panel flex min-w-0 flex-col gap-3 px-5 py-4', accent && 'border-brass-dim/60', className)}>
+    <section aria-labelledby={labelId} className={clsx('panel flex min-w-0 flex-col gap-3 px-5 py-4', accent && 'border-accent-dim/60', className)}>
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <h2 id={labelId} className="panel-title inline-flex items-center gap-2">
           <Icon size={15} strokeWidth={1.9} className="shrink-0 text-faint" aria-hidden />
@@ -70,14 +71,21 @@ function Tile({
   );
 }
 
-/** 0–100 as a spectrum from very negative to very positive, with a brass marker at the index. */
+/** 0–100 as a spectrum from very negative to very positive, with an accent marker at the index. */
 function Spectrum({ index }: { index: number | null }) {
   return (
     <div className="flex flex-col gap-2">
-      <div className="relative h-2.5 rounded-full" style={{ background: 'linear-gradient(90deg, #ff5d5d 0%, #8a4250 25%, #2b3346 50%, #2c6b58 75%, #3ddc97 100%)' }}>
+      {/* From the theme's colours (FD-THEME): bear → neutral → bull, the in-betweens mixed. */}
+      <div
+        className="relative h-2.5 rounded-full"
+        style={{
+          background:
+            'linear-gradient(90deg, var(--color-bear) 0%, color-mix(in oklab, var(--color-bear) 45%, var(--color-neutral-bar)) 25%, var(--color-neutral-bar) 50%, color-mix(in oklab, var(--color-bull) 45%, var(--color-neutral-bar)) 75%, var(--color-bull) 100%)',
+        }}
+      >
         {index !== null && (
           <span
-            className="absolute -top-1.5 h-[22px] w-1 -translate-x-1/2 rounded-sm bg-brass shadow-[0_0_0_3px_var(--color-panel)]"
+            className="absolute -top-1.5 h-[22px] w-1 -translate-x-1/2 rounded-sm bg-accent shadow-[0_0_0_3px_var(--color-panel)]"
             style={{ left: `${Math.min(100, Math.max(0, index))}%` }}
             aria-hidden
           />
@@ -94,7 +102,7 @@ function Spectrum({ index }: { index: number | null }) {
   );
 }
 
-/** The day hour by hour: brass line over a soft area; the scale zooms in but always shows 50. */
+/** The day hour by hour: an accent line over a soft area; the scale zooms in but always shows 50. */
 function DayChart({ s, tz }: { s: DaySentiment; tz: string }) {
   const [box, W] = useWidth<HTMLDivElement>(640);
   const H = 120;
@@ -115,8 +123,8 @@ function DayChart({ s, tz }: { s: DaySentiment; tz: string }) {
       <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block max-w-full" role="img" aria-label={`Sentimentul pe ore azi, acum ${s.index.toFixed(1)}`}>
         <defs>
           <linearGradient id="day-area" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="var(--color-brass)" stopOpacity="0.22" />
-            <stop offset="1" stopColor="var(--color-brass)" stopOpacity="0" />
+            <stop offset="0" stopColor="var(--color-accent)" stopOpacity="0.22" />
+            <stop offset="1" stopColor="var(--color-accent)" stopOpacity="0" />
           </linearGradient>
         </defs>
         <line x1={0} x2={W} y1={y(50)} y2={y(50)} stroke="var(--color-line-strong)" strokeDasharray="3 5" />
@@ -124,8 +132,8 @@ function DayChart({ s, tz }: { s: DaySentiment; tz: string }) {
           50
         </text>
         <path d={area} fill="url(#day-area)" />
-        <path d={line} fill="none" stroke="var(--color-brass)" strokeWidth={2.25} strokeLinejoin="round" strokeLinecap="round" />
-        <circle cx={x(last.t)} cy={y(last.index)} r={4} fill="var(--color-brass)" stroke="var(--color-panel)" strokeWidth={2} />
+        <path d={line} fill="none" stroke="var(--color-accent)" strokeWidth={2.25} strokeLinejoin="round" strokeLinecap="round" />
+        <circle cx={x(last.t)} cy={y(last.index)} r={4} fill="var(--color-accent)" stroke="var(--color-panel)" strokeWidth={2} />
       </svg>
       <div className="mt-1 flex justify-between text-[11px] text-faint" aria-hidden>
         {ticks.map((t, i) => (
@@ -191,15 +199,17 @@ function SentimentTile() {
           </div>
           <Spectrum index={scored ? s.index : null} />
           <DayChart s={s} tz={tz} />
-          <div className="grid grid-cols-3 gap-2 sm:gap-2.5">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-2.5">
             {(
               [
                 ['Crypto', s.breakdown.crypto],
+                // Days saved before FD-SENTIQ have no stocks part.
+                ['Acțiuni', s.breakdown.stocks ?? { index: 50, raw: 0, weight: 0, count: 0 }],
                 ['Macro', s.breakdown.macro],
                 ['Geopolitică', s.breakdown.geopolitics],
               ] as const
             ).map(([label, b]) => (
-              <div key={label} className="min-w-0 rounded-xl bg-panel-2 px-3 py-2.5 sm:px-3.5">
+              <div key={label} className="min-w-0 rounded-xl border border-line-soft bg-panel-2 px-3 py-2.5 sm:px-3.5">
                 <div className="truncate text-[12px] text-muted">
                   {label}
                   <span className="max-sm:hidden">, {b.count} știri</span>
@@ -219,11 +229,13 @@ function NextEventTile() {
   const tz = useTz();
   const now = useNow(1000);
   const next = useNextHighImpact(now);
-  const currencies = useSettings().data?.calendar.currencies;
+  const calendar = useSettings().data?.calendar;
+  const currencies = calendar?.currencies;
+  const earnings = calendar?.earnings === false ? '0' : '1';
   const { start, end } = dayBounds(dayKey(now, tz), tz);
   const today = useQuery({
-    queryKey: ['calendar', 'today', start, currencies?.join()],
-    queryFn: () => api.get<CalendarResponse>(`/api/calendar${qs({ from: start, to: end, impact: 'High,Medium', currencies })}`),
+    queryKey: ['calendar', 'today', start, currencies?.join(), earnings],
+    queryFn: () => api.get<CalendarResponse>(`/api/calendar${qs({ from: start, to: end, impact: 'High,Medium', currencies, earnings })}`),
     refetchInterval: 60_000,
     enabled: currencies !== undefined,
   });
@@ -239,7 +251,7 @@ function NextEventTile() {
               {next.currency === 'ALL' ? 'Global' : next.currency} {next.title}
             </span>
           </div>
-          <div className={clsx('num text-[36px] leading-none tracking-[-0.03em]', next.ts - now < 15 * 60_000 ? 'text-warn' : 'text-brass')}>
+          <div className={clsx('num text-[36px] leading-none tracking-[-0.03em]', next.ts - now < 15 * 60_000 ? 'text-warn' : 'text-accent')}>
             {next.ts <= now ? 'acum' : fmtCountdown(next.ts, now)}
           </div>
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-muted">
@@ -286,7 +298,7 @@ function NextEventTile() {
                     {e.actual ? (
                       <span className={clsx('font-semibold', e.deviation === null ? '' : e.deviation > 0 ? 'text-link' : e.deviation < 0 ? 'text-warn' : '')}>{e.actual}</span>
                     ) : e.ts > now ? (
-                      <span className="text-brass">{fmtCountdown(e.ts, now)}</span>
+                      <span className="text-accent">{fmtCountdown(e.ts, now)}</span>
                     ) : (
                       <span className="text-faint">{now - e.ts < 15 * 60_000 && e.forecast ? 'în așteptare' : '—'}</span>
                     )}
@@ -307,6 +319,7 @@ function NextEventTile() {
 }
 
 function LiveNewsTile() {
+  const stocks = useStockSet();
   const tz = useTz();
   const q = useQuery({ queryKey: ['news', 'live'], queryFn: () => api.get<NewsPage>('/api/news?limit=5'), refetchInterval: 60_000 });
   return (
@@ -328,11 +341,11 @@ function LiveNewsTile() {
       ) : q.data.items.length === 0 ? (
         <p className="text-[13.5px] text-faint">Nicio știre în ultimele 24 h.</p>
       ) : (
-        <ul className="-mt-1 divide-y divide-line-soft">
+        <ul className="rows -mx-5 -mt-1 divide-y divide-line-soft">
           {q.data.items.map((n) => (
-            <li key={n.clusterId} className="grid grid-cols-[44px_16px_minmax(0,1fr)_48px] items-center gap-2.5 py-2 text-[13px]">
+            <li key={n.clusterId} className="grid grid-cols-[44px_16px_minmax(0,1fr)_48px] items-center gap-2.5 px-5 py-2 text-[13px]">
               <span className="num text-faint">{fmtTime(n.publishedAt, tz)}</span>
-              <TopicIcon title={n.title} summary={n.summary} category={n.category} coins={n.coins} size={16} />
+              <TopicIcon title={n.title} summary={n.summary} category={n.category} coins={n.coins} size={16} stocks={stocks} />
               {n.url ? (
                 <a href={n.url} target="_blank" rel="noopener noreferrer" className="truncate text-text" title={`${n.title} (${n.source.name})`}>
                   {n.title}
@@ -364,76 +377,119 @@ function signalLine(r: ScanRow, tz: string) {
   );
 }
 
-function CoinsTile() {
+function ScanLines({ r, digits, tf }: { r: ScanRow | undefined; digits: number; tf: string }) {
   const tz = useTz();
+  if (r && !r.ok) return <span className="text-[12px] text-bear">{r.error}</span>;
+  if (!r) return <span className="text-[12px] text-faint">Slingshot pe {tf}: se calculează…</span>;
+  return (
+    <div className="flex flex-col gap-0.5 text-[12px] text-muted">
+      <div className="flex justify-between gap-2">
+        {signalLine(r, tz)}
+        {r.ms?.lastBreak && <span className={r.ms.lastBreak.type === 'msBullish' ? 'text-bull' : 'text-bear'}>{r.ms.lastBreak.type === 'msBullish' ? 'Bullish' : 'Bearish'}</span>}
+      </div>
+      {r.atr && (
+        <span className="num">
+          TP <span className="text-bull">{fmtPrice(r.atr.tp, digits)}</span> SL <span className="text-bear">{fmtPrice(r.atr.sl, digits)}</span>
+        </span>
+      )}
+      {r.liveSignal && <span className="text-bull">LONG în formare</span>}
+      {/* A stock without the Twelve Data key is scanned on daily candles (FD-SENTIQ §4.6). */}
+      {r.warnings?.includes('STOCK_TF_FALLBACK') && <span className="text-faint">Slingshot pe {r.tf} (sursa nu are {tf})</span>}
+    </div>
+  );
+}
+
+function CoinsTile() {
   const settings = useSettings();
   const watchlist = useWatchlist();
-  const coins = watchlist.data ?? [];
+  const all = watchlist.data ?? [];
+  const coins = all.filter((w) => w.kind !== 'stock');
+  const stocks = all.filter((w) => w.kind === 'stock');
   const sparks = useSparks(coins.map((w) => `${w.coin}/${w.quote}`));
+  const stockSymbols = stocks.map((w) => w.coin);
+  const quotes = useStockQuotes(stockSymbols);
+  const stockSparks = useStockSparks(stockSymbols);
   const scan = useQuery({ queryKey: ['scanner'], queryFn: () => api.get<ScanResult | { computedAt: null; rows: [] }>('/api/scanner'), refetchInterval: 60_000 });
   const rows = new Map(scan.data?.rows.map((r) => [r.symbol, r]) ?? []);
   const tf = settings.data?.scanner.tf ?? '1h';
+  const card = 'panel flex flex-col gap-2 px-5 py-4 text-text no-underline transition-colors hover:border-accent hover:bg-hover-soft hover:no-underline';
+  const coinCard = (w: WatchItem, i: number) => {
+    const sym = `${w.coin}/${w.quote}`;
+    const r = rows.get(sym);
+    const spark = sparks[i]?.data;
+    const closes = spark?.closes ?? [];
+    const digits = r?.pricePrecision ?? spark?.precision ?? 2;
+    const price = r?.price ?? closes.at(-1);
+    // Until the scanner has run, the 24 h change comes from the hourly closes.
+    const change = r?.change24h ?? (closes.length >= 25 ? sparkChange(closes.slice(-25)) : null);
+    return (
+      <Link key={sym} to={`/charts/${w.coin}/${w.quote}`} className={card}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-2 text-[15px] font-semibold">
+            <CoinLogo coin={w.coin} size={22} />
+            <span>
+              {w.coin}
+              <span className="font-normal text-faint">/{w.quote}</span>
+            </span>
+          </span>
+          {r?.ok && <span className={clsx('text-[12px]', r.uptrend ? 'text-bull' : 'text-bear')}>{r.uptrend ? 'Uptrend' : 'Downtrend'}</span>}
+        </div>
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="num text-[20px] tracking-[-0.02em]">{price !== undefined ? fmtPrice(price, digits) : '…'}</span>
+          {change !== null && <span className={clsx('num text-[12.5px]', change >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(change)}</span>}
+        </div>
+        <Sparkline values={closes} width={200} height={40} className="h-10 w-full" change={change} />
+        <ScanLines r={r} digits={digits} tf={tf} />
+      </Link>
+    );
+  };
+  const stockCard = (w: WatchItem, i: number) => {
+    const r = rows.get(`${w.coin}/USD`);
+    const q = quotes.data?.get(w.coin);
+    const closes = stockSparks[i]?.data ?? [];
+    const price = q?.last ?? r?.price ?? closes.at(-1);
+    const digits = r?.pricePrecision ?? (price !== undefined && price < 1 ? 4 : 2);
+    // The day's change, as brokers show it (the 60-day line is the context).
+    const change = q?.changePct ?? null;
+    const closed = q?.status ? /closed/i.test(q.status) : false;
+    return (
+      <Link key={`stock:${w.coin}`} to={chartPathOf(w)} className={card}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="inline-flex min-w-0 items-center gap-2 text-[15px] font-semibold">
+            <CoinLogo coin={w.coin} size={22} badge square />
+            <span className="shrink-0">{w.coin}</span>
+            {w.name && <span className="truncate text-[12.5px] font-normal text-faint">{w.name}</span>}
+          </span>
+          {r?.ok && <span className={clsx('shrink-0 text-[12px]', r.uptrend ? 'text-bull' : 'text-bear')}>{r.uptrend ? 'Uptrend' : 'Downtrend'}</span>}
+        </div>
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="num text-[20px] tracking-[-0.02em]">{price !== undefined ? fmtPrice(price, digits) : q?.error ? '—' : '…'}</span>
+          <span className="flex items-baseline gap-2">
+            {closed && <span className="text-[11.5px] text-faint">închis</span>}
+            {change !== null && <span className={clsx('num text-[12.5px]', change >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(change)}</span>}
+          </span>
+        </div>
+        <Sparkline values={closes} width={200} height={40} className="h-10 w-full" change={change} />
+        <ScanLines r={r} digits={digits} tf={tf} />
+      </Link>
+    );
+  };
   return (
     <section aria-labelledby="tile-coins" className="flex min-w-0 flex-col gap-2 md:col-span-2 xl:col-span-6">
       <h2 id="tile-coins" className="sr-only">
-        Monedele mele
+        Favoritele mele
       </h2>
-      {watchlist.data && coins.length === 0 ? (
+      {watchlist.data && all.length === 0 ? (
         <div className="panel flex h-full flex-col items-start justify-center gap-3 px-5 py-4 text-[13.5px] text-muted">
-          Nu ai monede favorite încă.
+          Nu ai monede sau acțiuni favorite încă.
           <Link to="/settings" className="btn">
-            Adaugă monede
+            Adaugă favorite
           </Link>
         </div>
       ) : (
         <div className="grid h-full grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3.5">
-          {coins.map((w, i) => {
-            const sym = `${w.coin}/${w.quote}`;
-            const r = rows.get(sym);
-            const spark = sparks[i]?.data;
-            const closes = spark?.closes ?? [];
-            const digits = r?.pricePrecision ?? spark?.precision ?? 2;
-            const price = r?.price ?? closes.at(-1);
-            // Until the scanner has run, the 24 h change comes from the hourly closes.
-            const change = r?.change24h ?? (closes.length >= 25 ? sparkChange(closes.slice(-25)) : null);
-            return (
-              <Link key={sym} to={`/charts/${w.coin}/${w.quote}`} className="panel flex flex-col gap-2 px-5 py-4 text-text no-underline transition-colors hover:border-line-strong hover:no-underline">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="inline-flex items-center gap-2 text-[15px] font-semibold">
-                    <CoinLogo coin={w.coin} size={22} />
-                    <span>
-                      {w.coin}
-                      <span className="font-normal text-faint">/{w.quote}</span>
-                    </span>
-                  </span>
-                  {r?.ok && <span className={clsx('text-[12px]', r.uptrend ? 'text-bull' : 'text-bear')}>{r.uptrend ? 'Uptrend' : 'Downtrend'}</span>}
-                </div>
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="num text-[20px] tracking-[-0.02em]">{price !== undefined ? fmtPrice(price, digits) : '…'}</span>
-                  {change !== null && <span className={clsx('num text-[12.5px]', change >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(change)}</span>}
-                </div>
-                <Sparkline values={closes} width={200} height={40} className="h-10 w-full" change={change} />
-                {r && !r.ok ? (
-                  <span className="text-[12px] text-bear">{r.error}</span>
-                ) : r ? (
-                  <div className="flex flex-col gap-0.5 text-[12px] text-muted">
-                    <div className="flex justify-between gap-2">
-                      {signalLine(r, tz)}
-                      {r.ms?.lastBreak && <span className={r.ms.lastBreak.type === 'msBullish' ? 'text-bull' : 'text-bear'}>{r.ms.lastBreak.type === 'msBullish' ? 'Bullish' : 'Bearish'}</span>}
-                    </div>
-                    {r.atr && (
-                      <span className="num">
-                        TP <span className="text-bull">{fmtPrice(r.atr.tp, digits)}</span> SL <span className="text-bear">{fmtPrice(r.atr.sl, digits)}</span>
-                      </span>
-                    )}
-                    {r.liveSignal && <span className="text-bull">LONG în formare</span>}
-                  </div>
-                ) : (
-                  <span className="text-[12px] text-faint">Slingshot pe {tf}: se calculează…</span>
-                )}
-              </Link>
-            );
-          })}
+          {/* In the order of the watchlist (Settings → Favorite), coins and stocks mixed. */}
+          {all.map((w) => (w.kind === 'stock' ? stockCard(w, stockSymbols.indexOf(w.coin)) : coinCard(w, coins.indexOf(w))))}
         </div>
       )}
     </section>
@@ -441,6 +497,7 @@ function CoinsTile() {
 }
 
 function DriversTile() {
+  const stocks = useStockSet();
   const q = useSentiment();
   const [all, setAll] = useState(false);
   const d = q.data?.drivers;
@@ -470,7 +527,7 @@ function DriversTile() {
           {list.map((x) => (
             <li key={x.id} className="grid grid-cols-[16px_46px_minmax(0,1fr)] gap-2.5 text-[13px] leading-snug">
               <span className="pt-px">
-                <TopicIcon title={x.title} category={x.category} coins={x.coins} size={16} />
+                <TopicIcon title={x.title} category={x.category} coins={x.coins} size={16} stocks={stocks} />
               </span>
               <span className={clsx('num', SCORE_TEXT(x.sentiment))}>{fmtScore(x.sentiment)}</span>
               {x.url ? (
@@ -504,7 +561,7 @@ function HistoryTile() {
           const p = byDay.get(day);
           const h = p ? Math.max(2, (Math.abs(p.index - 50) / 50) * 30) : 0;
           return (
-            <span key={day} className="relative rounded-[2px] bg-panel-2" title={p ? `${day}: ${p.index.toFixed(1)} (${p.count} știri)${p.final ? '' : ', provizoriu'}` : day}>
+            <span key={day} className="relative rounded-[2px] bg-panel-3" title={p ? `${day}: ${p.index.toFixed(1)} (${p.count} știri)${p.final ? '' : ', provizoriu'}` : day}>
               {p && (
                 <span
                   className={clsx('absolute inset-x-0 rounded-[2px]', p.index >= 60 ? 'bg-bull' : p.index < 40 ? 'bg-bear' : 'bg-muted')}

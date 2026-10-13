@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,14 +15,22 @@ import { Scheduler } from './jobs/scheduler.ts';
 import { Db } from './db/database.ts';
 import type { NliScorer } from './sentiment/local.ts';
 import { costBasis } from './exchange/cost-basis.ts';
-import { hasRiskyPermissions, mapExchangeError, stopDirection, type ClientFactory } from './exchange/accounts.ts';
+import { hasRiskyPermissions, keyPermissions, mapExchangeError, stopDirection, type ClientFactory } from './exchange/accounts.ts';
 import { isRateLimitError, isTransientError, withRetry } from './exchange/retry.ts';
 import { MarketData } from './market/market.ts';
 import { deepMerge } from './settings.ts';
 import ccxt from 'ccxt';
+import { hashPassword } from './auth/passwords.ts';
 
-const H = { host: '127.0.0.1:4317' };
-const M = { ...H, 'x-kryptoniq': '1', 'content-type': 'application/json' };
+// Every API route needs a signed-in user (FD-USERS): H / M carry the admin's session cookie, set in beforeEach.
+const H: Record<string, string> = { host: '127.0.0.1:4317' };
+const M: Record<string, string> = { ...H, 'x-sentiq': '1', 'content-type': 'application/json' };
+const ADMIN_EMAIL = 'admin@example.com';
+const ADMIN_PASSWORD = 'Admin-password-1';
+let adminHash = '';
+beforeAll(async () => {
+  adminHash = await hashPassword(ADMIN_PASSWORD);
+});
 
 const fakeNli: NliScorer = {
   status: () => ({ state: 'ready', progress: 100, error: null, model: 'fake' }),
@@ -68,6 +76,8 @@ beforeEach(async () => {
   const config = { ...loadConfig({ KRYPTONIQ_DATA_DIR: dir } as NodeJS.ProcessEnv), webDist: path.join(dir, 'no-web') };
   ctx = createContext(config, silentLogger, { nli: fakeNli, clientFactory: fakeClients(), box: new SecretBox(Buffer.alloc(32, 7)), retryDelaysMs: [0, 0] });
   app = await buildApp(ctx);
+  ctx.db.run('UPDATE users SET email = ?, name = ?, password_hash = ? WHERE id = 1', [ADMIN_EMAIL, 'Admin', adminHash]);
+  H.cookie = M.cookie = `sentiq_session=${ctx.sessions.create(1, 'full')}`;
 });
 
 afterEach(async () => {
@@ -96,8 +106,24 @@ describe('security', () => {
   });
   it('requires the CSRF header and JSON for mutations', async () => {
     expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: { ...H, 'content-type': 'application/json' }, payload: {} })).statusCode).toBe(403);
-    expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: { ...H, 'x-kryptoniq': '1', 'content-type': 'text/plain' }, payload: 'timezone=UTC' })).statusCode).toBe(415);
+    expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: { ...H, 'x-sentiq': '1', 'content-type': 'text/plain' }, payload: 'timezone=UTC' })).statusCode).toBe(415);
     expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { timezone: 'UTC' } })).statusCode).toBe(200);
+    // A tab opened before the rename still sends X-Kryptoniq (FD-SENTIQ §1).
+    expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: { ...H, 'x-kryptoniq': '1', 'content-type': 'application/json' }, payload: { timezone: 'UTC' } })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: { ...H, 'x-sentiq': '0', 'content-type': 'application/json' }, payload: {} })).statusCode).toBe(403);
+  });
+  it('reads SENTIQ_* settings and falls back to the KRYPTONIQ_* names; an existing kryptoniq.db is kept', () => {
+    expect(loadConfig({ SENTIQ_PORT: '5000' } as NodeJS.ProcessEnv).port).toBe(5000);
+    expect(loadConfig({ KRYPTONIQ_PORT: '5001' } as NodeJS.ProcessEnv).port).toBe(5001);
+    expect(loadConfig({ SENTIQ_PORT: '5000', KRYPTONIQ_PORT: '5001' } as NodeJS.ProcessEnv).port).toBe(5000);
+    const d = mkdtempSync(path.join(tmpdir(), 'sq-cfg-'));
+    try {
+      expect(path.basename(loadConfig({ SENTIQ_DATA_DIR: d } as NodeJS.ProcessEnv).dbPath)).toBe('sentiq.db');
+      writeFileSync(path.join(d, 'kryptoniq.db'), '');
+      expect(path.basename(loadConfig({ SENTIQ_DATA_DIR: d } as NodeJS.ProcessEnv).dbPath)).toBe('kryptoniq.db');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
   });
   it('sets hardening headers and returns JSON 404 for unknown API routes', async () => {
     const r = await app.inject({ method: 'GET', url: '/api/nope', headers: H });
@@ -171,22 +197,24 @@ describe('settings API', () => {
   });
   it('remembers the chart settings and the LMA inputs (FD-CHARTUX)', async () => {
     const s = (await app.inject({ method: 'GET', url: '/api/settings', headers: H })).json();
-    expect(s.charts).toEqual({ symbol: '', showPositions: true, showLma: true, lmaPane: 0.25 });
+    expect(s.charts).toEqual({ symbol: '', showPositions: true, showLma: true, showSlingshot: true, lmaPane: 0.25 });
     expect(s.lma).toMatchObject({ preset: 'Default', period: 100, steepness: 2.5, maType: 'EMA', smooth: 10, colorBars: true });
     const r = await app.inject({
       method: 'PUT',
       url: '/api/settings',
       headers: M,
-      payload: { charts: { symbol: 'SOL/USDT', showLma: false }, market: { defaultTf: '4h' }, lma: { preset: 'Scalping', maType: 'VWMA' } },
+      payload: { charts: { symbol: 'SOL/USDT', showLma: false, showSlingshot: false }, market: { defaultTf: '4h' }, lma: { preset: 'Scalping', maType: 'VWMA' } },
     });
     expect(r.statusCode).toBe(200);
-    expect(r.json().charts).toEqual({ symbol: 'SOL/USDT', showPositions: true, showLma: false, lmaPane: 0.25 });
+    // Both indicators off: a chart with candles only (FD-CHARTFAV §1).
+    expect(r.json().charts).toEqual({ symbol: 'SOL/USDT', showPositions: true, showLma: false, showSlingshot: false, lmaPane: 0.25 });
     expect(r.json().market.defaultTf).toBe('4h');
     expect(r.json().lma).toMatchObject({ preset: 'Scalping', maType: 'VWMA', period: 100 });
     for (const bad of [
       { charts: { symbol: '../etc/passwd' } },
       { charts: { symbol: 'sol/usdt' } },
       { charts: { lmaPane: 0.95 } },
+      { charts: { showSlingshot: 'no' } },
       { lma: { period: 300 } },
       { lma: { shortThreshold: 0.5 } },
       { lma: { bullishColor: 'red' } },
@@ -195,8 +223,8 @@ describe('settings API', () => {
     }
     expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { charts: { symbol: '' } } })).json().charts.symbol).toBe('');
     // Settings saved by an older version (without charts / lma) still load, with the defaults for the new groups.
-    ctx.db.run("UPDATE settings SET value = ? WHERE key = 'app'", [JSON.stringify({ timezone: 'UTC', market: { defaultTf: '15m' }, charts: { symbol: 42 } })]);
-    (ctx.settings as unknown as { cached: unknown }).cached = null;
+    ctx.db.run('UPDATE user_settings SET value = ? WHERE user_id = 1', [JSON.stringify({ timezone: 'UTC', market: { defaultTf: '15m' }, charts: { symbol: 42 } })]);
+    ctx.settings.forget();
     const old = (await app.inject({ method: 'GET', url: '/api/settings', headers: H })).json();
     expect(old.market.defaultTf).toBe('15m');
     expect(old.charts.symbol).toBe('');
@@ -222,6 +250,26 @@ describe('watchlist & sources API', () => {
     expect(ordered.json().map((w: { coin: string }) => w.coin)).toEqual(['SOL', 'BTC', 'ETH', 'RNDR']);
     expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/RNDR', headers: M })).statusCode).toBe(200);
     expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/RNDR', headers: M })).statusCode).toBe(404);
+  });
+
+  it('adds stocks next to coins (FD-SENTIQ §4.1): default aliases, one symbol per kind, its own Nasdaq feed', async () => {
+    const add = (payload: object) => app.inject({ method: 'POST', url: '/api/watchlist', headers: M, payload });
+    const r = await add({ kind: 'stock', coin: 'brk.b', name: 'Berkshire Hathaway Inc. Class B', exchange: 'nyse' });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().at(-1)).toEqual({ coin: 'BRK.B', quote: 'USD', position: 3, aliases: ['Berkshire Hathaway'], kind: 'stock', name: 'Berkshire Hathaway Inc. Class B', exchange: 'NYSE' });
+    expect((await add({ kind: 'stock', coin: 'BRK.B' })).json().error.message).toBe('BRK.B este deja în favorite (ca acțiune)');
+    expect((await add({ kind: 'crypto', coin: 'BTC' })).json().error.message).toBe('BTC este deja în favorite (ca monedă)');
+    expect((await add({ kind: 'stock', coin: 'BTC' })).statusCode).toBe(409);
+    expect((await add({ kind: 'stock', coin: '1ABC' })).statusCode).toBe(400);
+    expect((await add({ kind: 'bond', coin: 'X' })).statusCode).toBe(400);
+    const feeds = ctx.db.all<{ id: string; auto: string }>("SELECT id, auto FROM sources WHERE auto IS NOT NULL");
+    expect(feeds).toEqual([{ id: 'nasdaq-brk-b', auto: 'nasdaq:BRK.B' }]);
+    // Dotted tickers work in the addresses of the other routes too.
+    expect((await app.inject({ method: 'PUT', url: '/api/watchlist/BRK.B', headers: M, payload: { aliases: ['Buffett'] } })).json().at(-1).aliases).toEqual(['Buffett']);
+    expect((await app.inject({ method: 'PUT', url: '/api/watchlist/BRK.B', headers: M, payload: { quote: 'EUR' } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'PUT', url: '/api/watchlist/order', headers: M, payload: { coins: ['BRK.B', 'BTC', 'ETH', 'SOL'] } })).json()[0].coin).toBe('BRK.B');
+    expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/BRK.B', headers: M })).statusCode).toBe(200);
+    expect(ctx.db.all('SELECT id FROM sources WHERE auto IS NOT NULL')).toEqual([]);
   });
 
   it('lists sources, protects built-ins and adds a tested custom feed', async () => {
@@ -674,6 +722,123 @@ describe('exchange rate limits (TD-RATELIMIT)', () => {
   });
 });
 
+describe('accounts through the wizard (FD-SENTIQ §2)', () => {
+  const t212 = { exchange: 'trading212', label: 'T212', env: 'demo', credentials: { apiKey: 'KEY1234567890', secret: 'SECRET12345' } };
+  const route = (handler: (u: URL) => { status?: number; body: unknown } | undefined) =>
+    setFetchImpl((async (input: string | URL | Request) => {
+      const u = new URL(String(input));
+      const r = handler(u);
+      if (!r) throw new Error(`unexpected ${u}`);
+      return new Response(typeof r.body === 'string' ? r.body : JSON.stringify(r.body), { status: r.status ?? 200 });
+    }) as typeof fetch);
+
+  it("validates each provider's own fields and refuses unknown platforms (FD-NOAPI: XTB is no longer listed)", async () => {
+    const post = (payload: object) => app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload });
+    expect((await post({ exchange: 'xtb', label: 'x', credentials: {} })).json().error.message).toBe('Platformă necunoscută: xtb');
+    expect((await post({ exchange: 'nope', label: 'x', credentials: {} })).statusCode).toBe(400);
+    expect((await post({ exchange: 'ibkr', label: 'IB', credentials: { token: 'abc', queryId: '123' } })).json().error.message).toContain('doar cifre');
+    expect((await post({ exchange: 'coinbase', label: 'CB', credentials: { apiKey: 'not-a-cdp-name', secret: 'x'.repeat(40) } })).json().error.message).toContain('organizations/');
+    expect((await post({ ...t212, env: 'paper' })).statusCode).toBe(400);
+    expect((await post({ exchange: 'okx', label: 'OKX', credentials: { apiKey: 'k1234567', secret: 's1234567' } })).json().error.message).toContain('Passphrase');
+    expect(ctx.db.get<{ n: number }>('SELECT count(*) AS n FROM exchange_accounts')?.n).toBe(0);
+  });
+
+  it('keeps an account only when the first read works, and stores its fields encrypted', async () => {
+    route((u) => (u.pathname.endsWith('/account/summary') ? { status: 401, body: 'Bad API key' } : undefined));
+    const bad = await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: t212 });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error.message).toContain('Trading 212');
+    expect(ctx.db.get<{ n: number }>('SELECT count(*) AS n FROM exchange_accounts')?.n).toBe(0);
+
+    route((u) => {
+      if (u.pathname.endsWith('/account/summary')) return { body: { currency: 'EUR', cash: { availableToTrade: 50 } } };
+      if (u.pathname.endsWith('/equity/positions')) return { body: [{ instrument: { ticker: 'AAPL_US_EQ', currency: 'USD', name: 'Apple' }, quantity: 2, averagePricePaid: 100, currentPrice: 120, walletImpact: { currency: 'EUR', currentValue: 220, totalCost: 185, unrealizedProfitLoss: 35 } }] };
+      if (u.pathname.endsWith('/equity/orders')) return { body: [] };
+      if (u.pathname.endsWith('/history/orders')) return { body: { items: [] } };
+      return undefined;
+    });
+    const ok = await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: t212 });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ exchange: 'trading212', kind: 'stocks', env: 'demo', label: 'T212', keyHint: 'KEY1…7890', lastError: null });
+    const row = ctx.db.get<{ credentials: string; api_key: string }>('SELECT credentials, api_key FROM exchange_accounts');
+    expect(row?.credentials).not.toContain('SECRET12345');
+    expect(row?.api_key).toBe('');
+    const p = (await app.inject({ method: 'GET', url: `/api/portfolio/${ok.json().id}`, headers: H })).json();
+    expect(p).toMatchObject({ kind: 'stocks', currency: 'EUR', cash: 50, asOf: null });
+    expect(p.balances[0]).toMatchObject({ asset: 'AAPL', avgSource: 'broker', priceCurrency: 'USD', currency: 'EUR' });
+    // A price set by hand still wins over the broker's.
+    expect((await app.inject({ method: 'PUT', url: `/api/portfolio/${ok.json().id}/cost-basis/AAPL`, headers: M, payload: { avgPrice: 90 } })).statusCode).toBe(200);
+    const p2 = (await app.inject({ method: 'GET', url: `/api/portfolio/${ok.json().id}`, headers: H })).json();
+    expect(p2.balances[0]).toMatchObject({ avgPrice: 90, avgSource: 'manual', pnl: null });
+    expect((await app.inject({ method: 'PUT', url: `/api/portfolio/${ok.json().id}/cost-basis/BRK.B`, headers: M, payload: { avgPrice: 400 } })).statusCode).toBe(200);
+  });
+
+  it('a crypto exchange that needs a symbol for fills is read pair by pair', async () => {
+    const r = await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: { exchange: 'binance', label: 'BN', credentials: { apiKey: 'k1234567', secret: 's1234567' } } });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ exchange: 'binance', kind: 'crypto', env: 'live' });
+    const id = r.json().id as number;
+    const spot = (ctx.accounts as unknown as { clients: Map<number, { clients: { spot: Record<string, unknown> } }> }).clients.get(id)!.clients.spot;
+    const asked: (string | undefined)[] = [];
+    const realTrades = spot.fetchMyTrades as (...a: unknown[]) => Promise<unknown>;
+    spot.fetchMyTrades = async (sym?: string, ...rest: unknown[]) => {
+      asked.push(sym);
+      if (sym === undefined) throw new ccxt.ArgumentsRequired('binance fetchMyTrades() requires a symbol argument');
+      return realTrades(sym, ...rest);
+    };
+    const p = (await app.inject({ method: 'GET', url: `/api/portfolio/${id}?force=1`, headers: H })).json();
+    expect(asked).toEqual([undefined, 'BTC/USDT']);
+    expect(p.errors.fills).toBeUndefined();
+    expect(p.fills.length).toBeGreaterThan(0);
+    expect(p).toMatchObject({ kind: 'crypto', currency: 'USDT', mode: 'unknown' });
+    expect(p.balances.map((b: { account: string }) => b.account)).toEqual(expect.arrayContaining(['spot']));
+  });
+});
+
+describe('key permissions of the other exchanges (FD-SENTIQ §2)', () => {
+  const client = (methods: Record<string, () => Promise<unknown>>) => methods as never;
+  it('reads what a key may do and warns beyond reading', async () => {
+    const bn = await keyPermissions('binance', client({ sapiGetAccountApiRestrictions: async () => ({ enableReading: true, enableWithdrawals: true, enableSpotAndMarginTrading: false }) }));
+    expect(bn).toBe('read,withdraw');
+    expect(hasRiskyPermissions(bn)).toBe(true);
+    expect(hasRiskyPermissions(await keyPermissions('binance', client({ sapiGetAccountApiRestrictions: async () => ({ enableReading: true, enableFixReadOnly: true }) })))).toBe(false);
+    expect(await keyPermissions('bybit', client({ privateGetV5UserQueryApi: async () => ({ result: { readOnly: 1, permissions: { Spot: ['SpotTrade'] } } }) }))).toBe('read');
+    const by = await keyPermissions('bybit', client({ privateGetV5UserQueryApi: async () => ({ result: { readOnly: 0, permissions: { Spot: ['SpotTrade'], Wallet: [] } } }) }));
+    expect(by).toBe('Spot:SpotTrade');
+    expect(hasRiskyPermissions(by)).toBe(true);
+    expect(await keyPermissions('okx', client({ privateGetAccountConfig: async () => ({ data: [{ perm: 'read_only' }] }) }))).toBe('read_only');
+    expect(hasRiskyPermissions('read_only,trade')).toBe(true);
+    // Bitget: only names we know count; an unknown code never raises a false alarm.
+    expect(await keyPermissions('bitget', client({ privateSpotGetV2SpotAccountInfo: async () => ({ data: { authorities: ['readonly', 'xyz'] } }) }))).toBe('readonly');
+    expect(await keyPermissions('bitget', client({ privateSpotGetV2SpotAccountInfo: async () => ({ data: { authorities: ['xyz'] } }) }))).toBeNull();
+    // A refused or missing endpoint gives no verdict.
+    expect(await keyPermissions('okx', client({ privateGetAccountConfig: async () => Promise.reject(new Error('50113')) }))).toBeNull();
+    expect(await keyPermissions('kraken', client({}))).toBeNull();
+  });
+
+  it('a connected Binance key with withdrawals shows the warning', async () => {
+    const r = await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: { exchange: 'binance', label: 'BN', credentials: { apiKey: 'k1234567', secret: 's1234567' } } });
+    const id = r.json().id as number;
+    const spot = (ctx.accounts as unknown as { clients: Map<number, { clients: { spot: Record<string, unknown> } }> }).clients.get(id)!.clients.spot;
+    spot.sapiGetAccountApiRestrictions = async () => ({ enableReading: true, enableWithdrawals: true });
+    const t = (await app.inject({ method: 'POST', url: `/api/accounts/${id}/test`, headers: M })).json();
+    expect(t).toMatchObject({ permissions: 'read,withdraw', permissionWarning: true });
+  });
+});
+
+describe('crypto exchanges priced in USD (FD-SENTIQ)', () => {
+  it('values a coin listed only against USD (Kraken, Coinbase)', async () => {
+    const r = await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: { exchange: 'kraken', label: 'KR', credentials: { apiKey: 'k1234567', secret: 's1234567' } } });
+    expect(r.statusCode).toBe(200);
+    const id = r.json().id as number;
+    const spot = (ctx.accounts as unknown as { clients: Map<number, { clients: { spot: Record<string, unknown> } }> }).clients.get(id)!.clients.spot;
+    spot.markets = { 'BTC/USD': {} };
+    spot.fetchTickers = async () => ({ 'BTC/USD': { last: 81000 } });
+    const p = (await app.inject({ method: 'GET', url: `/api/portfolio/${id}?force=1`, headers: H })).json();
+    expect(p.balances.find((b: { asset: string }) => b.asset === 'BTC')).toMatchObject({ price: 81000, value: 81000 * 0.5 });
+  });
+});
+
 describe('costBasis', () => {
   it('uses the average-cost method and needs the fills to cover the holding', () => {
     const fills = [
@@ -694,12 +859,14 @@ describe('log retention', () => {
     const { pruneLogs } = await import('./jobs/register.ts');
     const { writeFileSync, existsSync } = await import('node:fs');
     const d = mkdtempSync(path.join(tmpdir(), 'kq-logs-'));
-    for (const f of ['kryptoniq-2026-08-01.log', 'kryptoniq-2026-10-11.log', 'notes.txt', 'launcher.log']) writeFileSync(path.join(d, f), 'x');
-    expect(pruneLogs(d, Date.parse('2026-09-12T00:00:00Z'))).toBe(1);
+    for (const f of ['kryptoniq-2026-08-01.log', 'kryptoniq-2026-10-11.log', 'sentiq-2026-08-02.log', 'sentiq-2026-10-12.log', 'notes.txt', 'launcher.log']) writeFileSync(path.join(d, f), 'x');
+    expect(pruneLogs(d, Date.parse('2026-09-12T00:00:00Z'))).toBe(2);
     expect(existsSync(path.join(d, 'kryptoniq-2026-08-01.log'))).toBe(false);
     expect(existsSync(path.join(d, 'kryptoniq-2026-10-11.log'))).toBe(true);
+    expect(existsSync(path.join(d, 'sentiq-2026-08-02.log'))).toBe(false);
+    expect(existsSync(path.join(d, 'sentiq-2026-10-12.log'))).toBe(true);
     expect(existsSync(path.join(d, 'notes.txt'))).toBe(true);
-    expect(existsSync(path.join(d, 'launcher.log'))).toBe(true); // owned by scripts/kryptoniq.sh (TD-LAUNCH)
+    expect(existsSync(path.join(d, 'launcher.log'))).toBe(true); // owned by scripts/sentiq.sh (TD-LAUNCH)
     expect(pruneLogs(path.join(d, 'missing'), Date.now())).toBe(0);
     rmSync(d, { recursive: true, force: true });
   });
@@ -707,7 +874,9 @@ describe('log retention', () => {
 
 describe('coin logos (TD-ICONS)', () => {
   it('serves branded SVGs locally, resolves aliases and rejects unknown or unsafe symbols', async () => {
-    const h = { host: '127.0.0.1:4317' };
+    // Behind the sign-in like the rest of the API (FD-USERS).
+    expect((await app.inject({ url: '/api/logo/btc', headers: { host: '127.0.0.1:4317' } })).statusCode).toBe(401);
+    const h = H;
     const btc = await app.inject({ url: '/api/logo/btc', headers: h });
     expect(btc.statusCode).toBe(200);
     expect(btc.headers['content-type']).toMatch(/image\/svg\+xml/);
@@ -757,7 +926,9 @@ describe('web build serving (TD-STATIC)', () => {
         expect(page.headers['cache-control'], url).toBe('no-store');
         expect(page.body, url).toContain('<div id="root">');
       }
-      const api = await a2.inject({ url: '/api/nope', headers: { host: '127.0.0.1:4317' } });
+      // Signed out, an unknown API route is just "sign in" (the API's map is nobody else's business).
+      expect((await a2.inject({ url: '/api/nope', headers: { host: '127.0.0.1:4317' } })).statusCode).toBe(401);
+      const api = await a2.inject({ url: '/api/nope', headers: H });
       expect(api.statusCode).toBe(404);
       expect(api.json().error.code).toBe('NOT_FOUND');
     } finally {
@@ -768,9 +939,10 @@ describe('web build serving (TD-STATIC)', () => {
 });
 
 describe('background launcher (TD-LAUNCH)', () => {
-  it('KRYPTONIQ_QUIET=1 keeps the logger off the console but still writes the daily file', async () => {
+  it('SENTIQ_QUIET=1 (or KRYPTONIQ_QUIET=1) keeps the logger off the console but still writes the daily file', async () => {
     const { createLogger } = await import('./log.ts');
     expect(loadConfig({} as NodeJS.ProcessEnv).quietConsole).toBe(false);
+    expect(loadConfig({ SENTIQ_QUIET: '1' } as NodeJS.ProcessEnv).quietConsole).toBe(true);
     expect(loadConfig({ KRYPTONIQ_QUIET: '1' } as NodeJS.ProcessEnv).quietConsole).toBe(true);
     const d = mkdtempSync(path.join(tmpdir(), 'kq-quiet-'));
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -821,3 +993,81 @@ describe('scheduler', () => {
     db.close();
   });
 });
+
+describe('stocks API (FD-SENTIQ §4)', () => {
+  const nasdaq = (u: URL) => {
+    if (u.hostname !== 'api.nasdaq.com') return null;
+    if (u.pathname === '/api/market-info') return { data: { marketIndicator: 'Market Open', marketOpeningTime: 'Oct 13, 2026 09:30 AM ET', marketClosingTime: 'Oct 13, 2026 04:00 PM ET' } };
+    if (u.pathname === '/api/quote/AAPL/info') return { data: { companyName: 'Apple Inc. Common Stock', marketStatus: 'Open', primaryData: { lastSalePrice: '$340.97', netChange: '+4.33', percentageChange: '+1.29%' } } };
+    if (u.pathname.endsWith('/info')) return { data: null };
+    if (u.pathname === '/api/quote/AAPL/historical')
+      return { data: { tradesTable: { rows: Array.from({ length: 120 }, (_, i) => ({ date: new Date(Date.UTC(2026, 4, 1) + i * 86_400_000).toISOString().replace(/^(\d{4})-(\d{2})-(\d{2}).*/, '$2/$3/$1'), open: '$1.00', high: '$2.00', low: '$0.50', close: '$1.50', volume: '1,000' })) } } };
+    if (u.pathname === '/api/quote/AAPL/chart') return { data: { chart: [] } };
+    if (u.pathname.startsWith('/api/autocomplete')) return { data: [{ symbol: 'AAPL', name: 'Apple Inc. Common Stock', exchange: 'NASDAQ-GS', asset: 'STOCKS' }, { symbol: 'AAPL.XX', name: 'odd', asset: 'FUTURES' }] };
+    return { data: null };
+  };
+  const td = (ok: boolean) => (u: URL) =>
+    u.hostname === 'api.twelvedata.com' ? (ok ? { values: [{ datetime: '2026-10-12', open: '1', high: '2', low: '0.5', close: '1.5', volume: '10' }], status: 'ok' } : { code: 401, message: 'invalid api key', status: 'error' }) : null;
+  const serveJson = (...routes: ((u: URL) => unknown)[]) =>
+    setFetchImpl((async (input: string | URL | Request) => {
+      const u = new URL(String(input));
+      for (const r of routes) {
+        const body = r(u);
+        if (body) return new Response(JSON.stringify(body), { status: 200 });
+      }
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch);
+
+  it('serves daily candles without a key and asks for one on intraday', async () => {
+    serveJson(nasdaq);
+    const d = await app.inject({ method: 'GET', url: '/api/market/candles?asset=stock&symbol=aapl&tf=1d&limit=100', headers: H });
+    expect(d.statusCode).toBe(200);
+    expect(d.json()).toMatchObject({ exchange: 'nasdaq', symbol: 'AAPL', tf: '1d' });
+    expect(d.json().candles).toHaveLength(100);
+    const h = await app.inject({ method: 'GET', url: '/api/market/candles?asset=stock&symbol=AAPL&tf=1h&limit=100', headers: H });
+    expect(h.statusCode).toBe(400);
+    expect(h.json().error.message).toMatch(/cheia gratuită Twelve Data/);
+    expect((await app.inject({ method: 'GET', url: '/api/market/candles?asset=stock&symbol=aa%20pl&tf=1d', headers: H })).statusCode).toBe(400);
+    const info = (await app.inject({ method: 'GET', url: '/api/stocks/info', headers: H })).json();
+    expect(info).toMatchObject({ timeframes: ['1d', '1w'], hasKey: false, market: { state: 'open' }, budget: { used: 0, perDay: 800 } });
+  });
+
+  it('quotes several symbols, with an error row for an unknown one', async () => {
+    serveJson(nasdaq);
+    const r = (await app.inject({ method: 'GET', url: '/api/stocks/quotes?symbols=AAPL,zzzz,AAPL', headers: H })).json();
+    expect(r).toHaveLength(2);
+    expect(r[0]).toMatchObject({ symbol: 'AAPL', last: 340.97, changePct: 1.29 });
+    expect(r[1]).toMatchObject({ symbol: 'ZZZZ', last: null, error: 'ZZZZ nu e listat la Nasdaq / NYSE' });
+    expect((await app.inject({ method: 'GET', url: '/api/stocks/search?q=apple', headers: H })).json()).toEqual([{ symbol: 'AAPL', name: 'Apple Inc. Common Stock', exchange: 'NASDAQ-GS', type: 'Acțiune' }]);
+  });
+
+  it('checks the Twelve Data key before saving it', async () => {
+    let asked = 0;
+    serveJson((u) => (u.hostname === 'api.twelvedata.com' ? (asked++, null) : null));
+    const malformed = await app.inject({ method: 'PUT', url: '/api/settings/twelvedata-key', headers: M, payload: { key: 'not a key' } });
+    expect(malformed.json().error.message).toMatch(/nu pare validă/);
+    expect(asked).toBe(0);
+    serveJson(td(false), nasdaq);
+    const bad = await app.inject({ method: 'PUT', url: '/api/settings/twelvedata-key', headers: M, payload: { key: 'a'.repeat(32) } });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error.message).toMatch(/cheia nu e validă/);
+    serveJson(td(true), nasdaq);
+    const ok = await app.inject({ method: 'PUT', url: '/api/settings/twelvedata-key', headers: M, payload: { key: 'b'.repeat(32) } });
+    expect(ok.json()).toMatchObject({ twelveDataKeySet: true });
+    expect(JSON.stringify(ok.json())).not.toContain('b'.repeat(32));
+    expect((await app.inject({ method: 'GET', url: '/api/stocks/info', headers: H })).json().timeframes).toContain('1h');
+    expect((await app.inject({ method: 'GET', url: '/api/health', headers: H })).json().twelveData).toMatchObject({ hasKey: true, used: 2 });
+    const cleared = await app.inject({ method: 'PUT', url: '/api/settings/twelvedata-key', headers: M, payload: { key: null } });
+    expect(cleared.json()).toMatchObject({ twelveDataKeySet: false });
+  });
+
+  it('accepts a stock as the remembered chart and the earnings switch of the calendar', async () => {
+    const put = (payload: object) => app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload });
+    expect((await put({ charts: { symbol: 'stock:BRK.B' } })).json().charts.symbol).toBe('stock:BRK.B');
+    expect((await put({ charts: { symbol: 'stock:brk' } })).statusCode).toBe(400);
+    expect((await put({ calendar: { earnings: false } })).json().calendar).toMatchObject({ earnings: false, impacts: ['High', 'Medium'] });
+    const cal = await app.inject({ method: 'GET', url: `/api/calendar?from=1&to=${86_400_000}&earnings=2`, headers: H });
+    expect(cal.statusCode).toBe(400);
+  });
+});
+

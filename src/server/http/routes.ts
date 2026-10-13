@@ -1,18 +1,21 @@
-// JSON API routes (TD §11). Every input is validated with zod.
+// JSON API routes (TD §11). Every input is validated with zod. Every route runs for a signed-in user (FD-USERS):
+// favourites, settings, accounts and custom events are that user's own; news, sentiment and market data are common.
 import { createHash } from 'node:crypto';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { isDayKey, isTimeframe, type Timeframe } from '../../shared/time.ts';
+import { dayKey, isDayKey, isTimeframe, type Timeframe } from '../../shared/time.ts';
 import type { AppContext } from '../context.ts';
 import { readContext } from '../market/context.ts';
 import { coinLogo } from '../market/logos.ts';
+import { defaultStockAliases, STOCK_SYMBOL_RE } from '../market/stocks.ts';
 import { fetchText } from '../net/http.ts';
 import { retagRecent } from '../news/ingest.ts';
 import { parseFeed } from '../news/parser.ts';
 import { queryNews, newsQuerySchema } from '../news/query.ts';
 import { safeHttpUrl } from '../news/normalize.ts';
-import type { SourceRow } from '../news/sources.ts';
-import { formatIssues, ValidationError } from '../settings.ts';
+import { syncStockSources, type SourceRow } from '../news/sources.ts';
+import { formatIssues, TWELVEDATA_KEY_INVALID, TWELVEDATA_KEY_RE, ValidationError } from '../settings.ts';
+import { me } from './auth.ts';
 import { ConflictError, NotFoundError } from './errors.ts';
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
@@ -27,11 +30,22 @@ function parse<T extends z.ZodType>(schema: T, data: unknown): z.infer<T> {
 
 export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Promise<void> {
   const { db } = ctx;
+  /** The signed-in user's settings (their own time zone, market, indicators…). */
+  const mine = (req: FastifyRequest) => ctx.settings.forUser(me(req).id);
 
-  const afterWatchlistChange = () => {
+  /**
+   * `added`: a stock the user has just put in the watchlist (its Nasdaq feed is fetched now). Only the admin's
+   * adding turns a feed back on that the admin had turned off (the sources are the admin's, FD-USERS §2).
+   */
+  const afterWatchlistChange = (added?: string, reenable = false) => {
     ctx.coins.invalidate();
-    retagRecent(db, ctx.coins.get(), Date.now() - 7 * DAY);
+    syncStockSources(db, reenable ? added : undefined);
+    retagRecent(db, ctx.coins.get(), Date.now() - 7 * DAY, ctx.coins.classifier());
     ctx.scheduler.nudge('scanner', 1000);
+    if (added) {
+      ctx.scheduler.nudge('news.fetch', 1000);
+      ctx.scheduler.nudge('calendar.earnings', 2000);
+    }
   };
 
   // ---------------- health ----------------
@@ -56,19 +70,22 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     sentiment: { engine: ctx.sentiment.engine().id, model: ctx.nli.status(), pending: ctx.sentiment.pendingCount(), claude: ctx.sentiment.claudeStatus() },
     calendar: { ...ctx.calendar.lastUpdate(), ffBlockedUntil: ctx.calendar.ffState().blockedUntil || null },
     db: { sizeBytes: db.sizeBytes(), news: db.get<{ n: number }>('SELECT count(*) AS n FROM news')?.n ?? 0 },
+    twelveData: { hasKey: ctx.stocks.td.hasKey(), ...ctx.stocks.budget.status() },
   }));
 
   // ---------------- sentiment ----------------
-  app.get('/api/sentiment/today', async () => ctx.daily.today());
+  // The same news for everybody, cut into days of each user's own time zone.
+  app.get('/api/sentiment/today', async (req) => ctx.daily.today(mine(req).timezone));
 
   app.get('/api/sentiment/history', async (req) => {
     const { days } = parse(z.object({ days: z.coerce.number().int().min(1).max(365).default(30) }), req.query);
-    return { tz: ctx.settings.get().timezone, points: ctx.daily.history(days) };
+    const tz = mine(req).timezone;
+    return { tz, points: ctx.daily.history(days, tz) };
   });
 
   app.get('/api/sentiment/day/:day', async (req) => {
     const { day } = parse(z.object({ day: z.string().refine(isDayKey, 'YYYY-MM-DD') }), req.params);
-    return ctx.daily.computeDay(day, ctx.settings.get().timezone, Date.now());
+    return ctx.daily.computeDay(day, mine(req).timezone, Date.now());
   });
 
   app.post('/api/sentiment/rescore', async (req) => {
@@ -81,13 +98,13 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
   app.post('/api/sentiment/recompute-history', async () => ({ finalized: ctx.daily.recomputeHistory() }));
 
   // ---------------- news ----------------
-  app.get('/api/news', async (req) => queryNews(db, parse(newsQuerySchema, req.query), ctx.settings.get().timezone));
+  app.get('/api/news', async (req) => queryNews(db, parse(newsQuerySchema, req.query), mine(req).timezone, me(req).id));
 
   // ---------------- sources ----------------
   const sourceInput = z.object({
     name: z.string().trim().min(1).max(80),
     url: z.string().trim().url().max(500),
-    category: z.enum(['crypto', 'macro', 'geopolitics']),
+    category: z.enum(['crypto', 'macro', 'geopolitics', 'stocks']),
     weight: z.number().min(0.5).max(1.5).default(1),
   });
 
@@ -132,7 +149,7 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
         enabled: z.boolean().optional(),
         weight: z.number().min(0.5).max(1.5).optional(),
         name: z.string().trim().min(1).max(80).optional(),
-        category: z.enum(['crypto', 'macro', 'geopolitics']).optional(),
+        category: z.enum(['crypto', 'macro', 'geopolitics', 'stocks']).optional(),
       }),
       req.body,
     );
@@ -167,11 +184,15 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     return { ok: true };
   });
 
-  // ---------------- watchlist ----------------
+  // ---------------- watchlist (coins and, since FD-SENTIQ §4.1, stocks) ----------------
   const aliasesSchema = z.array(z.string().trim().min(3).max(40)).max(10);
-  const listWatchlist = () =>
-    db.all<{ coin: string; quote: string; position: number; aliases: string }>('SELECT coin, quote, position, aliases FROM watchlist ORDER BY position, coin').map((w) => ({
+  // A ticker of either kind (BTC, AAPL, BRK.B), for the routes that address an existing row.
+  const symbolRe = /^[A-Z0-9][A-Z0-9.-]{0,14}$/;
+  type WatchRow = { coin: string; quote: string; position: number; aliases: string; kind: string; name: string | null; exchange: string | null };
+  const listWatchlist = (userId: number) =>
+    db.all<WatchRow>('SELECT coin, quote, position, aliases, kind, name, exchange FROM watchlist WHERE user_id = ? ORDER BY position, coin', [userId]).map((w) => ({
       ...w,
+      kind: w.kind === 'stock' ? ('stock' as const) : ('crypto' as const),
       aliases: (() => {
         try {
           return JSON.parse(w.aliases) as string[];
@@ -180,46 +201,94 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
         }
       })(),
     }));
+  const kindLabel = (kind: string) => (kind === 'stock' ? 'acțiune' : 'monedă');
 
-  app.get('/api/watchlist', async () => listWatchlist());
+  app.get('/api/watchlist', async (req) => listWatchlist(me(req).id));
 
   app.post('/api/watchlist', async (req) => {
+    const user = me(req);
     const w = parse(
-      z.object({
-        coin: z.string().trim().toUpperCase().regex(coinRe),
-        quote: z.string().trim().toUpperCase().regex(coinRe).default('USDT'),
-        aliases: aliasesSchema.default([]),
-      }),
-      req.body,
+      z.discriminatedUnion('kind', [
+        z.object({
+          kind: z.literal('crypto'),
+          coin: z.string().trim().toUpperCase().regex(coinRe),
+          quote: z.string().trim().toUpperCase().regex(coinRe).default('USDT'),
+          aliases: aliasesSchema.default([]),
+        }),
+        z.object({
+          kind: z.literal('stock'),
+          coin: z.string().trim().toUpperCase().regex(STOCK_SYMBOL_RE),
+          name: z.string().trim().max(120).optional(),
+          exchange: z.string().trim().toUpperCase().max(20).optional(),
+          aliases: aliasesSchema.optional(),
+        }),
+      ]),
+      // Older clients send no kind.
+      { kind: 'crypto', ...((req.body ?? {}) as object) },
     );
-    if (db.get('SELECT coin FROM watchlist WHERE coin = ?', [w.coin])) throw new ConflictError(`${w.coin} este deja în lista de monede favorite`);
-    if ((db.get<{ n: number }>('SELECT count(*) AS n FROM watchlist')?.n ?? 0) >= 50) throw new ValidationError('Lista de monede favorite are maximum 50 de monede');
-    const pos = (db.get<{ p: number | null }>('SELECT max(position) AS p FROM watchlist')?.p ?? -1) + 1;
-    db.run('INSERT INTO watchlist(coin, quote, position, aliases, added_at) VALUES (?, ?, ?, ?, ?)', [w.coin, w.quote, pos, JSON.stringify(w.aliases), Date.now()]);
-    afterWatchlistChange();
-    return listWatchlist();
+    const existing = db.get<{ kind: string }>('SELECT kind FROM watchlist WHERE user_id = ? AND coin = ?', [user.id, w.coin]);
+    if (existing) throw new ConflictError(`${w.coin} este deja în favorite (ca ${kindLabel(existing.kind)})`);
+    if ((db.get<{ n: number }>('SELECT count(*) AS n FROM watchlist WHERE user_id = ?', [user.id])?.n ?? 0) >= 50) {
+      throw new ValidationError('Lista de favorite are maximum 50 de simboluri');
+    }
+    const pos = (db.get<{ p: number | null }>('SELECT max(position) AS p FROM watchlist WHERE user_id = ?', [user.id])?.p ?? -1) + 1;
+    if (w.kind === 'crypto') {
+      db.run("INSERT INTO watchlist(user_id, coin, quote, position, aliases, added_at, kind) VALUES (?, ?, ?, ?, ?, ?, 'crypto')", [
+        user.id,
+        w.coin,
+        w.quote,
+        pos,
+        JSON.stringify(w.aliases),
+        Date.now(),
+      ]);
+      afterWatchlistChange();
+    } else {
+      const name = w.name || null;
+      const aliases = w.aliases ?? defaultStockAliases(name);
+      db.run("INSERT INTO watchlist(user_id, coin, quote, position, aliases, added_at, kind, name, exchange) VALUES (?, ?, 'USD', ?, ?, ?, 'stock', ?, ?)", [
+        user.id,
+        w.coin,
+        pos,
+        JSON.stringify(aliases),
+        Date.now(),
+        name,
+        w.exchange || null,
+      ]);
+      afterWatchlistChange(w.coin, user.role === 'admin');
+    }
+    return listWatchlist(user.id);
   });
 
   app.put('/api/watchlist/order', async (req) => {
-    const { coins } = parse(z.object({ coins: z.array(z.string().regex(coinRe)).max(50) }), req.body);
-    db.tx(() => coins.forEach((c, i) => db.run('UPDATE watchlist SET position = ? WHERE coin = ?', [i, c])));
-    return listWatchlist();
+    const user = me(req);
+    const { coins } = parse(z.object({ coins: z.array(z.string().regex(symbolRe)).max(50) }), req.body);
+    db.tx(() => coins.forEach((c, i) => db.run('UPDATE watchlist SET position = ? WHERE user_id = ? AND coin = ?', [i, user.id, c])));
+    return listWatchlist(user.id);
   });
 
   app.put('/api/watchlist/:coin', async (req) => {
-    const { coin } = parse(z.object({ coin: z.string().toUpperCase().regex(coinRe) }), req.params);
+    const user = me(req);
+    const { coin } = parse(z.object({ coin: z.string().toUpperCase().regex(symbolRe) }), req.params);
     const patch = parse(z.object({ quote: z.string().trim().toUpperCase().regex(coinRe).optional(), aliases: aliasesSchema.optional() }), req.body);
-    if (!db.get('SELECT coin FROM watchlist WHERE coin = ?', [coin])) throw new NotFoundError(`${coin} nu este în lista de monede favorite`);
-    db.run('UPDATE watchlist SET quote = COALESCE(?, quote), aliases = COALESCE(?, aliases) WHERE coin = ?', [patch.quote ?? null, patch.aliases ? JSON.stringify(patch.aliases) : null, coin]);
+    const row = db.get<{ kind: string }>('SELECT kind FROM watchlist WHERE user_id = ? AND coin = ?', [user.id, coin]);
+    if (!row) throw new NotFoundError(`${coin} nu este în favorite`);
+    if (row.kind === 'stock' && patch.quote !== undefined && patch.quote !== 'USD') throw new ValidationError('Acțiunile sunt cotate în USD');
+    db.run('UPDATE watchlist SET quote = COALESCE(?, quote), aliases = COALESCE(?, aliases) WHERE user_id = ? AND coin = ?', [
+      patch.quote ?? null,
+      patch.aliases ? JSON.stringify(patch.aliases) : null,
+      user.id,
+      coin,
+    ]);
     afterWatchlistChange();
-    return listWatchlist();
+    return listWatchlist(user.id);
   });
 
   app.delete('/api/watchlist/:coin', async (req) => {
-    const { coin } = parse(z.object({ coin: z.string().toUpperCase().regex(coinRe) }), req.params);
-    if (db.run('DELETE FROM watchlist WHERE coin = ?', [coin]).changes === 0) throw new NotFoundError(`${coin} nu este în lista de monede favorite`);
+    const user = me(req);
+    const { coin } = parse(z.object({ coin: z.string().toUpperCase().regex(symbolRe) }), req.params);
+    if (db.run('DELETE FROM watchlist WHERE user_id = ? AND coin = ?', [user.id, coin]).changes === 0) throw new NotFoundError(`${coin} nu este în favorite`);
     afterWatchlistChange();
-    return listWatchlist();
+    return listWatchlist(user.id);
   });
 
   // ---------------- calendar ----------------
@@ -230,6 +299,7 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
         to: z.coerce.number().int().positive(),
         impact: z.string().max(100).optional(),
         currencies: z.string().max(200).optional(),
+        earnings: z.enum(['0', '1']).optional(),
       }),
       req.query,
     );
@@ -237,24 +307,37 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     const list = (s?: string) => (s ? s.split(',').map((x) => x.trim()).filter(Boolean) : undefined);
     const st = ctx.calendar.ffState();
     return {
-      events: ctx.calendar.query({ from: q.from, to: q.to, impacts: list(q.impact), currencies: list(q.currencies)?.map((c) => c.toUpperCase()) }),
+      events: ctx.calendar.query({ userId: me(req).id, from: q.from, to: q.to, impacts: list(q.impact), currencies: list(q.currencies)?.map((c) => c.toUpperCase()), earnings: q.earnings !== '0' }),
       updated: ctx.calendar.lastUpdate(),
       ffBlockedUntil: st.blockedUntil > Date.now() ? st.blockedUntil : null,
       ffWeeks: st.weeks,
     };
   });
 
-  app.post('/api/calendar/custom', async (req) => ({ id: ctx.calendar.addCustom(req.body) }));
+  app.post('/api/calendar/custom', async (req) => ({ id: ctx.calendar.addCustom(me(req).id, req.body) }));
 
   app.delete('/api/calendar/custom/:id', async (req) => {
     const { id } = parse(idParam, req.params);
-    if (!ctx.calendar.deleteCustom(id)) throw new NotFoundError('Evenimentul nu există');
+    if (!ctx.calendar.deleteCustom(me(req).id, id)) throw new NotFoundError('Evenimentul nu există');
     return { ok: true };
   });
 
   // ---------------- market ----------------
   app.get('/api/market/candles', async (req) => {
-    const s = ctx.settings.get().market;
+    const s = mine(req).market;
+    const { asset } = parse(z.object({ asset: z.enum(['crypto', 'stock']).default('crypto') }).passthrough(), req.query);
+    if (asset === 'stock') {
+      // FD-SENTIQ §4.3: a share by its ticker (Twelve Data with a key, otherwise Nasdaq daily).
+      const q = parse(
+        z.object({
+          symbol: z.string().trim().toUpperCase().regex(STOCK_SYMBOL_RE),
+          tf: z.string().refine(isTimeframe, 'Unsupported timeframe'),
+          limit: z.coerce.number().int().min(50).max(5000).default(s.candles),
+        }),
+        req.query,
+      );
+      return ctx.stocks.candles(q.symbol, q.tf as Timeframe, q.limit);
+    }
     const q = parse(
       z.object({
         exchange: z.string().max(20).default(s.exchange),
@@ -267,13 +350,70 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     return ctx.market.candles(q.exchange, q.symbol, q.tf as Timeframe, q.limit);
   });
 
+  // ---------------- stocks (FD-SENTIQ §4) ----------------
+  const tickers = z
+    .string()
+    .trim()
+    .toUpperCase()
+    .transform((v) => [...new Set(v.split(',').map((x) => x.trim()).filter(Boolean))])
+    .pipe(z.array(z.string().regex(STOCK_SYMBOL_RE)).min(1).max(50));
+
+  app.get('/api/stocks/info', async () => ({
+    timeframes: ctx.stocks.timeframes(),
+    hasKey: ctx.stocks.td.hasKey(),
+    market: await ctx.stocks.confirmedStatus(),
+    budget: ctx.stocks.budget.status(),
+  }));
+
+  app.get('/api/stocks/quotes', async (req) => {
+    const { symbols } = parse(z.object({ symbols: tickers }), req.query);
+    const one = (sym: string) =>
+      ctx.stocks.quote(sym).catch((err: Error) => ({ symbol: sym, name: null, last: null, change: null, changePct: null, status: null, fetchedAt: Date.now(), error: err.message.slice(0, 200) }));
+    // Five at a time: quick for a long watchlist, gentle with Nasdaq; the order of the request is kept.
+    const out = [];
+    for (let i = 0; i < symbols.length; i += 5) out.push(...(await Promise.all(symbols.slice(i, i + 5).map(one))));
+    return out;
+  });
+
+  app.get('/api/stocks/search', async (req) => {
+    const { q } = parse(z.object({ q: z.string().trim().min(1).max(40) }), req.query);
+    return ctx.stocks.search(q);
+  });
+
+  app.get('/api/stocks/spark', async (req) => {
+    const { symbol } = parse(z.object({ symbol: z.string().trim().toUpperCase().regex(STOCK_SYMBOL_RE) }), req.query);
+    return ctx.stocks.spark(symbol);
+  });
+
   app.get('/api/market/symbols', async (req) => {
-    const s = ctx.settings.get().market;
+    const s = mine(req).market;
     const q = parse(z.object({ exchange: z.string().max(20).default(s.exchange), q: z.string().trim().max(20).default('') }), req.query);
     return ctx.market.searchSymbols(q.exchange, q.q);
   });
 
   app.get('/api/market/context', async () => readContext(db));
+
+  // FD-SUMMARY: the user's day summary by Claude (today in their time zone).
+  const summaryState = (req: FastifyRequest) => {
+    const u = me(req);
+    const day = dayKey(Date.now(), mine(req).timezone);
+    return { summary: ctx.summary.latest(u.id, day), hasKey: ctx.summary.hasKey(), retryAt: ctx.summary.retryAt(u.id, day) };
+  };
+  app.get('/api/summary', async (req) => summaryState(req));
+  app.post('/api/summary', async (req) => {
+    const u = me(req);
+    await ctx.summary.generate(u.id, dayKey(Date.now(), mine(req).timezone));
+    return summaryState(req);
+  });
+
+  // FD-ECON: the economic indicators by country (common to every user).
+  app.get('/api/economy', async () => ctx.economy.view());
+  app.get('/api/economy/description', async (req) => {
+    const { key } = parse(z.object({ key: z.string().min(1).max(200) }), req.query);
+    const description = ctx.economy.description(key);
+    if (description === null) throw new NotFoundError('Indicatorul nu are o descriere');
+    return { description };
+  });
 
   // Coin logo as an image (TD-ICONS). A missing logo is cached by the browser too, so it is asked once a day.
   app.get('/api/logo/:symbol', async (req, reply) => {
@@ -285,20 +425,35 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
   });
 
   // ---------------- scanner ----------------
-  app.get('/api/scanner', async () => ctx.scanner.result() ?? { computedAt: null, exchange: ctx.settings.get().market.exchange, rows: [] });
+  const scanOf = (req: FastifyRequest) => ctx.scanner.result(me(req).id) ?? { computedAt: null, exchange: mine(req).market.exchange, rows: [] };
 
-  app.post('/api/scanner/run', async () => {
-    // Through the scheduler so a manual run never overlaps the periodic one.
-    await ctx.scheduler.trigger('scanner').catch(() => undefined);
-    return ctx.scanner.result() ?? { computedAt: null, exchange: ctx.settings.get().market.exchange, rows: [] };
+  app.get('/api/scanner', async (req) => scanOf(req));
+
+  // A manual scan covers every user's favourites: at most one a minute, whoever asks (FD-USERS §2).
+  let lastManualScan = 0;
+  app.post('/api/scanner/run', async (req) => {
+    if (Date.now() - lastManualScan >= 60_000) {
+      lastManualScan = Date.now();
+      // Through the scheduler so a manual run never overlaps the periodic one.
+      await ctx.scheduler.trigger('scanner').catch(() => undefined);
+    }
+    return scanOf(req);
   });
 
   // ---------------- settings ----------------
-  app.get('/api/settings', async () => ctx.settings.view());
+  /** What the settings routes return: the user's own view (secrets' hints only for the admin). */
+  const view = (req: FastifyRequest) => {
+    const u = me(req);
+    return ctx.settings.viewFor(u.id, u.role === 'admin');
+  };
+
+  app.get('/api/settings', async (req) => view(req));
 
   app.put('/api/settings', async (req) => {
-    const prev = ctx.settings.get();
-    const next = ctx.settings.update(req.body);
+    const u = me(req);
+    const prev = ctx.settings.forUser(u.id);
+    // Global keys (retention, sentiment engine) only for the admin: 403 for anybody else.
+    const next = ctx.settings.updateFor(u.id, u.role === 'admin', req.body);
     if (prev.timezone !== next.timezone) ctx.scheduler.nudge('sentiment.daily', 0);
     if (
       prev.scanner.tf !== next.scanner.tf ||
@@ -308,45 +463,64 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     ) {
       ctx.scheduler.nudge('scanner', 500);
     }
-    return ctx.settings.view();
+    return view(req);
+  });
+
+  app.put('/api/settings/twelvedata-key', async (req) => {
+    const { key } = parse(z.object({ key: z.string().max(200).nullable() }), req.body);
+    if (key && key.trim()) {
+      // A malformed key costs no request; a wrong one is refused here, not discovered later on a chart.
+      if (!TWELVEDATA_KEY_RE.test(key.trim())) throw new ValidationError(TWELVEDATA_KEY_INVALID);
+      await ctx.stocks.td.verify(key.trim()).catch((err: Error) => {
+        throw new ValidationError(err.message);
+      });
+    }
+    ctx.settings.setTwelveDataKey(key);
+    ctx.scheduler.nudge('scanner', 1000);
+    return view(req);
   });
 
   app.put('/api/settings/claude-key', async (req) => {
     const { key } = parse(z.object({ key: z.string().max(400).nullable() }), req.body);
     ctx.settings.setClaudeKey(key);
-    return ctx.settings.view();
+    return view(req);
   });
 
   // ---------------- accounts & portfolio ----------------
-  app.get('/api/accounts', async () => ctx.accounts.list());
+  // FD-USERS §2: each user sees and reads only their own accounts; anybody else's id is "not found".
+  const ownAccount = (req: FastifyRequest, id: number) => {
+    if (!ctx.accounts.owns(me(req).id, id)) throw new NotFoundError('Contul nu există');
+  };
 
-  app.post('/api/accounts', async (req) => {
-    const created = ctx.accounts.create(req.body);
-    return ctx.accounts.test(created.id);
-  });
+  app.get('/api/accounts', async (req) => ctx.accounts.list(me(req).id));
+
+  app.post('/api/accounts', async (req) => ctx.accounts.connect(me(req).id, req.body));
 
   app.delete('/api/accounts/:id', async (req) => {
     const { id } = parse(idParam, req.params);
+    ownAccount(req, id);
     if (!ctx.accounts.delete(id)) throw new NotFoundError('Contul nu există');
     return { ok: true };
   });
 
   app.post('/api/accounts/:id/test', async (req) => {
     const { id } = parse(idParam, req.params);
-    if (!ctx.accounts.list().some((a) => a.id === id)) throw new NotFoundError('Contul nu există');
+    ownAccount(req, id);
     return ctx.accounts.test(id);
   });
 
   app.get('/api/portfolio/:id', async (req) => {
     const { id } = parse(idParam, req.params);
     const { force } = parse(z.object({ force: z.enum(['0', '1']).optional() }), req.query);
-    if (!ctx.accounts.list().some((a) => a.id === id)) throw new NotFoundError('Contul nu există');
+    ownAccount(req, id);
     return ctx.accounts.portfolio(id, force === '1');
   });
 
   app.put('/api/portfolio/:id/cost-basis/:asset', async (req) => {
-    const p = parse(z.object({ id: z.coerce.number().int().positive(), asset: z.string().toUpperCase().regex(coinRe) }), req.params);
+    // Shares too: BRK.B, SAP.DE (the service checks the same pattern).
+    const p = parse(z.object({ id: z.coerce.number().int().positive(), asset: z.string().toUpperCase().regex(/^[A-Z0-9][A-Z0-9.-]{0,19}$/) }), req.params);
     const { avgPrice } = parse(z.object({ avgPrice: z.number().positive().nullable() }), req.body);
+    ownAccount(req, p.id);
     ctx.accounts.setCostBasis(p.id, p.asset, avgPrice);
     return { ok: true };
   });

@@ -2,8 +2,9 @@
 @import '@fontsource-variable/geist-mono/wght.css';
 @import 'tailwindcss';
 
-/* Kryptoniq "Cockpit" (FD-REDESIGN / TD-REDESIGN): deep black, tiles, brass as the brand accent; bull/bear
-   only ever mean up/down. Token names are kept from v1 so every page keeps working. */
+/* Sentiq "Cockpit" (FD-REDESIGN / TD-REDESIGN): deep black, tiles, brass as the brand accent; bull/bear
+   only ever mean up/down. Token names are kept from v1 so every page keeps working; the accent is called
+   `accent` because the light theme's is teal (FD-THEME2). */
 @theme {
   --color-ink: #07090e;
   --color-ink-2: #0a0d13;
@@ -15,9 +16,12 @@
   --color-line-strong: #262d3a;
   --color-text: #edeff3;
   --color-muted: #8d96a8;
-  --color-faint: #7a8395;
-  --color-brass: #e2b866;
-  --color-brass-dim: #a8823c;
+  --color-faint: #858ea0;
+  --color-accent: #e2b866;
+  --color-accent-dim: #a8823c;
+  --color-accent-hover: #ecc87e;
+  /* Text on an accent fill (primary buttons, selected segments). */
+  --color-on-accent: #07090e;
   --color-bull: #3ddc97;
   --color-bull-raw: #00ffaa;
   --color-bear: #ff5d5d;
@@ -29,10 +33,125 @@
   --color-impact-medium: #f0a04b;
   --color-impact-low: #c9b458;
   --color-impact-holiday: #6b778c;
+  /* Under a window (dialogs, ⌘K), and the shadow of what floats. */
+  --color-scrim: rgb(0 0 0 / 0.6);
+  --color-shadow: rgb(0 0 0 / 0.5);
+  /* FD-THEME2: the chart's own surface (never the page's), table stripes and head, what the pointer is on,
+     pressed chips, the top bar and the market strip with their navigation states. */
+  --color-chart: #0d1118;
+  --color-row-alt: #12171f;
+  --color-row-head: #0a0d13;
+  --color-hover: #241f15;
+  --color-hover-soft: #17171a;
+  --color-selected: rgb(226 184 102 / 0.1);
+  --color-selected-hover: rgb(226 184 102 / 0.22);
+  --color-selected-line: #e2b866;
+  --color-on-selected: #edeff3;
+  --color-bar: #07090e;
+  --color-strip: #0a0d13;
+  --color-nav-hover: #151b27;
+  --color-nav-active: #1c2333;
+  --color-on-nav-active: #edeff3;
+  --color-nav-active-icon: #e2b866;
 
   --font-sans: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
   --radius-panel: 20px;
+}
+
+/* Tiles lift off the page on the light theme only (not a Tailwind utility: `.panel` reads it). */
+:root {
+  --panel-shadow: none;
+}
+
+/* FD-THEME2: the light theme "Navy" — a dark navy bar and market strip over a pale blue-grey page, white tiles
+   with visible edges, teal as the accent. Every text colour keeps at least 4.5:1 on every background of the
+   theme (tiles, page, fields, stripes, hover, tints). `.theme-page` brings these back inside the bar (the
+   account menu opens from it): every token `.theme-bar` changes must be listed here too. */
+:root[data-theme='light'],
+:root[data-theme='light'] .theme-page {
+  color-scheme: light;
+  --color-ink: #eef1f5;
+  --color-ink-2: #e6eaf0;
+  --color-panel: #ffffff;
+  --color-panel-2: #f5f7fa;
+  --color-panel-3: #e9edf2;
+  --color-line: #c3ccd8;
+  --color-line-soft: #dde3ea;
+  --color-line-strong: #a7b2c2;
+  --color-text: #101828;
+  --color-muted: #475467;
+  --color-faint: #566174;
+  --color-accent: #0b6f80;
+  --color-accent-dim: #3d8a97;
+  --color-accent-hover: #085766;
+  --color-on-accent: #ffffff;
+  --color-bull: #0f7444;
+  --color-bull-raw: #00a36c;
+  --color-bear: #c2332b;
+  --color-bear-raw: #e53935;
+  --color-neutral-bar: #d3dae4;
+  --color-warn: #9a500a;
+  --color-link: #1f5bc4;
+  --color-impact-high: #c2332b;
+  --color-impact-medium: #9a500a;
+  --color-impact-low: #786511;
+  --color-impact-holiday: #5f6879;
+  --color-scrim: rgb(16 24 40 / 0.45);
+  --color-shadow: rgb(16 24 40 / 0.16);
+  --color-chart: #ffffff;
+  --color-row-alt: #f5f7fa;
+  --color-row-head: #e9edf2;
+  --color-hover: #dcf1f4;
+  --color-hover-soft: #eef8fa;
+  --color-selected: #14233b;
+  --color-selected-hover: #233b60;
+  --color-selected-line: #14233b;
+  --color-on-selected: #ffffff;
+  --color-bar: #14233b;
+  --color-strip: #1b2d4a;
+  --color-nav-hover: rgb(255 255 255 / 0.14);
+  --color-nav-active: #ffffff;
+  --color-on-nav-active: #14233b;
+  --color-nav-active-icon: #0b6f80;
+  --panel-shadow: 0 1px 3px rgb(16 24 40 / 0.08), 0 1px 2px rgb(16 24 40 / 0.04);
+}
+
+/* The bar island (FD-THEME2 §1): on the light theme the top bar and the market strip stay dark navy, so what
+   sits on them reads light-on-dark. */
+:root[data-theme='light'] .theme-bar {
+  color-scheme: dark;
+  --color-panel: #1f3352;
+  --color-panel-2: #1f3352;
+  --color-panel-3: #2a4166;
+  --color-line: #34507a;
+  --color-line-soft: #2a4166;
+  --color-line-strong: #4f6b94;
+  --color-text: #e6edf6;
+  --color-muted: #c6d2e3;
+  --color-faint: #b3c1d4;
+  --color-accent: #6dd5df;
+  --color-accent-dim: #3f9aa6;
+  --color-accent-hover: #9be4ea;
+  --color-on-accent: #0b1a2e;
+  --color-bull: #6fe0ad;
+  --color-bear: #ffaaa2;
+  --color-warn: #ffc27f;
+  --color-link: #a9caff;
+  --color-impact-high: #ffaaa2;
+  --color-impact-medium: #ffc27f;
+  --color-impact-low: #e8d784;
+  --color-impact-holiday: #b3c1d4;
+  --color-hover: #304b74;
+  --color-hover-soft: #2a4166;
+}
+
+/* A pressed chip is filled navy on the light theme: what it holds (a count, a name) reads light on it. */
+:root[data-theme='light'] .chip[aria-pressed='true'],
+:root[data-theme='light'] .chip[aria-current='page'] {
+  --color-text: #ffffff;
+  --color-muted: #c6d2e3;
+  --color-faint: #a9b8cc;
 }
 
 @layer base {
@@ -53,12 +172,12 @@
     text-decoration: underline;
   }
   :focus-visible {
-    outline: 2px solid var(--color-brass);
+    outline: 2px solid var(--color-accent);
     outline-offset: 2px;
     border-radius: 6px;
   }
   ::selection {
-    background: color-mix(in oklab, var(--color-brass) 35%, transparent);
+    background: color-mix(in oklab, var(--color-accent) 35%, transparent);
   }
   h1,
   h2,
@@ -76,14 +195,14 @@
   }
   input[type='checkbox'],
   input[type='radio'] {
-    accent-color: var(--color-brass);
+    accent-color: var(--color-accent);
     width: 16px;
     height: 16px;
   }
   input:not([type='checkbox']):not([type='radio']):focus,
   select:focus,
   textarea:focus {
-    @apply border-brass-dim outline-none;
+    @apply border-accent-dim outline-none;
   }
   /* Tailwind 4's preflight gives buttons the default arrow: everything you can press shows the hand. */
   a[href],
@@ -146,6 +265,7 @@
   .panel {
     @apply bg-panel border border-line min-w-0;
     border-radius: var(--radius-panel);
+    box-shadow: var(--panel-shadow);
   }
   /* Tiles label themselves quietly; the content is the headline. */
   .panel-title {
@@ -157,45 +277,63 @@
     letter-spacing: -0.03em;
   }
   .link-accent {
-    @apply text-[12.5px] font-medium text-brass no-underline;
+    @apply text-[12.5px] font-medium text-accent no-underline;
   }
-  .link-accent:hover {
-    @apply text-[#ecc87e] no-underline;
+  /* FD-THEME2 §4: what the pointer is on is obvious — accent edge, accent text, a tinted background. Only
+     where there is a pointer (like Tailwind's `hover:`), so a tap on a phone leaves nothing lit. Every button
+     variant's hover has the same specificity as `.btn`'s, so the later one wins. */
+  @media (hover: hover) {
+    .link-accent:hover {
+      @apply text-accent-hover underline;
+    }
   }
   .btn {
     @apply inline-flex min-h-[38px] items-center justify-center gap-2 rounded-[10px] border border-line-strong bg-panel-2 px-3.5 text-[13px] font-semibold text-text no-underline transition-colors;
   }
-  .btn:hover {
-    @apply border-brass-dim bg-panel-3 no-underline;
+  @media (hover: hover) {
+    .btn:hover:not(:disabled) {
+      @apply border-accent bg-hover text-accent no-underline;
+    }
   }
   .btn:disabled {
     @apply opacity-50 cursor-not-allowed;
   }
   .btn-primary {
-    @apply border-brass bg-brass text-ink;
+    @apply border-accent bg-accent text-on-accent;
   }
-  .btn-primary:hover {
-    @apply border-[#ecc87e] bg-[#ecc87e];
+  @media (hover: hover) {
+    .btn-primary:hover:not(:disabled) {
+      @apply border-accent-hover bg-accent-hover text-on-accent;
+    }
   }
   .btn-danger {
     @apply border-bear/50 bg-transparent text-bear;
   }
-  .btn-danger:hover {
-    @apply border-bear bg-bear/10;
+  @media (hover: hover) {
+    .btn-danger:hover:not(:disabled) {
+      @apply border-bear bg-bear/10 text-bear;
+    }
   }
-  /* Segmented control: the selected option is filled with brass. */
+  /* Segmented control: the selected option is filled with the accent. */
   .seg {
     @apply inline-flex max-w-full flex-wrap rounded-[10px] border border-line bg-panel p-[3px];
   }
   .seg > button {
     @apply min-h-[30px] min-w-[36px] rounded-[7px] px-2.5 text-[12.5px] text-muted transition-colors;
   }
-  .seg > button:hover {
-    @apply text-text;
+  /* The selected option keeps its fill under the pointer. */
+  @media (hover: hover) {
+    .seg > button:not(:disabled, [aria-pressed='true'], [aria-selected='true']):hover {
+      @apply bg-hover text-accent;
+    }
   }
   .seg > button[aria-pressed='true'],
   .seg > button[aria-selected='true'] {
-    @apply bg-brass font-bold text-ink;
+    @apply bg-accent font-bold text-on-accent;
+  }
+  /* A timeframe the stock source does not have (FD-SENTIQ §4.3): visibly off, its title says why. */
+  .seg > button:disabled {
+    @apply text-faint/45;
   }
   .chip {
     @apply inline-flex items-center gap-1 rounded-full border border-line-strong px-3 py-0.5 text-[12.5px] text-muted no-underline transition-colors;
@@ -204,23 +342,36 @@
   a.chip {
     @apply min-h-[30px];
   }
-  button.chip:hover,
-  a.chip:hover {
-    @apply text-text no-underline;
+  @media (hover: hover) {
+    button.chip:hover:not(:disabled),
+    a.chip:hover {
+      @apply border-accent bg-hover-soft text-accent no-underline;
+    }
   }
+  /* Pressed: filled (navy on the light theme, a brass tint on the dark one); under the pointer the fill
+     lightens and gains an accent ring. */
   .chip[aria-pressed='true'],
   .chip[aria-current='page'] {
-    @apply border-brass bg-brass/10 font-semibold text-text;
+    @apply border-selected-line bg-selected font-semibold text-on-selected;
   }
-  /* Quiet toggle chip (category / sentiment filters): selected = raised, not brass. */
+  @media (hover: hover) {
+    button.chip[aria-pressed='true']:hover:not(:disabled),
+    a.chip[aria-current='page']:hover {
+      @apply border-accent bg-selected-hover text-on-selected;
+      box-shadow: inset 0 0 0 1px var(--color-accent);
+    }
+  }
+  /* Quiet toggle chip (category / sentiment filters): selected = raised, not the accent. */
   .chip-soft {
     @apply inline-flex min-h-[30px] items-center rounded-full border border-transparent px-3 text-[12.5px] text-muted transition-colors;
   }
-  .chip-soft:hover {
-    @apply text-text;
+  @media (hover: hover) {
+    .chip-soft:not(:disabled, [aria-pressed='true']):hover {
+      @apply bg-hover text-text;
+    }
   }
   .chip-soft[aria-pressed='true'] {
-    @apply border-line-strong bg-panel-2 font-semibold text-text;
+    @apply border-line-strong bg-panel-3 font-semibold text-text;
   }
   .tag {
     @apply inline-flex h-5 items-center rounded-[5px] border border-line-strong px-1.5 text-[11.5px] font-medium text-text;
@@ -231,18 +382,50 @@
   .table th {
     @apply text-left text-[12px] font-medium text-faint px-3 py-2.5 border-b border-line whitespace-nowrap;
   }
+  .table thead th {
+    @apply bg-row-head;
+  }
   .table td {
     @apply px-3 py-2.5 border-b border-line-soft align-top;
   }
   .table tr:last-child td {
     @apply border-b-0;
   }
+  /* FD-THEME2 §3: stripes and the row under the pointer. On the row, so a row's own background utility (a
+     dragged favourite) wins; a row's details (`.table-detail`, Economy) neither count nor light up. */
+  .table tbody tr:nth-child(even of :not(.table-detail)) {
+    @apply bg-row-alt;
+  }
+  .table tbody tr:not(.table-detail) {
+    @apply transition-colors;
+  }
+  @media (hover: hover) {
+    .table tbody tr:not(.table-detail):hover {
+      @apply bg-hover;
+    }
+  }
+  /* Lists of rows (news, alerts, account requests): the same stripes and hover. */
+  .rows > li {
+    @apply transition-colors;
+  }
+  .rows > li:nth-child(even) {
+    @apply bg-row-alt;
+  }
+  @media (hover: hover) {
+    .rows > li:hover {
+      @apply bg-hover;
+    }
+  }
   .panel-flush .table th:first-child,
-  .panel-flush .table td:first-child {
+  .panel-flush .table td:first-child,
+  .table-bleed .table th:first-child,
+  .table-bleed .table td:first-child {
     @apply pl-5;
   }
   .panel-flush .table th:last-child,
-  .panel-flush .table td:last-child {
+  .panel-flush .table td:last-child,
+  .table-bleed .table th:last-child,
+  .table-bleed .table td:last-child {
     @apply pr-5;
   }
   .panel-flush > :not(.table):not(table):not(.table-wrap) {
@@ -255,14 +438,20 @@
   .table-wrap > .table {
     min-width: 640px;
   }
-  /* Tables inside a padded tile line up with its title. */
-  .panel > .px-5 .table th:first-child,
-  .panel > .px-5 .table td:first-child {
-    @apply pl-0;
+  /* A table inside a padded tile reaches the tile's edges (its stripes run edge to edge) while its first
+     column still lines up with the title. */
+  .table-bleed {
+    margin-inline: -1.25rem;
   }
-  .panel > .px-5 .table th:last-child,
-  .panel > .px-5 .table td:last-child {
-    @apply pr-0;
+  /* What floats: menus and lists (pop), windows (modal); the shade follows the theme (FD-THEME). */
+  .shadow-pop {
+    box-shadow: 0 12px 32px var(--color-shadow);
+  }
+  .shadow-modal {
+    box-shadow: 0 24px 64px var(--color-shadow);
+  }
+  .shadow-drag {
+    box-shadow: 0 8px 24px var(--color-shadow);
   }
   /* Numbers: prices, times, scores, countdowns. */
   .num {

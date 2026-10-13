@@ -1,26 +1,27 @@
 // Exchange accounts (read-only keys, encrypted at rest) and portfolio snapshots (FD §6, TD §10).
 // This module only READS from exchanges: it never places, edits or cancels orders and never moves funds.
 import ccxt, { type Exchange } from 'ccxt';
-import { z } from 'zod';
-import { ACCOUNT_EXCHANGES } from '../../shared/settings.ts';
+import { accountSchemaFor, providerById, type ProviderDef } from '../../shared/providers.ts';
 import type { Db } from '../db/database.ts';
 import type { Logger } from '../log.ts';
+import { HttpError } from '../net/http.ts';
 import { secretHint, type SecretBox } from '../secrets/crypto.ts';
-import { formatIssues, ValidationError } from '../settings.ts';
+import { ValidationError } from '../settings.ts';
 import { costBasis, STABLES, type FillLike } from './cost-basis.ts';
 import { isRateLimitError, withRetry } from './retry.ts';
+import { BROKER_IDS, BrokerError, brokerAdapter, type BrokerAdapter, type BrokerId, type BrokerOptions } from './brokers.ts';
 
-export const accountInputSchema = z.object({
-  exchange: z.enum(ACCOUNT_EXCHANGES),
-  label: z.string().trim().min(1).max(60),
-  apiKey: z.string().trim().min(8).max(200),
-  secret: z.string().trim().min(8).max(300),
-  password: z.string().max(200).optional().default(''),
-});
+/** Exchanges read through ccxt (the rest are the stock brokers in brokers.ts). */
+export const CCXT_PROVIDERS = ['kucoin', 'binance', 'bybit', 'okx', 'kraken', 'coinbase', 'bitget'] as const;
+const isBroker = (id: string): id is BrokerId => (BROKER_IDS as readonly string[]).includes(id);
 
 export interface AccountView {
   id: number;
   exchange: string;
+  /** Crypto exchange or stock broker. */
+  kind: 'crypto' | 'stocks';
+  /** live / demo / paper (FD-SENTIQ §2). */
+  env: string;
   label: string;
   keyHint: string;
   createdAt: number;
@@ -34,6 +35,9 @@ export type ErrorCode = 'AUTH' | 'PERMISSION' | 'RATE_LIMIT' | 'NETWORK' | 'MAIN
 
 export function mapExchangeError(err: unknown): { code: ErrorCode; message: string } {
   const message = err instanceof Error ? err.message.slice(0, 300) : String(err);
+  if (err instanceof BrokerError) return { code: err.code, message };
+  // The brokers' own HTTP layer: no answer, or no connection.
+  if (err instanceof HttpError) return { code: 'NETWORK', message };
   if (err instanceof ccxt.AuthenticationError) return { code: 'AUTH', message };
   if (err instanceof ccxt.PermissionDenied || err instanceof ccxt.AccountSuspended) return { code: 'PERMISSION', message };
   if (isRateLimitError(err)) return { code: 'RATE_LIMIT', message };
@@ -51,9 +55,19 @@ export interface BalanceRow {
   price: number | null;
   value: number | null;
   avgPrice: number | null;
-  avgSource: 'fills' | 'manual' | null;
+  avgSource: 'fills' | 'manual' | 'broker' | null;
   pnl: number | null;
   pnlPct: number | null;
+  /** Currency of `value` / `pnl` (crypto: the quote, e.g. USDT; brokers: the account's). */
+  currency?: string;
+  /** Currency of `price` / `avgPrice` when it differs (a USD share in a EUR account). */
+  priceCurrency?: string;
+  /** Company / instrument name (brokers). */
+  name?: string;
+  /** E.g. "copiat de la <user>" (eToro copy trading). */
+  note?: string;
+  /** A coin held at a broker (eToro, IBKR, Alpaca): its chart is the crypto one, not a share's. */
+  crypto?: boolean;
 }
 
 export interface PositionRow {
@@ -111,6 +125,13 @@ export interface FillRow {
 export interface Portfolio {
   accountId: number;
   exchange: string;
+  kind: 'crypto' | 'stocks';
+  /** Currency of the values and totals (USDT for crypto, the account's for brokers). */
+  currency: string;
+  /** Cash available, when the platform reports it. */
+  cash: number | null;
+  /** The moment the data describes when it is not live (IBKR Flex: the previous close). */
+  asOf: number | null;
   mode: 'unified' | 'classic' | 'unknown';
   balances: BalanceRow[];
   positions: PositionRow[];
@@ -140,6 +161,8 @@ export interface ExchangeClients {
 const FILLS_WINDOW_MS = 7 * 86_400_000 - 60_000;
 const PORTFOLIO_TTL_MS = 20_000;
 const CLIENT_TTL_MS = 10 * 60_000;
+/** Connected accounts per user (each one is read over the network). */
+export const MAX_ACCOUNTS_PER_USER = 20;
 // The full ticker list is the heaviest public call (KuCoin weight 15, ~1 000 pairs): shared by all accounts for 15 s.
 const TICKERS_TTL_MS = 15_000;
 // When the list is refused, older prices are still better than none, up to this age (marked stale in the UI).
@@ -163,6 +186,9 @@ interface AccountRow {
   api_key: string;
   secret: string;
   password: string | null;
+  /** Encrypted JSON of the provider's fields (accounts added since FD-SENTIQ); NULL for the older KuCoin rows. */
+  credentials: string | null;
+  env: string;
   key_hint: string;
   created_at: number;
   last_ok_at: number | null;
@@ -170,24 +196,42 @@ interface AccountRow {
   permissions: string | null;
 }
 
-export type ClientFactory = (exchange: string, creds: { apiKey: string; secret: string; password: string }) => ExchangeClients;
+/** The provider's fields as entered (crypto: apiKey, secret and, where needed, password). */
+export type Credentials = Record<string, string>;
+export type ClientFactory = (exchange: string, creds: Credentials) => ExchangeClients;
+export type BrokerFactory = (id: BrokerId, creds: Credentials, env: string) => BrokerAdapter;
 
 export const defaultClientFactory =
   (proxy?: string): ClientFactory =>
   (exchange, creds) => {
-    const opts = {
+    const base = {
       apiKey: creds.apiKey,
       secret: creds.secret,
-      password: creds.password,
+      password: creds.password ?? '',
       enableRateLimit: true,
       timeout: 20_000,
-      // Market loading would also download the full ticker list (KuCoin's heaviest public call) just for fee rates.
-      options: { adjustForTimeDifference: true, fetchMarkets: { fetchTickersFees: false } },
       ...(proxy ? { httpsProxy: proxy } : {}),
     };
-    if (exchange === 'kucoin') return { spot: new ccxt.kucoin(opts), futures: new ccxt.kucoinfutures(opts) };
-    throw new ValidationError(`Exchange nesuportat: ${exchange}`);
+    if (exchange === 'kucoin') {
+      // Market loading would also download the full ticker list (KuCoin's heaviest public call) just for fee rates.
+      const opts = { ...base, options: { adjustForTimeDifference: true, fetchMarkets: { fetchTickersFees: false } } };
+      return { spot: new ccxt.kucoin(opts), futures: new ccxt.kucoinfutures(opts) };
+    }
+    if (!(CCXT_PROVIDERS as readonly string[]).includes(exchange)) throw new ValidationError(`Exchange nesuportat: ${exchange}`);
+    const Ctor = (ccxt as unknown as Record<string, new (cfg: object) => Exchange>)[exchange];
+    if (!Ctor) throw new ValidationError(`Exchange nesuportat: ${exchange}`);
+    // Binance refuses (with a warning error) to list open orders without a symbol unless told it is intended.
+    const options = { adjustForTimeDifference: true, ...(exchange === 'binance' ? { warnOnFetchOpenOrdersWithoutSymbol: false } : {}) };
+    return { spot: new Ctor({ ...base, options }), futures: null };
   };
+
+export const defaultBrokerFactory =
+  (opts: BrokerOptions = {}): BrokerFactory =>
+  (id, creds, env) =>
+    brokerAdapter(id, creds, env, opts);
+
+/** Read-only permission names: KuCoin's „General”, OKX's `read_only`, Bybit / Bitget / Binance read access. */
+const READ_PERMISSIONS = new Set(['general', 'read', 'read_only', 'readonly', 'fix-read']);
 
 /** Any permission beyond read access deserves a warning. */
 export function hasRiskyPermissions(permissions: string | null): boolean {
@@ -196,11 +240,80 @@ export function hasRiskyPermissions(permissions: string | null): boolean {
     .split(/[,\s]+/)
     .map((p) => p.trim().toLowerCase())
     .filter(Boolean)
-    .some((p) => p !== 'general');
+    .some((p) => !READ_PERMISSIONS.has(p));
+}
+
+type Api = (params?: object) => Promise<unknown>;
+const field = (o: unknown, k: string): unknown => (typeof o === 'object' && o !== null ? (o as Record<string, unknown>)[k] : undefined);
+
+/**
+ * What an exchange key may do, where the exchange says it (FD-SENTIQ §2): a comma list of permission names, read
+ * ones included; null when it cannot be read. Only names we recognise are kept, so an unknown code never warns.
+ */
+export async function keyPermissions(exchange: string, client: Exchange): Promise<string | null> {
+  const call = (name: string): Api | null => {
+    const fn = (client as unknown as Record<string, unknown>)[name];
+    return typeof fn === 'function' ? (fn as Api).bind(client) : null;
+  };
+  try {
+    if (exchange === 'kucoin') {
+      const fn = call('privateGetUserApiKey');
+      const perm = fn ? field(field(await fn(), 'data'), 'permission') : null;
+      return typeof perm === 'string' ? perm : null;
+    }
+    if (exchange === 'binance') {
+      const fn = call('sapiGetAccountApiRestrictions');
+      const r = fn ? await fn() : null;
+      if (!r || typeof r !== 'object') return null;
+      const flags: [string, string][] = [
+        ['enableReading', 'read'],
+        ['enableSpotAndMarginTrading', 'spot-trade'],
+        ['enableMargin', 'margin'],
+        ['enableFutures', 'futures'],
+        ['enableVanillaOptions', 'options'],
+        ['enablePortfolioMarginTrading', 'portfolio-margin'],
+        ['enableWithdrawals', 'withdraw'],
+        ['enableInternalTransfer', 'internal-transfer'],
+        ['permitsUniversalTransfer', 'universal-transfer'],
+        ['enableFixApiTrade', 'fix-trade'],
+        ['enableFixReadOnly', 'fix-read'],
+      ];
+      return flags.filter(([k]) => field(r, k) === true).map(([, v]) => v).join(',') || null;
+    }
+    if (exchange === 'bybit') {
+      const fn = call('privateGetV5UserQueryApi');
+      const res = fn ? field(await fn(), 'result') : null;
+      if (!res) return null;
+      if (Number(field(res, 'readOnly')) === 1) return 'read';
+      const perms = field(res, 'permissions');
+      const out: string[] = [];
+      if (typeof perms === 'object' && perms !== null) {
+        for (const [cat, list] of Object.entries(perms as Record<string, unknown>)) if (Array.isArray(list)) for (const p of list) out.push(`${cat}:${String(p)}`);
+      }
+      return out.join(',') || 'read-write';
+    }
+    if (exchange === 'okx') {
+      const fn = call('privateGetAccountConfig');
+      const data = fn ? field(await fn(), 'data') : null;
+      const perm = Array.isArray(data) ? field(data[0], 'perm') : null;
+      return typeof perm === 'string' && perm ? perm : null;
+    }
+    if (exchange === 'bitget') {
+      const fn = call('privateSpotGetV2SpotAccountInfo');
+      const list = fn ? field(field(await fn(), 'data'), 'authorities') : null;
+      if (!Array.isArray(list)) return null;
+      const known = list.map(String).filter((a) => /^(readonly|read|trade|withdraw|transfer)$/i.test(a));
+      return known.join(',') || null;
+    }
+  } catch {
+    // Not readable with this key (or the endpoint changed): no warning rather than a wrong one.
+  }
+  return null;
 }
 
 export class AccountsService {
   private readonly clients = new Map<number, { clients: ExchangeClients; at: number }>();
+  private readonly brokers = new Map<number, { adapter: BrokerAdapter; at: number }>();
   private readonly portfolios = new Map<number, { data: Portfolio; at: number }>();
   private readonly inflight = new Map<number, Promise<Portfolio>>();
   /** Last successful data per section, shown (marked stale) when a later refresh of that section fails. */
@@ -214,13 +327,15 @@ export class AccountsService {
   private readonly log: Logger;
   private readonly factory: ClientFactory;
   private readonly retryDelaysMs: readonly number[] | undefined;
+  private readonly brokerFactory: BrokerFactory;
 
-  constructor(db: Db, box: SecretBox, log: Logger, factory: ClientFactory, opts: { retryDelaysMs?: readonly number[] } = {}) {
+  constructor(db: Db, box: SecretBox, log: Logger, factory: ClientFactory, opts: { retryDelaysMs?: readonly number[]; brokerFactory?: BrokerFactory } = {}) {
     this.db = db;
     this.box = box;
     this.log = log;
     this.factory = factory;
     this.retryDelaysMs = opts.retryDelaysMs;
+    this.brokerFactory = opts.brokerFactory ?? defaultBrokerFactory();
   }
 
   /** One exchange read, retried briefly when it is refused for a moment (TD-RATELIMIT). */
@@ -249,6 +364,8 @@ export class AccountsService {
     return {
       id: r.id,
       exchange: r.exchange,
+      kind: providerById(r.exchange)?.kind ?? 'crypto',
+      env: r.env ?? 'live',
       label: r.label,
       keyHint: r.key_hint,
       createdAt: r.created_at,
@@ -259,24 +376,83 @@ export class AccountsService {
     };
   }
 
-  list(): AccountView[] {
-    return this.db.all<AccountRow>('SELECT * FROM exchange_accounts ORDER BY id').map((r) => this.toView(r));
+  /** A user's own accounts (FD-USERS §2: nobody sees anybody else's). */
+  list(userId: number): AccountView[] {
+    return this.db.all<AccountRow>('SELECT * FROM exchange_accounts WHERE user_id = ? ORDER BY id', [userId]).map((r) => this.toView(r));
   }
 
-  create(input: unknown): AccountView {
-    const r = accountInputSchema.safeParse(input);
-    if (!r.success) throw new ValidationError(`Date de cont invalide: ${formatIssues(r.error.issues)}`, r.error.issues);
+  /** Is account `id` this user's? Every route that names an account asks first (anybody else's is "not found"). */
+  owns(userId: number, id: number): boolean {
+    return this.db.get('SELECT 1 AS x FROM exchange_accounts WHERE id = ? AND user_id = ?', [id, userId]) !== undefined;
+  }
+
+  /**
+   * Saves an account: `{ exchange, label, env?, credentials: { …provider fields } }` (FD-SENTIQ §2). The older KuCoin
+   * shape `{ exchange, label, apiKey, secret, password }` is still accepted.
+   */
+  create(userId: number, input: unknown): AccountView {
+    const raw = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
+    const provider: ProviderDef | undefined = typeof raw.exchange === 'string' ? providerById(raw.exchange) : undefined;
+    if (!provider) throw new ValidationError(`Platformă necunoscută: ${String(raw.exchange ?? '')}`);
+    const body =
+      raw.credentials === undefined && (raw.apiKey !== undefined || raw.secret !== undefined)
+        ? { ...raw, credentials: { apiKey: raw.apiKey, secret: raw.secret, ...(raw.password !== undefined ? { password: raw.password } : {}) } }
+        : raw;
+    const r = accountSchemaFor(provider).safeParse(body);
+    if (!r.success) {
+      if (provider.id === 'kucoin' && r.error.issues.some((i) => i.path.join('.') === 'credentials.password')) throw new ValidationError('KuCoin cere și API Passphrase', r.error.issues);
+      throw new ValidationError(`Date de cont invalide: ${r.error.issues.map((i) => i.message).join('; ')}`, r.error.issues);
+    }
     const a = r.data;
-    if (a.exchange === 'kucoin' && !a.password) throw new ValidationError('KuCoin cere și API Passphrase');
+    if ((this.db.get<{ n: number }>('SELECT count(*) AS n FROM exchange_accounts WHERE user_id = ?', [userId])?.n ?? 0) >= MAX_ACCOUNTS_PER_USER) {
+      throw new ValidationError(`Poți conecta cel mult ${MAX_ACCOUNTS_PER_USER} conturi.`);
+    }
+    const first = provider.fields[0]?.key ?? '';
     const id = this.db.run(
-      'INSERT INTO exchange_accounts(exchange, label, api_key, secret, password, key_hint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [a.exchange, a.label, this.box.encrypt(a.apiKey), this.box.encrypt(a.secret), a.password ? this.box.encrypt(a.password) : null, secretHint(a.apiKey), Date.now()],
+      'INSERT INTO exchange_accounts(user_id, exchange, label, api_key, secret, password, credentials, env, key_hint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [userId, a.exchange, a.label, '', '', null, this.box.encrypt(JSON.stringify(a.credentials)), a.env, secretHint(a.credentials[first] ?? ''), Date.now()],
     ).lastInsertRowid;
     return this.toView(this.row(id) as AccountRow);
   }
 
+  /**
+   * The wizard's "Conectează" (FD-SENTIQ §2): saves the account, reads it once and keeps it only if that worked.
+   * On failure the account is removed and the reason is thrown, so the form can show it and keep what was typed.
+   */
+  async connect(userId: number, input: unknown): Promise<AccountView> {
+    const created = this.create(userId, input);
+    let view: AccountView;
+    try {
+      view = await this.test(created.id);
+    } catch (err) {
+      // E.g. a client that cannot even be built from these keys: nothing half-saved stays behind.
+      this.delete(created.id);
+      throw err;
+    }
+    if (view.lastError) {
+      this.delete(created.id);
+      throw new ValidationError(view.lastError.replace(/^[A-Z_]+:\s*/, ''));
+    }
+    return view;
+  }
+
+  /** The decrypted fields of an account (the older KuCoin rows keep them in their own columns). */
+  private credsOf(row: AccountRow): Credentials {
+    if (row.credentials) return JSON.parse(this.box.decrypt(row.credentials)) as Credentials;
+    return { apiKey: this.box.decrypt(row.api_key), secret: this.box.decrypt(row.secret), password: row.password ? this.box.decrypt(row.password) : '' };
+  }
+
+  private brokerFor(id: number, row: AccountRow & { exchange: BrokerId }): BrokerAdapter {
+    const cached = this.brokers.get(id);
+    if (cached && Date.now() - cached.at < CLIENT_TTL_MS) return cached.adapter;
+    const adapter = this.brokerFactory(row.exchange, this.credsOf(row), row.env ?? 'live');
+    this.brokers.set(id, { adapter, at: Date.now() });
+    return adapter;
+  }
+
   delete(id: number): boolean {
     this.clients.delete(id);
+    this.brokers.delete(id);
     this.portfolios.delete(id);
     this.lastGood.delete(id);
     return this.db.run('DELETE FROM exchange_accounts WHERE id = ?', [id]).changes > 0;
@@ -291,33 +467,31 @@ export class AccountsService {
     if (cached && Date.now() - cached.at < CLIENT_TTL_MS) return cached.clients;
     const row = this.row(id);
     if (!row) throw new ValidationError(`Contul ${id} nu există`);
-    const clients = this.factory(row.exchange, {
-      apiKey: this.box.decrypt(row.api_key),
-      secret: this.box.decrypt(row.secret),
-      password: row.password ? this.box.decrypt(row.password) : '',
-    });
+    const clients = this.factory(row.exchange, this.credsOf(row));
     this.clients.set(id, { clients, at: Date.now() });
     return clients;
   }
 
-  /** Verifies the key with a balance call and reads its permissions (KuCoin). */
+  /** Verifies the key with a read (balance, account summary or report) and, on KuCoin, reads its permissions. */
   async test(id: number): Promise<AccountView> {
     const row = this.row(id);
     if (!row) throw new ValidationError(`Contul ${id} nu există`);
+    if (isBroker(row.exchange)) {
+      try {
+        await this.brokerFor(id, row as AccountRow & { exchange: BrokerId }).test();
+        this.db.run('UPDATE exchange_accounts SET last_ok_at = ?, last_error = NULL WHERE id = ?', [Date.now(), id]);
+      } catch (err) {
+        const e = mapExchangeError(err);
+        this.db.run('UPDATE exchange_accounts SET last_error = ? WHERE id = ?', [`${e.code}: ${e.message}`, id]);
+        this.brokers.delete(id);
+      }
+      return this.toView(this.row(id) as AccountRow);
+    }
     const { spot } = this.clientsFor(id);
     try {
       await this.ensureMarkets(spot);
       await this.retryOn(spot, () => spot.fetchBalance());
-      let permissions: string | null = null;
-      const getKeyInfo = (spot as unknown as { privateGetUserApiKey?: () => Promise<{ data?: { permission?: string } }> }).privateGetUserApiKey;
-      if (typeof getKeyInfo === 'function') {
-        try {
-          const info = await getKeyInfo.call(spot);
-          permissions = typeof info?.data?.permission === 'string' ? info.data.permission : null;
-        } catch {
-          permissions = null;
-        }
-      }
+      const permissions = await keyPermissions(row.exchange, spot);
       this.db.run('UPDATE exchange_accounts SET last_ok_at = ?, last_error = NULL, permissions = ? WHERE id = ?', [Date.now(), permissions, id]);
     } catch (err) {
       const e = mapExchangeError(err);
@@ -331,7 +505,7 @@ export class AccountsService {
   setCostBasis(accountId: number, asset: string, avgPrice: number | null): void {
     if (!this.row(accountId)) throw new ValidationError(`Contul ${accountId} nu există`);
     const a = asset.trim().toUpperCase();
-    if (!/^[A-Z0-9]{1,20}$/.test(a)) throw new ValidationError('Activ invalid');
+    if (!/^[A-Z0-9][A-Z0-9.-]{0,19}$/.test(a)) throw new ValidationError('Activ invalid');
     if (avgPrice === null) {
       this.db.run('DELETE FROM cost_basis WHERE account_id = ? AND asset = ?', [accountId, a]);
     } else {
@@ -357,6 +531,8 @@ export class AccountsService {
   private async loadPortfolio(id: number): Promise<Portfolio> {
     const row = this.row(id);
     if (!row) throw new ValidationError(`Contul ${id} nu există`);
+    if (isBroker(row.exchange)) return this.loadBroker(id, row as AccountRow & { exchange: BrokerId });
+    const isKucoin = row.exchange === 'kucoin';
     const { spot, futures } = this.clientsFor(id);
     const errors: Portfolio['errors'] = {};
     const since = Date.now() - FILLS_WINDOW_MS;
@@ -379,13 +555,16 @@ export class AccountsService {
       (err: unknown) => ({ snap: null, err }),
     );
 
+    // KuCoin only: unified (UTA) vs classic accounts, and "high-frequency" classic accounts.
     let mode: Portfolio['mode'] = 'unknown';
-    const isUta = await call('mode', async () => {
-      const fn = (spot as unknown as { isUTAEnabled?: () => Promise<boolean> }).isUTAEnabled;
-      return typeof fn === 'function' ? await r(() => fn.call(spot)) : false;
-    });
+    const isUta = isKucoin
+      ? await call('mode', async () => {
+          const fn = (spot as unknown as { isUTAEnabled?: () => Promise<boolean> }).isUTAEnabled;
+          return typeof fn === 'function' ? await r(() => fn.call(spot)) : false;
+        })
+      : null;
     if (isUta !== null) mode = isUta ? 'unified' : 'classic';
-    const classic = mode !== 'unified';
+    const classic = isKucoin && mode !== 'unified';
     // Classic KuCoin accounts migrated to "high-frequency" trading need a symbol for orders and fills.
     let hf = false;
     if (classic) {
@@ -403,14 +582,24 @@ export class AccountsService {
     type FillIn = { t: Awaited<ReturnType<Exchange['fetchMyTrades']>>[number]; market: 'spot' | 'futures' };
     const [balancesRaw, positionsRaw, triggerOrders, futuresOrders, futuresFills] = await Promise.all([
       call('balances', async () => {
+        if (!isKucoin) return [{ account: 'spot', bal: await rs(() => spot.fetchBalance()) }];
         if (!classic) return [{ account: 'unified', bal: await rs(() => spot.fetchBalance()) }];
         const out: { account: string; bal: Awaited<ReturnType<Exchange['fetchBalance']>> }[] = [];
         out.push({ account: 'trade', bal: await rs(() => spot.fetchBalance({ type: 'trade' })) });
         out.push({ account: 'main', bal: await rs(() => spot.fetchBalance({ type: 'main' })) });
         return out;
       }),
-      call('positions', async () => [...(await rs(() => spot.fetchPositions()))]),
-      call('orders', async () => (await rs(() => spot.fetchOpenOrders(undefined, undefined, 200, { trigger: true, hf: false }))).map((o): OrderIn => ({ o, market: 'spot' }))),
+      call('positions', async () => {
+        if (spot.has?.fetchPositions === false) return [];
+        try {
+          return [...(await rs(() => spot.fetchPositions()))];
+        } catch (err) {
+          // Spot-only accounts on exchanges that also offer derivatives: no positions, not an error.
+          if (err instanceof ccxt.NotSupported) return [];
+          throw err;
+        }
+      }),
+      call('orders', async () => (isKucoin ? (await rs(() => spot.fetchOpenOrders(undefined, undefined, 200, { trigger: true, hf: false }))).map((o): OrderIn => ({ o, market: 'spot' })) : [])),
       call('orders', async () =>
         classic && futures
           ? [...(await rf(() => futures.fetchOpenOrders())), ...(await rf(() => futures.fetchOpenOrders(undefined, undefined, undefined, { trigger: true })))].map(
@@ -427,31 +616,53 @@ export class AccountsService {
       for (const [asset, t] of Object.entries((bal.total ?? {}) as unknown as Record<string, number | undefined>)) if ((num(t) ?? 0) > 0 && !STABLES.has(asset)) held.add(asset);
     }
 
+    // The pairs of the held coins and the favourites, for the exchanges (and KuCoin HF accounts) that need a symbol.
+    const wanted = new Set(held);
+    // The favourites of the account's owner (FD-USERS §2).
+    for (const w of this.db.all<{ coin: string; kind: string }>('SELECT w.coin, w.kind FROM watchlist w JOIN exchange_accounts a ON a.user_id = w.user_id WHERE a.id = ?', [id])) {
+      if (w.kind !== 'stock') wanted.add(w.coin);
+    }
+    const symbols = [...wanted].map((a) => `${a}/USDT`).filter((sym) => Boolean(spot.markets?.[sym])).slice(0, 25);
+    const perSymbolOrders = async () => {
+      const out: OrderIn[] = [];
+      for (const sym of symbols) for (const o of await rs(() => spot.fetchOpenOrders(sym))) out.push({ o, market: 'spot' });
+      return out;
+    };
+    const perSymbolFills = async () => {
+      const out: FillIn[] = [];
+      for (const sym of symbols) for (const t of await rs(() => spot.fetchMyTrades(sym, since, 100))) out.push({ t, market: 'spot' });
+      return out;
+    };
+    const needsSymbol = (err: unknown) => err instanceof ccxt.ArgumentsRequired;
     let spotOrders: OrderIn[] | null = null;
     let spotFills: FillIn[] | null = null;
     if (hf) {
-      const wanted = new Set(held);
-      for (const w of this.db.all<{ coin: string }>('SELECT coin FROM watchlist')) wanted.add(w.coin);
-      const symbols = [...wanted].map((a) => `${a}/USDT`).filter((sym) => Boolean(spot.markets?.[sym])).slice(0, 25);
+      spotOrders = await call('orders', perSymbolOrders);
+      spotFills = await call('fills', perSymbolFills);
+    } else {
       spotOrders = await call('orders', async () => {
-        const out: OrderIn[] = [];
-        for (const sym of symbols) for (const o of await rs(() => spot.fetchOpenOrders(sym))) out.push({ o, market: 'spot' });
-        return out;
+        try {
+          return (await rs(() => spot.fetchOpenOrders(undefined, undefined, 200))).map((o): OrderIn => ({ o, market: 'spot' }));
+        } catch (err) {
+          if (needsSymbol(err)) return perSymbolOrders();
+          throw err;
+        }
       });
       spotFills = await call('fills', async () => {
-        const out: FillIn[] = [];
-        for (const sym of symbols) for (const t of await rs(() => spot.fetchMyTrades(sym, since, 100))) out.push({ t, market: 'spot' });
-        return out;
+        try {
+          return (await rs(() => spot.fetchMyTrades(undefined, since, 200))).map((t): FillIn => ({ t, market: 'spot' }));
+        } catch (err) {
+          if (needsSymbol(err)) return perSymbolFills();
+          throw err;
+        }
       });
-    } else {
-      spotOrders = await call('orders', async () => (await rs(() => spot.fetchOpenOrders(undefined, undefined, 200))).map((o): OrderIn => ({ o, market: 'spot' })));
-      spotFills = await call('fills', async () => (await rs(() => spot.fetchMyTrades(undefined, since, 200))).map((t): FillIn => ({ t, market: 'spot' })));
     }
     const ordersRaw: OrderIn[] = [...(spotOrders ?? []), ...(triggerOrders ?? []), ...(futuresOrders ?? [])];
     const fillsRaw: FillIn[] = [...(spotFills ?? []), ...(futuresFills ?? [])];
 
     // Prices: the shared ticker list; when it is refused, held assets one by one, then the last good list.
-    const QUOTES = ['USDT', 'USDC'];
+    // Kraken and Coinbase list many coins only against USD (FD-SENTIQ): ≈ USDT for the values.
+    const QUOTES = ['USDT', 'USDC', 'USD'];
     const { snap, err: pricesErr } = await snapshotP;
     let lookup: (symbol: string) => number | undefined;
     let pricesStaleAt: number | null = null;
@@ -614,9 +825,14 @@ export class AccountsService {
     const finalFills = pick('fills', fills.slice(0, 200));
     this.lastGood.set(id, good);
 
+    const stableCash = finalBalances.filter((b) => STABLES.has(b.asset)).reduce((a, b) => a + b.free, 0);
     const portfolio: Portfolio = {
       accountId: id,
       exchange: row.exchange,
+      kind: 'crypto',
+      currency: 'USDT',
+      cash: finalBalances.some((b) => STABLES.has(b.asset)) ? stableCash : null,
+      asOf: null,
       mode,
       balances: finalBalances,
       positions: finalPositions,
@@ -640,6 +856,83 @@ export class AccountsService {
     if (hardFailure) this.clients.delete(id);
     else this.portfolios.set(id, { data: portfolio, at: Date.now() });
     if (Object.keys(errors).length) this.log.warn(`portfolio ${id}: ${Object.entries(errors).map(([k, v]) => `${k}=${v?.code}`).join(', ')}`);
+    return portfolio;
+  }
+
+  /** A stock broker's account (brokers.ts), with the same last-good, cost-basis and status rules as the exchanges. */
+  private async loadBroker(id: number, row: AccountRow & { exchange: BrokerId }): Promise<Portfolio> {
+    const adapter = this.brokerFor(id, row);
+    let snap: Awaited<ReturnType<BrokerAdapter['load']>>;
+    try {
+      snap = await adapter.load();
+    } catch (err) {
+      // The whole account could not be read: every section shows its last good data (or nothing) and the reason.
+      const e = mapExchangeError(err);
+      snap = { currency: this.portfolios.get(id)?.data.currency ?? 'USD', balances: [], positions: [], orders: [], fills: [], cash: null, errors: { balances: e, positions: e, orders: e, fills: e } };
+    }
+    const errors: Portfolio['errors'] = { ...snap.errors };
+    const manual = new Map(this.db.all<{ asset: string; avg_price: number }>('SELECT asset, avg_price FROM cost_basis WHERE account_id = ?', [id]).map((r) => [r.asset, r.avg_price]));
+    const balances = snap.balances
+      .map((b): BalanceRow => {
+        const m = manual.get(b.asset);
+        if (m === undefined) return b;
+        // A price set by hand wins; the PnL can be recomputed only when price and value share a currency.
+        const same = !b.priceCurrency || b.priceCurrency === b.currency;
+        const pnl = b.price !== null && same ? (b.price - m) * b.total : null;
+        return { ...b, avgPrice: m, avgSource: 'manual', pnl, pnlPct: b.price !== null ? ((b.price - m) / m) * 100 : null };
+      })
+      .sort((a, b) => (b.value ?? -1) - (a.value ?? -1));
+    const fetchedAt = Date.now();
+    const good = this.lastGood.get(id) ?? {};
+    const stale: Portfolio['stale'] = {};
+    const pick = <T>(section: StaleSection, fresh: T[]): T[] => {
+      const prev = good[section] as { data: T[]; at: number } | undefined;
+      if (errors[section]) {
+        if (prev) {
+          stale[section] = prev.at;
+          return prev.data;
+        }
+        return fresh;
+      }
+      (good as Record<StaleSection, { data: T[]; at: number }>)[section] = { data: fresh, at: fetchedAt };
+      return fresh;
+    };
+    const finalBalances = pick('balances', balances);
+    const finalPositions = pick('positions', snap.positions);
+    const finalOrders = pick('orders', snap.orders);
+    const finalFills = pick('fills', snap.fills.sort((a, b) => b.timestamp - a.timestamp).slice(0, 200));
+    this.lastGood.set(id, good);
+    const portfolio: Portfolio = {
+      accountId: id,
+      exchange: row.exchange,
+      kind: 'stocks',
+      currency: snap.currency,
+      cash: snap.cash,
+      asOf: snap.asOf ?? null,
+      mode: 'unknown',
+      balances: finalBalances,
+      positions: finalPositions,
+      orders: finalOrders,
+      fills: finalFills,
+      totals: {
+        spotValue: finalBalances.reduce((a, b) => a + (b.value ?? 0), 0),
+        unrealizedPnl: finalPositions.reduce((a, b) => a + (b.unrealizedPnl ?? 0), 0),
+      },
+      errors,
+      stale,
+      fetchedAt,
+    };
+    const first = errors.balances;
+    const hardFailure = first?.code === 'AUTH' || first?.code === 'PERMISSION';
+    this.db.run('UPDATE exchange_accounts SET last_ok_at = CASE WHEN ? THEN last_ok_at ELSE ? END, last_error = ? WHERE id = ?', [
+      hardFailure ? 1 : 0,
+      Date.now(),
+      hardFailure ? `${first?.code}: ${first?.message}` : null,
+      id,
+    ]);
+    if (hardFailure) this.brokers.delete(id);
+    else this.portfolios.set(id, { data: portfolio, at: Date.now() });
+    if (Object.keys(errors).length) this.log.warn(`portfolio ${id} (${row.exchange}): ${Object.entries(errors).map(([k, v]) => `${k}=${v?.code}`).join(', ')}`);
     return portfolio;
   }
 

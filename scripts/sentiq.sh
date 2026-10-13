@@ -1,8 +1,9 @@
 #!/bin/bash
-# Kryptoniq launcher (TD-LAUNCH): runs the local server in the background, without a Terminal window.
+# Sentiq launcher (TD-LAUNCH): runs the local server in the background, without a Terminal window.
 #
-#   scripts/kryptoniq.sh [start] [--no-open]   start in the background (if needed) and open the browser
-#   scripts/kryptoniq.sh stop | restart | status | open | logs | app | help
+#   scripts/sentiq.sh [start] [--no-open]   start in the background (if needed) and open the browser
+#   scripts/sentiq.sh stop | restart | status | open | logs | app | help
+#   scripts/sentiq.sh admin-email <address> | admin-reset
 #
 # Written for the bash 3.2 that ships with macOS and for the minimal environment of an AppleScript
 # `do shell script` (PATH=/usr/bin:/bin:/usr/sbin:/sbin, no shell profile): no arrays, no bash 4 syntax,
@@ -13,7 +14,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)" || exit 1
 cd "$ROOT" || exit 1
 
 # Same rule as loadConfig(): an integer 1-65535, otherwise 4317. The value is passed on to the server.
-PORT="${KRYPTONIQ_PORT:-4317}"
+PORT="${SENTIQ_PORT:-${KRYPTONIQ_PORT:-4317}}"
 case "$PORT" in
   '' | *[!0-9]*) PORT=4317 ;;
 esac
@@ -21,7 +22,7 @@ if [ "${#PORT}" -gt 5 ]; then PORT=4317; fi
 PORT=$((10#$PORT))
 if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then PORT=4317; fi
 
-DATA_DIR="${KRYPTONIQ_DATA_DIR:-$ROOT/data}"
+DATA_DIR="${SENTIQ_DATA_DIR:-${KRYPTONIQ_DATA_DIR:-$ROOT/data}}"
 case "$DATA_DIR" in
   /*) ;;
   *) DATA_DIR="$ROOT/$DATA_DIR" ;;
@@ -29,9 +30,11 @@ esac
 LOG_DIR="$DATA_DIR/logs"
 LAUNCH_LOG="$LOG_DIR/launcher.log"
 LOCK_DIR="$DATA_DIR/.launcher.lock"
-URL="http://127.0.0.1:$PORT"
-APP_PATH="$ROOT/Kryptoniq.app"
-APP_ID="com.dustyinvestments.kryptoniq.launcher"
+# The browser opens localhost (passkeys work only there, FD-USERS §9); the launcher itself talks to 127.0.0.1.
+URL="http://localhost:$PORT"
+PING_URL="http://127.0.0.1:$PORT"
+APP_PATH="$ROOT/Sentiq.app"
+APP_ID="com.dustyinvestments.sentiq.launcher"
 
 OPEN_BROWSER=1
 NODE_BIN=""
@@ -54,10 +57,10 @@ trap 'exit 130' INT TERM HUP
 
 # ---------------------------------------------------------------- server detection
 
-# Kryptoniq answers GET /api/ping with {"ok":true}. -q (must come first): ignore ~/.curlrc;
+# Sentiq answers GET /api/ping with {"ok":true}. -q (must come first): ignore ~/.curlrc;
 # --noproxy: a proxy from the environment must not receive requests for 127.0.0.1.
 is_up() {
-  [ "$(/usr/bin/curl -q --noproxy '*' -fsS -m 2 "$URL/api/ping" 2>/dev/null)" = '{"ok":true}' ]
+  [ "$(/usr/bin/curl -q --noproxy '*' -fsS -m 2 "$PING_URL/api/ping" 2>/dev/null)" = '{"ok":true}' ]
 }
 
 listener_pid() {
@@ -68,7 +71,7 @@ proc_cmd() {
   /bin/ps -p "$1" -o command= 2>/dev/null
 }
 
-is_kryptoniq_pid() {
+is_sentiq_pid() {
   case "$(proc_cmd "$1")" in
     *src/server/main.ts*) return 0 ;;
   esac
@@ -93,7 +96,7 @@ wait_until_up() {
 
 # The server's daily log (same UTC date as its logger).
 today_log() {
-  printf '%s/kryptoniq-%s.log' "$LOG_DIR" "$(/bin/date -u +%Y-%m-%d)"
+  printf '%s/sentiq-%s.log' "$LOG_DIR" "$(/bin/date -u +%Y-%m-%d)"
 }
 
 file_size() {
@@ -126,14 +129,16 @@ node_major() {
 
 pick_node() {
   local c m
-  if [ -n "${KRYPTONIQ_NODE:-}" ]; then
-    [ -x "$KRYPTONIQ_NODE" ] || fail "KRYPTONIQ_NODE=$KRYPTONIQ_NODE nu este un program executabil."
-    m="$(node_major "$KRYPTONIQ_NODE")"
+  # KRYPTONIQ_NODE: its name before the rename (FD-SENTIQ §1).
+  SENTIQ_NODE="${SENTIQ_NODE:-${KRYPTONIQ_NODE:-}}"
+  if [ -n "${SENTIQ_NODE:-}" ]; then
+    [ -x "$SENTIQ_NODE" ] || fail "SENTIQ_NODE=$SENTIQ_NODE nu este un program executabil."
+    m="$(node_major "$SENTIQ_NODE")"
     case "$m" in
-      '' | *[!0-9]*) fail "KRYPTONIQ_NODE=$KRYPTONIQ_NODE nu pare să fie Node.js." ;;
+      '' | *[!0-9]*) fail "SENTIQ_NODE=$SENTIQ_NODE nu pare să fie Node.js." ;;
     esac
-    [ "$m" -ge 24 ] || fail "KRYPTONIQ_NODE indică Node $m; Kryptoniq are nevoie de Node 24 sau mai nou."
-    NODE_BIN="$KRYPTONIQ_NODE"
+    [ "$m" -ge 24 ] || fail "SENTIQ_NODE indică Node $m; Sentiq are nevoie de Node 24 sau mai nou."
+    NODE_BIN="$SENTIQ_NODE"
     return 0
   fi
   for c in "$(command -v node 2>/dev/null)" /opt/homebrew/bin/node /usr/local/bin/node \
@@ -172,7 +177,7 @@ lock_is_stale() {
   [ -n "$(/usr/bin/find "$LOCK_DIR" -maxdepth 0 -mmin +3 2>/dev/null)" ]
 }
 
-# 0 = this process owns the start lock; 1 = Kryptoniq came up while another start held the lock.
+# 0 = this process owns the start lock; 1 = Sentiq came up while another start held the lock.
 acquire_start_lock() {
   local i=0
   /bin/mkdir -p "$DATA_DIR" 2>/dev/null || fail "Nu pot crea folderul de date $DATA_DIR."
@@ -186,8 +191,8 @@ acquire_start_lock() {
       rmdir "$LOCK_DIR" 2>/dev/null
       continue
     fi
-    [ "$i" -eq 0 ] && say "O altă pornire Kryptoniq e în curs; aștept…"
-    [ "$i" -ge 400 ] && fail "O altă pornire Kryptoniq durează prea mult. Dacă nu rulează nimic, șterge $LOCK_DIR și încearcă din nou."
+    [ "$i" -eq 0 ] && say "O altă pornire Sentiq e în curs; aștept…"
+    [ "$i" -ge 400 ] && fail "O altă pornire Sentiq durează prea mult. Dacă nu rulează nimic, șterge $LOCK_DIR și încearcă din nou."
     /bin/sleep 0.5
     i=$((i + 1))
   done
@@ -197,22 +202,22 @@ acquire_start_lock() {
 wait_for_pending_start() {
   local i=0
   while [ -d "$LOCK_DIR" ] && ! lock_is_stale && [ "$i" -lt 400 ]; do
-    [ "$i" -eq 0 ] && say "O pornire Kryptoniq e în curs; aștept să se termine…"
+    [ "$i" -eq 0 ] && say "O pornire Sentiq e în curs; aștept să se termine…"
     /bin/sleep 0.5
     i=$((i + 1))
   done
 }
 
-# Fails unless the port is free. Returns 1 when Kryptoniq itself already listens and answers.
+# Fails unless the port is free. Returns 1 when Sentiq itself already listens and answers.
 check_port() {
   local pid
   pid="$(listener_pid)"
   [ -n "$pid" ] || return 0
-  if is_kryptoniq_pid "$pid"; then
+  if is_sentiq_pid "$pid"; then
     wait_until_up 90 "$pid" && return 1
-    fail "Kryptoniq (PID $pid) ascultă pe portul $PORT, dar nu răspunde. Încearcă: scripts/kryptoniq.sh restart"
+    fail "Sentiq (PID $pid) ascultă pe portul $PORT, dar nu răspunde. Încearcă: scripts/sentiq.sh restart"
   fi
-  fail "Portul $PORT e folosit de alt program (PID $pid: $(proc_cmd "$pid")). Închide-l sau alege alt port cu KRYPTONIQ_PORT."
+  fail "Portul $PORT e folosit de alt program (PID $pid: $(proc_cmd "$pid")). Închide-l sau alege alt port cu SENTIQ_PORT."
 }
 
 # ---------------------------------------------------------------- commands
@@ -220,17 +225,17 @@ check_port() {
 cmd_start() {
   local pid rc log_file log_mark
   if is_up; then
-    say "Kryptoniq rulează deja: $URL"
+    say "Sentiq rulează deja: $URL"
     open_browser
     return 0
   fi
   if ! acquire_start_lock; then
-    say "Kryptoniq rulează: $URL"
+    say "Sentiq rulează: $URL"
     open_browser
     return 0
   fi
   if is_up || ! check_port; then
-    say "Kryptoniq rulează deja: $URL"
+    say "Sentiq rulează deja: $URL"
     open_browser
     return 0
   fi
@@ -241,13 +246,13 @@ cmd_start() {
   : 2>/dev/null >"$LAUNCH_LOG" || fail "Nu pot scrie în $LAUNCH_LOG."
   if needs_build; then build_ui; fi
 
-  say "Pornesc Kryptoniq…"
+  say "Pornesc Sentiq…"
   log_file="$(today_log)"
   log_mark="$(file_size "$log_file")"
   # From a terminal, job control puts the server in its own process group, so Ctrl+C while waiting
   # below stops only this script. nohup keeps it alive when the Terminal window closes.
   [ -t 0 ] && set -m
-  KRYPTONIQ_PORT="$PORT" NODE_ENV=production NODE_USE_ENV_PROXY=1 KRYPTONIQ_QUIET=1 \
+  SENTIQ_PORT="$PORT" NODE_ENV=production NODE_USE_ENV_PROXY=1 SENTIQ_QUIET=1 \
     /usr/bin/nohup "$NODE_BIN" src/server/main.ts >/dev/null 2>>"$LAUNCH_LOG" </dev/null &
   pid=$!
   set +m
@@ -256,15 +261,15 @@ cmd_start() {
   rc=$?
   case "$rc" in
     0)
-      say "Kryptoniq rulează: $URL"
+      say "Sentiq rulează: $URL"
       open_browser
       ;;
     2)
       show_log_tails "$log_mark" "$log_file"
-      fail "Kryptoniq nu a pornit (detalii mai sus și în $LOG_DIR)."
+      fail "Sentiq nu a pornit (detalii mai sus și în $LOG_DIR)."
       ;;
     *)
-      fail "Kryptoniq (PID $pid) nu a răspuns în 90 s; poate încă pornește. Verifică: scripts/kryptoniq.sh status; log-uri în $LOG_DIR"
+      fail "Sentiq (PID $pid) nu a răspuns în 90 s; poate încă pornește. Verifică: scripts/sentiq.sh status; log-uri în $LOG_DIR"
       ;;
   esac
 }
@@ -274,16 +279,16 @@ cmd_stop() {
   wait_for_pending_start
   pid="$(listener_pid)"
   if [ -z "$pid" ]; then
-    is_up && fail "Kryptoniq răspunde pe $URL, dar nu găsesc procesul (pornit de alt utilizator?)."
-    say "Kryptoniq nu rulează."
+    is_up && fail "Sentiq răspunde pe $URL, dar nu găsesc procesul (pornit de alt utilizator?)."
+    say "Sentiq nu rulează."
     return 0
   fi
-  is_kryptoniq_pid "$pid" || fail "Portul $PORT e folosit de alt program (PID $pid: $(proc_cmd "$pid")); nu îl opresc."
-  say "Opresc Kryptoniq (PID $pid)…"
+  is_sentiq_pid "$pid" || fail "Portul $PORT e folosit de alt program (PID $pid: $(proc_cmd "$pid")); nu îl opresc."
+  say "Opresc Sentiq (PID $pid)…"
   kill -TERM "$pid" 2>/dev/null
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$i" -ge 40 ]; then
-      say "Kryptoniq nu s-a oprit în 20 s; îl opresc forțat." >&2
+      say "Sentiq nu s-a oprit în 20 s; îl opresc forțat." >&2
       kill -KILL "$pid" 2>/dev/null
       /bin/sleep 0.5
       break
@@ -291,37 +296,52 @@ cmd_stop() {
     /bin/sleep 0.5
     i=$((i + 1))
   done
-  say "Kryptoniq s-a oprit."
+  say "Sentiq s-a oprit."
+}
+
+# This Mac's addresses on the local network (Wi-Fi / Ethernet), as URLs; empty when it listens on 127.0.0.1 only.
+lan_urls() {
+  local i a out=""
+  case "${SENTIQ_BIND:-${KRYPTONIQ_BIND:-}}" in
+    127.* | ::1 | localhost) return 0 ;;
+  esac
+  for i in en0 en1 en2 en3 en4 en5; do
+    a="$(/usr/sbin/ipconfig getifaddr "$i" 2>/dev/null)"
+    [ -n "$a" ] && out="$out http://$a:$PORT"
+  done
+  printf '%s' "${out# }"
 }
 
 cmd_status() {
-  local pid
+  local pid lan
   pid="$(listener_pid)"
   if is_up; then
     if [ -n "$pid" ]; then
-      say "Kryptoniq rulează: $URL (PID $pid, pornit de $(/bin/ps -p "$pid" -o etime= | /usr/bin/tr -d ' '))"
+      say "Sentiq rulează: $URL (PID $pid, pornit de $(/bin/ps -p "$pid" -o etime= | /usr/bin/tr -d ' '))"
       say "Proces: $(proc_cmd "$pid")"
     else
-      say "Kryptoniq rulează: $URL"
+      say "Sentiq rulează: $URL"
     fi
+    lan="$(lan_urls)"
+    [ -z "$lan" ] || say "În rețeaua locală: $lan (acolo fără passkey-uri)"
     return 0
   fi
   if [ -n "$pid" ]; then
-    if is_kryptoniq_pid "$pid"; then
-      say "Kryptoniq (PID $pid) ascultă pe portul $PORT, dar nu răspunde."
+    if is_sentiq_pid "$pid"; then
+      say "Sentiq (PID $pid) ascultă pe portul $PORT, dar nu răspunde."
       return 1
     fi
-    say "Kryptoniq nu rulează; portul $PORT e folosit de alt program (PID $pid: $(proc_cmd "$pid"))."
+    say "Sentiq nu rulează; portul $PORT e folosit de alt program (PID $pid: $(proc_cmd "$pid"))."
     return 3
   fi
-  say "Kryptoniq nu rulează."
+  say "Sentiq nu rulează."
   return 3
 }
 
 cmd_logs() {
   local f
   f="$(today_log)"
-  [ -f "$f" ] || f="$(/bin/ls -1t "$LOG_DIR"/kryptoniq-*.log 2>/dev/null | /usr/bin/head -n 1)"
+  [ -f "$f" ] || f="$(/bin/ls -1t "$LOG_DIR"/sentiq-*.log "$LOG_DIR"/kryptoniq-*.log 2>/dev/null | /usr/bin/head -n 1)"
   [ -n "$f" ] && [ -f "$f" ] || fail "Nu există încă log-uri în $LOG_DIR."
   say "Urmăresc $f (Ctrl+C pentru ieșire)"
   exec /usr/bin/tail -n 50 -F "$f"
@@ -338,26 +358,26 @@ as_string() {
 cmd_app() {
   local tmp src
   [ -x /usr/bin/osacompile ] || fail "osacompile lipsește (e nevoie de macOS)."
-  tmp="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/kryptoniq-app.XXXXXX")" || fail "Nu pot crea un folder temporar."
+  tmp="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/sentiq-app.XXXXXX")" || fail "Nu pot crea un folder temporar."
   src="$tmp/main.applescript"
   {
-    say '-- Kryptoniq launcher (TD-LAUNCH). Generated by scripts/kryptoniq.sh app: change that script, not this one.'
+    say '-- Sentiq launcher (TD-LAUNCH). Generated by scripts/sentiq.sh app: change that script, not this one.'
     say "property projectRoot : $(as_string "$ROOT")"
     /bin/cat <<'APPLESCRIPT'
 
 on run
 	set launcher to my findLauncher()
 	if launcher is missing value then
-		display alert "Kryptoniq" message "Nu găsesc scripts/kryptoniq.sh. Pune Kryptoniq.app înapoi în folderul proiectului sau creează-l din nou din Terminal: scripts/kryptoniq.sh app" as critical
+		display alert "Sentiq" message "Nu găsesc scripts/sentiq.sh. Pune Sentiq.app înapoi în folderul proiectului sau creează-l din nou din Terminal: scripts/sentiq.sh app" as critical
 		return
 	end if
 	try
 		do shell script "/bin/bash " & quoted form of launcher & " start"
 	on error errMsg
 		if errMsg contains "Operation not permitted" then
-			set errMsg to "macOS nu permite accesul la folderul Documents, unde e proiectul. Deschide System Settings → Privacy & Security → Files and Folders, activează Documents pentru Kryptoniq, apoi deschide din nou aplicația." & return & return & errMsg
+			set errMsg to "macOS nu permite accesul la folderul Documents, unde e proiectul. Deschide System Settings → Privacy & Security → Files and Folders, activează Documents pentru Sentiq, apoi deschide din nou aplicația." & return & return & errMsg
 		end if
-		display alert "Kryptoniq nu a pornit" message errMsg as critical
+		display alert "Sentiq nu a pornit" message errMsg as critical
 	end try
 end run
 
@@ -366,9 +386,9 @@ end run
 on findLauncher()
 	set candidates to {}
 	try
-		set end of candidates to (do shell script "/usr/bin/dirname " & quoted form of POSIX path of (path to me)) & "/scripts/kryptoniq.sh"
+		set end of candidates to (do shell script "/usr/bin/dirname " & quoted form of POSIX path of (path to me)) & "/scripts/sentiq.sh"
 	end try
-	set end of candidates to projectRoot & "/scripts/kryptoniq.sh"
+	set end of candidates to projectRoot & "/scripts/sentiq.sh"
 	repeat with c in candidates
 		set p to c as text
 		try
@@ -384,40 +404,75 @@ end findLauncher
 APPLESCRIPT
   } >"$src" || fail "Nu pot scrie $src."
 
-  /usr/bin/osacompile -o "$tmp/Kryptoniq.app" "$src" >/dev/null 2>"$tmp/osacompile.err" || {
+  /usr/bin/osacompile -o "$tmp/Sentiq.app" "$src" >/dev/null 2>"$tmp/osacompile.err" || {
     /bin/cat "$tmp/osacompile.err" >&2
     /bin/rm -rf "$tmp"
     fail "osacompile a eșuat."
   }
+  # The Sentiq icon (compiled from src/web/public/Sentiq.icon by scripts/app-icon/build.sh): the asset catalog for
+  # macOS 26+ (Liquid Glass) and an .icns for older systems. Without them the app keeps the generic script icon.
+  local res="$tmp/Sentiq.app/Contents/Resources" icon_dir="$ROOT/scripts/app-icon" icon_ok=0
+  if [ -f "$icon_dir/Assets.car" ] && [ -f "$icon_dir/Sentiq.icns" ] &&
+    /bin/cp "$icon_dir/Assets.car" "$res/Assets.car" &&
+    /bin/cp "$icon_dir/Sentiq.icns" "$res/Sentiq.icns" &&
+    /bin/rm -f "$res/applet.icns" &&
+    /usr/bin/plutil -replace CFBundleIconFile -string Sentiq "$tmp/Sentiq.app/Contents/Info.plist" &&
+    /usr/bin/plutil -replace CFBundleIconName -string Sentiq "$tmp/Sentiq.app/Contents/Info.plist"; then
+    icon_ok=1
+  fi
   # A stable identity lets macOS remember the Documents permission; editing Info.plist invalidates the
   # signature written by osacompile, so the app is signed again (ad hoc).
-  if ! /usr/bin/plutil -replace CFBundleIdentifier -string "$APP_ID" "$tmp/Kryptoniq.app/Contents/Info.plist" ||
-    ! /usr/bin/plutil -replace CFBundleName -string Kryptoniq "$tmp/Kryptoniq.app/Contents/Info.plist" ||
-    ! /usr/bin/codesign --force --sign - "$tmp/Kryptoniq.app" >/dev/null 2>&1; then
+  if ! /usr/bin/plutil -replace CFBundleIdentifier -string "$APP_ID" "$tmp/Sentiq.app/Contents/Info.plist" ||
+    ! /usr/bin/plutil -replace CFBundleName -string Sentiq "$tmp/Sentiq.app/Contents/Info.plist" ||
+    ! /usr/bin/codesign --force --sign - "$tmp/Sentiq.app" >/dev/null 2>&1; then
     /bin/rm -rf "$tmp"
-    fail "Nu pot finaliza Kryptoniq.app (plutil/codesign)."
+    fail "Nu pot finaliza Sentiq.app (plutil/codesign)."
   fi
-  if ! /bin/rm -rf "$APP_PATH" || ! /bin/mv "$tmp/Kryptoniq.app" "$APP_PATH"; then
+  if ! /bin/rm -rf "$APP_PATH" || ! /bin/mv "$tmp/Sentiq.app" "$APP_PATH"; then
     /bin/rm -rf "$tmp"
     fail "Nu pot scrie $APP_PATH."
   fi
   /bin/rm -rf "$tmp"
+  # Finder and the Dock read the icon again.
+  /usr/bin/touch "$APP_PATH"
   say "Am creat $APP_PATH"
-  say "Dublu-click pe el pornește Kryptoniq și deschide browserul. Îl poți trage în Dock sau adăuga la"
+  [ "$icon_ok" = 1 ] || say "Atenție: iconița Sentiq lipsește din scripts/app-icon/; aplicația are iconița generică."
+  say "Dublu-click pe el pornește Sentiq și deschide browserul. Îl poți trage în Dock sau adăuga la"
   say "System Settings → General → Login Items → Open at Login, ca să pornească la login."
+}
+
+# FD-USERS §3: the admin's address before the first sign-in, or a fresh start when the admin is locked out.
+cmd_admin() {
+  pick_node
+  case "$1" in
+    email)
+      [ -n "${CMD_ARG:-}" ] || fail "Folosire: scripts/sentiq.sh admin-email adresa@exemplu.ro"
+      SENTIQ_DATA_DIR="$DATA_DIR" "$NODE_BIN" scripts/admin.ts email "$CMD_ARG"
+      ;;
+    reset)
+      [ -t 0 ] || fail "admin-reset se rulează din Terminal (cere confirmare)."
+      printf 'Șterg parola, autentificarea în doi pași și passkey-urile contului de admin. Continui? Scrie da: '
+      local answer=""
+      read -r answer
+      [ "$answer" = "da" ] || fail "Nu am schimbat nimic."
+      SENTIQ_DATA_DIR="$DATA_DIR" "$NODE_BIN" scripts/admin.ts reset
+      ;;
+  esac
 }
 
 usage() {
   /bin/cat <<EOF
-Kryptoniq — pornire fără Terminal
+Sentiq — pornire fără Terminal
 
-  scripts/kryptoniq.sh [start] [--no-open]  pornește în fundal (dacă nu rulează) și deschide browserul
-  scripts/kryptoniq.sh stop                 oprește serverul
-  scripts/kryptoniq.sh restart [--no-open]  oprește și pornește (reconstruiește interfața dacă s-a schimbat)
-  scripts/kryptoniq.sh status               rulează? (exit 0 = da, 3 = nu, 1 = pornit dar nu răspunde)
-  scripts/kryptoniq.sh open                 deschide browserul (pornește serverul dacă e nevoie)
-  scripts/kryptoniq.sh logs                 urmărește log-ul zilei
-  scripts/kryptoniq.sh app                  creează Kryptoniq.app (dublu-click, Dock, Login Items)
+  scripts/sentiq.sh [start] [--no-open]  pornește în fundal (dacă nu rulează) și deschide browserul
+  scripts/sentiq.sh stop                 oprește serverul
+  scripts/sentiq.sh restart [--no-open]  oprește și pornește (reconstruiește interfața dacă s-a schimbat)
+  scripts/sentiq.sh status               rulează? (exit 0 = da, 3 = nu, 1 = pornit dar nu răspunde)
+  scripts/sentiq.sh open                 deschide browserul (pornește serverul dacă e nevoie)
+  scripts/sentiq.sh logs                 urmărește log-ul zilei
+  scripts/sentiq.sh app                  creează Sentiq.app (dublu-click, Dock, Login Items)
+  scripts/sentiq.sh admin-email ADRESA   adresa contului de admin, înainte de prima intrare
+  scripts/sentiq.sh admin-reset          șterge parola, 2FA și passkey-urile adminului (dacă nu mai poți intra)
 
 Adresa: $URL
 EOF
@@ -426,12 +481,17 @@ EOF
 # ---------------------------------------------------------------- main
 
 CMD=""
+CMD_ARG=""
 for arg in "$@"; do
   case "$arg" in
     --no-open) OPEN_BROWSER=0 ;;
     -h | --help | help) CMD=help ;;
     *)
-      [ -z "$CMD" ] || fail "Prea multe comenzi: $*. Vezi: scripts/kryptoniq.sh help"
+      if [ "$CMD" = "admin-email" ] && [ -z "$CMD_ARG" ]; then
+        CMD_ARG="$arg"
+        continue
+      fi
+      [ -z "$CMD" ] || fail "Prea multe comenzi: $*. Vezi: scripts/sentiq.sh help"
       CMD="$arg"
       ;;
   esac
@@ -447,6 +507,8 @@ case "${CMD:-start}" in
   status) cmd_status ;;
   logs) cmd_logs ;;
   app) cmd_app ;;
+  admin-email) cmd_admin email ;;
+  admin-reset) cmd_admin reset ;;
   help) usage ;;
   *)
     usage >&2

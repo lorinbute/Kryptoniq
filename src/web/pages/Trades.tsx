@@ -1,27 +1,33 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ChartCandlestick, Coins, History, ListChecks, RefreshCw, Wallet } from 'lucide-react';
+import { ChartCandlestick, Coins, History, ListChecks, Plus, RefreshCw, Wallet } from 'lucide-react';
 import type { AccountView, BalanceRow, Portfolio } from '../../shared/api-types.ts';
 import { api, errorMessage } from '../api.ts';
-import { autoDigits, fmtAgo, fmtDateTime, fmtNum, fmtPct, fmtPrice, fmtUsd } from '../format.ts';
+import { autoDigits, fmtAgo, fmtDateTime, fmtMoney, fmtNum, fmtPct, fmtPrice, fmtUsd } from '../format.ts';
 import { useTz } from '../hooks.ts';
 import { Empty, ErrorNote, Loading, Panel, Warning } from '../components/ui.tsx';
 import { CoinLogo } from '../components/icons.tsx';
+import { AccountWizard } from '../components/AccountWizard.tsx';
+import { ProviderLogo } from '../components/ProviderLogo.tsx';
 
 const SECTION_RO: Record<string, string> = { balances: 'Solduri', positions: 'Poziții', orders: 'Ordine', fills: 'Tranzacții', prices: 'Prețuri', mode: 'Tip cont' };
-const CODE_RO: Record<string, string> = {
-  AUTH: 'cheia API e invalidă sau a expirat',
-  PERMISSION: 'cheia nu are permisiunea necesară (sau IP-ul nu e pe lista permisă)',
-  RATE_LIMIT: 'exchange-ul limitează temporar cererile (prea multe cereri sau supraîncărcare la exchange); reîncerc automat',
-  NETWORK: 'problemă de rețea',
-  MAINTENANCE: 'exchange-ul e în mentenanță',
-  EXCHANGE: 'eroare de la exchange',
-};
+/** `who`: „exchange-ul” or „brokerul”. */
+const codeRo = (code: string, who: string): string =>
+  ({
+    AUTH: 'cheia API e invalidă sau a expirat',
+    PERMISSION: 'cheia nu are permisiunea necesară (sau IP-ul nu e pe lista permisă)',
+    RATE_LIMIT: `${who} limitează temporar cererile (prea multe cereri sau supraîncărcare); reîncerc automat`,
+    NETWORK: 'problemă de rețea',
+    MAINTENANCE: `${who} e în mentenanță sau nu răspunde`,
+    EXCHANGE: `eroare de la ${who.replace(/-?ul$/, '')}`,
+  })[code] ?? `eroare de la ${who.replace(/-?ul$/, '')}`;
 
 /** Codes whose raw exchange text helps (a wrong key, a missing permission, an unknown error); the rest are explained above. */
 const SHOW_RAW = new Set(['AUTH', 'PERMISSION', 'EXCHANGE']);
+
+const STABLE_ASSETS = new Set(['USDT', 'USDC', 'USD', 'DAI', 'FDUSD']);
 
 const pnlClass = (v: number | null) => (v === null ? 'text-muted' : v >= 0 ? 'text-bull' : 'text-bear');
 
@@ -31,7 +37,7 @@ function CostBasisEditor({ accountId, row }: { accountId: number; row: BalanceRo
   const [value, setValue] = useState(row.avgPrice ? String(row.avgPrice) : '');
   const [invalid, setInvalid] = useState(false);
   const save = useMutation({
-    mutationFn: (avgPrice: number | null) => api.put(`/api/portfolio/${accountId}/cost-basis/${row.asset}`, { avgPrice }),
+    mutationFn: (avgPrice: number | null) => api.put(`/api/portfolio/${accountId}/cost-basis/${encodeURIComponent(row.asset)}`, { avgPrice }),
     onSuccess: () => {
       setEditing(false);
       void qc.invalidateQueries({ queryKey: ['portfolio', accountId] });
@@ -75,23 +81,38 @@ function PortfolioView({ account }: { account: AccountView }) {
     mutationFn: () => api.get<Portfolio>(`/api/portfolio/${account.id}?force=1`),
     onSuccess: (data) => qc.setQueryData(['portfolio', account.id], data),
   });
-  if (!q.data && !q.isError) return <Loading label="Se citesc datele de pe exchange…" />;
+  if (!q.data && !q.isError) return <Loading label={account.kind === 'stocks' ? 'Se citesc datele de la broker…' : 'Se citesc datele de pe exchange…'} />;
   if (!q.data) return <ErrorNote error={q.error} onRetry={() => q.refetch()} />;
   const p = q.data;
+  const stocks = p.kind === 'stocks';
+  // Crypto values are in USDT and shown as dollars, as before; a broker's are in the account's currency.
+  const money = (v: number | null | undefined, currency = p.currency) => (stocks ? fmtMoney(v, currency) : fmtUsd(v));
   const errs = Object.entries(p.errors);
+  // Shares are quoted in cents (as on their chart); coins keep the finer steps they need.
+  const digits = (v: number | null | undefined, crypto = false) => (stocks && !crypto ? (Math.abs(v ?? 1) < 1 ? 4 : 2) : autoDigits(v ?? 1));
+  const chartOf = (asset: string, crypto = false) => (stocks && !crypto ? `/charts/s/${encodeURIComponent(asset)}` : `/charts/${asset}/USDT`);
   return (
     <div className="flex flex-col gap-3.5">
       <div className="flex flex-wrap items-center gap-x-3.5 gap-y-3">
         <div className="panel px-5 py-3.5">
-          <div className="text-[12.5px] text-muted">Valoare spot</div>
-          <div className="num mt-0.5 text-[24px] tracking-[-0.02em]">{fmtUsd(p.totals.spotValue)}</div>
+          <div className="text-[12.5px] text-muted">{stocks ? 'Valoare dețineri' : 'Valoare spot'}</div>
+          <div className="num mt-0.5 text-[24px] tracking-[-0.02em]">{money(p.totals.spotValue)}</div>
         </div>
-        <div className="panel px-5 py-3.5">
-          <div className="text-[12.5px] text-muted">PnL nerealizat (futures)</div>
-          <div className={clsx('num mt-0.5 text-[24px] tracking-[-0.02em]', pnlClass(p.totals.unrealizedPnl))}>{fmtUsd(p.totals.unrealizedPnl)}</div>
-        </div>
+        {stocks && p.cash !== null && (
+          <div className="panel px-5 py-3.5">
+            <div className="text-[12.5px] text-muted">Numerar disponibil</div>
+            <div className="num mt-0.5 text-[24px] tracking-[-0.02em]">{money(p.cash)}</div>
+          </div>
+        )}
+        {(!stocks || p.positions.length > 0) && (
+          <div className="panel px-5 py-3.5">
+            <div className="text-[12.5px] text-muted">{stocks ? 'PnL nerealizat (poziții)' : 'PnL nerealizat (futures)'}</div>
+            <div className={clsx('num mt-0.5 text-[24px] tracking-[-0.02em]', pnlClass(p.totals.unrealizedPnl))}>{money(p.totals.unrealizedPnl)}</div>
+          </div>
+        )}
         <div className="text-[12px] text-faint">
-          Cont {p.mode === 'unified' ? 'unificat (UTA)' : p.mode === 'classic' ? 'clasic' : 'necunoscut'}, actualizat {fmtAgo(p.fetchedAt)}
+          {p.exchange === 'kucoin' ? `Cont ${p.mode === 'unified' ? 'unificat (UTA)' : p.mode === 'classic' ? 'clasic' : 'necunoscut'}, ` : ''}
+          {p.asOf ? `date la închiderea din ${fmtDateTime(p.asOf, tz)} (raport Flex), citit ${fmtAgo(p.fetchedAt)}` : `actualizat ${fmtAgo(p.fetchedAt)}`}
         </div>
         <button className="btn ml-auto" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
           <RefreshCw size={14} className={clsx(refresh.isPending && 'animate-spin')} aria-hidden /> Reîmprospătează
@@ -104,7 +125,7 @@ function PortfolioView({ account }: { account: AccountView }) {
             const code = v?.code ?? 'EXCHANGE';
             return (
               <div key={k} title={v?.message}>
-                {SECTION_RO[k] ?? k}: {CODE_RO[code] ?? CODE_RO.EXCHANGE}
+                {SECTION_RO[k] ?? k}: {codeRo(code, stocks ? 'brokerul' : 'exchange-ul')}
                 {SHOW_RAW.has(code) && v?.message ? ` (${v.message})` : ''}
                 {staleAt ? `; se afișează datele din ${fmtDateTime(staleAt, tz)}` : ''}
               </div>
@@ -113,10 +134,10 @@ function PortfolioView({ account }: { account: AccountView }) {
         </Warning>
       )}
 
-      <Panel title="Poziții futures deschise" icon={ChartCandlestick} flush>
+      <Panel title={stocks ? 'Poziții cu levier sau short' : 'Poziții futures deschise'} icon={ChartCandlestick} flush>
         {p.positions.length === 0 ? (
           <div>
-            <Empty>Nicio poziție futures deschisă.</Empty>
+            <Empty>{stocks ? 'Nicio poziție cu levier sau short.' : 'Nicio poziție futures deschisă.'}</Empty>
           </div>
         ) : (
           <table className="table">
@@ -134,14 +155,14 @@ function PortfolioView({ account }: { account: AccountView }) {
             </thead>
             <tbody>
               {p.positions.map((pos) => {
-                const d = autoDigits(pos.entryPrice ?? pos.markPrice ?? 1);
+                const d = digits(pos.entryPrice ?? pos.markPrice);
                 const [base, quoteFull] = pos.symbol.split('/');
                 return (
                   <tr key={`${pos.symbol}-${pos.side}`}>
                     <td>
-                      <Link to={`/charts/${base}/${(quoteFull ?? 'USDT').split(':')[0]}`} className="inline-flex items-center gap-2 font-semibold text-text">
-                        {base && <CoinLogo coin={base} size={18} />}
-                        {pos.symbol}
+                      <Link to={stocks ? chartOf(base ?? '') : `/charts/${base}/${(quoteFull ?? 'USDT').split(':')[0]}`} className="inline-flex items-center gap-2 font-semibold text-text">
+                        {base && <CoinLogo coin={base} size={18} badge={stocks} square={stocks} />}
+                        {stocks ? base : pos.symbol}
                       </Link>
                       {pos.marginMode && <span className="ml-1 text-[12px] text-faint">{pos.marginMode}</span>}
                     </td>
@@ -150,7 +171,7 @@ function PortfolioView({ account }: { account: AccountView }) {
                     <td className="num text-right">{fmtPrice(pos.entryPrice, d)}</td>
                     <td className="num text-right">{fmtPrice(pos.markPrice, d)}</td>
                     <td className={clsx('num text-right', pnlClass(pos.unrealizedPnl))}>
-                      {fmtNum(pos.unrealizedPnl, 2)} <span className="text-[12px]">{fmtPct(pos.percentage)}</span>
+                      {stocks ? money(pos.unrealizedPnl) : fmtNum(pos.unrealizedPnl, 2)} <span className="text-[12px]">{fmtPct(pos.percentage)}</span>
                     </td>
                     <td className="num text-right text-warn">{fmtPrice(pos.liquidationPrice, d)}</td>
                     <td className="num text-right">{pos.leverage ? `${fmtNum(pos.leverage, 1)}×` : '—'}</td>
@@ -162,7 +183,7 @@ function PortfolioView({ account }: { account: AccountView }) {
         )}
       </Panel>
 
-      <Panel title="Dețineri spot" icon={Coins} flush>
+      <Panel title={stocks ? 'Dețineri' : 'Dețineri spot'} icon={Coins} flush>
         {p.balances.length === 0 ? (
           <div>
             <Empty>Niciun sold.</Empty>
@@ -177,31 +198,45 @@ function PortfolioView({ account }: { account: AccountView }) {
                 <th className="text-right">Preț</th>
                 <th className="text-right">Valoare</th>
                 <th className="text-right">Preț mediu</th>
-                <th className="text-right">PnL estimat</th>
+                <th className="text-right">{stocks ? 'PnL' : 'PnL estimat'}</th>
               </tr>
             </thead>
             <tbody>
               {p.balances.map((b) => {
-                const d = autoDigits(b.price ?? 1);
+                const d = digits(b.price, b.crypto);
                 return (
                   <tr key={`${b.account}-${b.asset}`}>
                     <td className="font-semibold">
-                      <span className="inline-flex items-center gap-2">
-                        <CoinLogo coin={b.asset} size={18} />
-                        {b.asset}
-                      </span>
+                      {STABLE_ASSETS.has(b.asset) || b.asset.startsWith('#') ? (
+                        <span className="inline-flex items-center gap-2">
+                          <CoinLogo coin={b.asset} size={18} badge={stocks} square={stocks} />
+                          {b.asset}
+                        </span>
+                      ) : (
+                        <Link to={chartOf(b.asset, b.crypto)} className="inline-flex items-center gap-2 text-text">
+                          <CoinLogo coin={b.asset} size={18} badge={stocks && !b.crypto} square={stocks && !b.crypto} />
+                          {b.asset}
+                        </Link>
+                      )}
+                      {b.name && <div className="max-w-[24ch] truncate text-[11.5px] font-normal text-faint">{b.name}</div>}
+                      {b.note && <div className="text-[11.5px] font-normal text-link">{b.note}</div>}
                     </td>
                     <td className="text-[12px] text-muted">{b.account}</td>
                     <td className="num text-right">
                       {fmtNum(b.total, 8)}
                       {b.used > 0 && <div className="text-[11.5px] text-faint">{fmtNum(b.used, 8)} în ordine</div>}
                     </td>
-                    <td className="num text-right">{fmtPrice(b.price, d)}</td>
-                    <td className="num text-right">{fmtUsd(b.value)}</td>
+                    <td className="num text-right">
+                      {fmtPrice(b.price, d)}
+                      {stocks && b.priceCurrency && b.priceCurrency !== b.currency && <span className="ml-1 text-[11px] text-faint">{b.priceCurrency}</span>}
+                    </td>
+                    <td className="num text-right">{money(b.value, b.currency ?? p.currency)}</td>
                     <td className="num text-right">
                       {b.avgPrice !== null ? fmtPrice(b.avgPrice, d) : <span className="text-faint">necunoscut</span>}
                       {b.avgSource === 'manual' && <div className="text-[11px] text-faint">setat manual</div>}
-                      {!['USDT', 'USDC', 'USD', 'DAI', 'FDUSD'].includes(b.asset) && (
+                      {b.avgSource === 'broker' && <div className="text-[11px] text-faint">de la broker</div>}
+                      {/* An eToro instrument without a symbol ("#1234") has nothing to attach a price to. */}
+                      {!STABLE_ASSETS.has(b.asset) && /^[A-Z0-9][A-Z0-9.-]{0,19}$/.test(b.asset) && (
                         <div>
                           <CostBasisEditor accountId={account.id} row={b} />
                         </div>
@@ -210,8 +245,10 @@ function PortfolioView({ account }: { account: AccountView }) {
                     <td className={clsx('num text-right', pnlClass(b.pnl))}>
                       {b.pnl !== null ? (
                         <>
-                          {fmtUsd(b.pnl)} <span className="text-[12px]">{fmtPct(b.pnlPct)}</span>
+                          {money(b.pnl, b.currency ?? p.currency)} <span className="text-[12px]">{fmtPct(b.pnlPct)}</span>
                         </>
+                      ) : b.pnlPct !== null ? (
+                        <span className="text-[12px]">{fmtPct(b.pnlPct)}</span>
                       ) : (
                         '—'
                       )}
@@ -248,18 +285,18 @@ function PortfolioView({ account }: { account: AccountView }) {
                 <tr key={`${o.market}-${o.id}`}>
                   <td className="font-semibold">
                     <span className="inline-flex items-center gap-2">
-                      <CoinLogo coin={o.symbol.split('/')[0] ?? o.symbol} size={18} />
-                      {o.symbol}
+                      <CoinLogo coin={o.symbol.split('/')[0] ?? o.symbol} size={18} badge={stocks} square={stocks} />
+                      {stocks ? o.symbol.split('/')[0] : o.symbol}
                     </span>
                   </td>
-                  <td className="text-muted">{o.market === 'spot' ? 'Spot' : 'Futures'}</td>
+                  <td className="text-muted">{stocks ? (o.market === 'spot' ? 'Acțiuni' : 'Levier / short') : o.market === 'spot' ? 'Spot' : 'Futures'}</td>
                   <td>
                     {o.type}
                     {o.reduceOnly && <span className="ml-1 text-[12px] text-faint">reduce-only</span>}
                   </td>
                   <td className={o.side === 'buy' ? 'text-bull' : 'text-bear'}>{o.side === 'buy' ? 'Cumpărare' : 'Vânzare'}</td>
-                  <td className="num text-right">{fmtPrice(o.price, autoDigits(o.price ?? 1))}</td>
-                  <td className="num text-right">{o.triggerPrice ? fmtPrice(o.triggerPrice, autoDigits(o.triggerPrice)) : '—'}</td>
+                  <td className="num text-right">{fmtPrice(o.price, digits(o.price))}</td>
+                  <td className="num text-right">{o.triggerPrice ? fmtPrice(o.triggerPrice, digits(o.triggerPrice)) : '—'}</td>
                   <td className="num text-right">
                     {fmtNum(o.amount, 8)}
                     {o.filled ? <div className="text-[11.5px] text-faint">{fmtNum(o.filled, 8)} executat</div> : null}
@@ -296,13 +333,13 @@ function PortfolioView({ account }: { account: AccountView }) {
                   <td className="num text-[12px] text-muted">{fmtDateTime(f.timestamp, tz)}</td>
                   <td>
                     <span className="inline-flex items-center gap-2">
-                      <CoinLogo coin={f.symbol.split('/')[0] ?? f.symbol} size={16} />
-                      {f.symbol}
+                      <CoinLogo coin={f.symbol.split('/')[0] ?? f.symbol} size={16} badge={stocks} square={stocks} />
+                      {stocks ? f.symbol.split('/')[0] : f.symbol}
                     </span>{' '}
-                    <span className="text-[12px] text-faint">{f.market === 'spot' ? 'spot' : 'futures'}</span>
+                    <span className="text-[12px] text-faint">{stocks ? (f.market === 'spot' ? '' : 'derivat') : f.market === 'spot' ? 'spot' : 'futures'}</span>
                   </td>
                   <td className={f.side === 'buy' ? 'text-bull' : 'text-bear'}>{f.side === 'buy' ? 'Cumpărare' : 'Vânzare'}</td>
-                  <td className="num text-right">{fmtPrice(f.price, autoDigits(f.price))}</td>
+                  <td className="num text-right">{fmtPrice(f.price, digits(f.price))}</td>
                   <td className="num text-right">{fmtNum(f.amount, 8)}</td>
                   <td className="num text-right">{fmtNum(f.cost, 2)}</td>
                   <td className="num text-right text-muted">
@@ -321,27 +358,32 @@ function PortfolioView({ account }: { account: AccountView }) {
 export default function TradesPage() {
   const accounts = useQuery({ queryKey: ['accounts'], queryFn: () => api.get<AccountView[]>('/api/accounts') });
   const [selected, setSelected] = useState<number | null>(null);
+  const [wizard, setWizard] = useState(false);
+  const closeWizard = useCallback(() => setWizard(false), []);
   if (!accounts.data && !accounts.isError) return <Loading />;
   if (!accounts.data) return <ErrorNote error={accounts.error} onRetry={() => accounts.refetch()} />;
   const list = accounts.data;
+  const wizardEl = wizard && <AccountWizard onClose={closeWizard} onDone={(a) => setSelected(a.id)} />;
   if (list.length === 0) {
     return (
       <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-3.5">
-      <h1 className="page-title">Tranzacții</h1>
-      <Panel title="Tranzacțiile tale" icon={Wallet}>
-        <div className="max-w-[70ch] space-y-3 text-[14px]">
-          <p>Conectează un cont KuCoin ca să vezi pozițiile, deținerile și ordinele deschise. Kryptoniq doar citește date: nu poate plasa, modifica sau anula ordine.</p>
-          <ol className="list-decimal space-y-1 pl-5 text-muted">
-            <li>Pe KuCoin: Profil, apoi API Management, apoi Create API.</li>
-            <li>Bifează doar permisiunea „General” (citire). Nu bifa Spot/Futures trading, Transfer sau Withdrawal.</li>
-            <li>Opțional, restricționează cheia la IP-ul tău.</li>
-            <li>Copiază API Key, Secret și Passphrase în Setări, la Conturi exchange.</li>
-          </ol>
-          <Link to="/settings#accounts" className="btn btn-primary no-underline">
-            Adaugă un cont
-          </Link>
-        </div>
-      </Panel>
+        <h1 className="page-title">Tranzacții</h1>
+        <Panel title="Tranzacțiile tale" icon={Wallet}>
+          <div className="max-w-[70ch] space-y-3 text-[14px]">
+            <p>
+              Conectează un exchange crypto sau un broker de acțiuni ca să vezi deținerile, pozițiile și ordinele deschise. Sentiq doar citește date: nu poate plasa, modifica sau anula
+              ordine.
+            </p>
+            <p className="text-muted">
+              Crypto: KuCoin, Binance, Bybit, OKX, Kraken, Coinbase, Bitget. Acțiuni: Trading 212, eToro, Interactive Brokers, Alpaca. Pentru fiecare, wizard-ul arată cum creezi o
+              cheie doar pentru citire.
+            </p>
+            <button className="btn btn-primary" onClick={() => setWizard(true)}>
+              <Plus size={15} aria-hidden /> Adaugă un cont
+            </button>
+          </div>
+        </Panel>
+        {wizardEl}
       </div>
     );
   }
@@ -352,19 +394,24 @@ export default function TradesPage() {
         <h1 className="page-title">Tranzacții</h1>
         <div className="seg" role="group" aria-label="Cont">
           {list.map((a) => (
-            <button key={a.id} type="button" aria-pressed={a.id === current.id} onClick={() => setSelected(a.id)}>
+            <button key={a.id} type="button" aria-pressed={a.id === current.id} onClick={() => setSelected(a.id)} className="inline-flex items-center gap-1.5">
+              <ProviderLogo id={a.exchange} size={16} />
               {a.label}
             </button>
           ))}
         </div>
+        <button className="btn ml-auto" onClick={() => setWizard(true)}>
+          <Plus size={15} aria-hidden /> Adaugă un cont
+        </button>
       </div>
       {current.permissionWarning && (
         <Warning>
-          Cheia „{current.label}” are permisiuni în plus față de citire ({current.permissions}). Recomandat: creează o cheie doar cu „General”.
+          Cheia „{current.label}” are permisiuni în plus față de citire ({current.permissions}). Recomandat: creează o cheie doar pentru citire.
         </Warning>
       )}
       {current.lastError && <Warning>Ultima eroare: {current.lastError}</Warning>}
       <PortfolioView key={current.id} account={current} />
+      {wizardEl}
     </div>
   );
 }

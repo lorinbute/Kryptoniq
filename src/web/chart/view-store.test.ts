@@ -30,7 +30,7 @@ describe('chart view store', () => {
     expect(loadView('kucoin|BTC/USDT|1h', st)).toEqual({ barSpacing: 8.5, scroll: 24, at: 1 });
     expect(loadView('kucoin|ETH/USDT|1h', st)).toBeNull();
     for (let i = 0; i < MAX_VIEWS + 5; i++) saveView(`k${i}`, { barSpacing: 6, scroll: -100 }, st, 10 + i);
-    const all = JSON.parse(st.getItem('kryptoniq.chartViews') as string) as Record<string, unknown>;
+    const all = JSON.parse(st.getItem('sentiq.chartViews') as string) as Record<string, unknown>;
     expect(Object.keys(all)).toHaveLength(MAX_VIEWS);
     expect(loadView('kucoin|BTC/USDT|1h', st)).toBeNull(); // the oldest went first
     expect(loadView(`k${MAX_VIEWS + 4}`, st)).not.toBeNull();
@@ -40,9 +40,9 @@ describe('chart view store', () => {
     const st = new MemoryStorage() as unknown as Storage;
     saveView('a', { barSpacing: NaN, scroll: 1 }, st);
     expect(loadView('a', st)).toBeNull();
-    st.setItem('kryptoniq.chartViews', '{not json');
+    st.setItem('sentiq.chartViews', '{not json');
     expect(loadView('a', st)).toBeNull();
-    st.setItem('kryptoniq.chartViews', JSON.stringify({ a: { barSpacing: 'x', scroll: 1, at: 1 }, b: { barSpacing: 5, scroll: 2, at: 3 } }));
+    st.setItem('sentiq.chartViews', JSON.stringify({ a: { barSpacing: 'x', scroll: 1, at: 1 }, b: { barSpacing: 5, scroll: 2, at: 3 } }));
     expect(loadView('a', st)).toBeNull();
     expect(loadView('b', st)).toEqual({ barSpacing: 5, scroll: 2, at: 3 });
     const throwing = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } } as unknown as Storage; // prettier-ignore

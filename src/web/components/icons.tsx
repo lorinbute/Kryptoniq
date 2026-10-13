@@ -3,11 +3,15 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
 import {
+  Activity,
+  ArrowDownToLine,
+  ArrowUpFromLine,
   Ban,
   Banknote,
   Bitcoin,
   Blocks,
   BriefcaseBusiness,
+  Building2,
   CalendarDays,
   CalendarOff,
   ChartCandlestick,
@@ -25,6 +29,7 @@ import {
   Globe,
   House,
   Landmark,
+  type LucideIcon,
   OctagonX,
   Percent,
   ScrollText,
@@ -37,26 +42,26 @@ import {
   Target,
   TrendingUp,
   Vote,
-  Activity,
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  type LucideIcon,
 } from 'lucide-react';
 import { coinHue, eventKind, newsTopic, type EventKind, type NewsTopic } from '../icons.ts';
 
 /** Tickers whose logo failed once in this page: shown as a badge from then on, without asking again. */
 const failedLogos = new Set<string>();
 
-/** The coin's real logo (served by /api/logo), or a badge with its initials in a stable colour. */
-export function CoinLogo({ coin, size = 20, className }: { coin: string; size?: number; className?: string }) {
+/**
+ * The coin's real logo (served by /api/logo), or a badge with its initials in a stable colour. `badge` skips the
+ * logo lookup: a stock ticker must not show the logo of a coin that happens to share it (FD-SENTIQ §4).
+ */
+/** `badge`: initials instead of a logo (stocks: logos come from crypto sources); `square`: the shape stocks use. */
+export function CoinLogo({ coin, size = 20, className, badge = false, square = false }: { coin: string; size?: number; className?: string; badge?: boolean; square?: boolean }) {
   const sym = coin.toUpperCase();
   const [failedNow, setFailedNow] = useState<string | null>(null);
   const valid = /^[A-Z0-9]{1,15}$/.test(sym);
-  if (!valid || failedNow === sym || failedLogos.has(sym)) {
+  if (badge || !valid || failedNow === sym || failedLogos.has(sym)) {
     const hue = coinHue(sym);
     return (
       <span
-        className={clsx('inline-flex shrink-0 items-center justify-center rounded-full font-bold', className)}
+        className={clsx('inline-flex shrink-0 items-center justify-center font-bold', square ? 'rounded-[28%]' : 'rounded-full', className)}
         style={{ width: size, height: size, fontSize: Math.max(7, Math.round(size * (sym.length > 2 ? 0.34 : 0.42))), background: `hsl(${hue} 40% 24%)`, color: `hsl(${hue} 75% 78%)` }}
         aria-hidden
       >
@@ -83,7 +88,7 @@ export function CoinLogo({ coin, size = 20, className }: { coin: string; size?: 
 
 const TOPIC_ICON: Record<Exclude<NewsTopic, 'coin'>, [LucideIcon, string]> = {
   hack: [ShieldAlert, 'text-bear'],
-  'central-bank': [Landmark, 'text-brass'],
+  'central-bank': [Landmark, 'text-accent'],
   inflation: [Percent, 'text-warn'],
   jobs: [BriefcaseBusiness, 'text-link'],
   etf: [ChartPie, 'text-link'],
@@ -92,14 +97,14 @@ const TOPIC_ICON: Record<Exclude<NewsTopic, 'coin'>, [LucideIcon, string]> = {
   energy: [Fuel, 'text-warn'],
   war: [Swords, 'text-bear'],
   growth: [Factory, 'text-link'],
-  gold: [Gem, 'text-brass'],
+  gold: [Gem, 'text-accent'],
   bonds: [ScrollText, 'text-muted'],
   fx: [Banknote, 'text-bull'],
   politics: [Vote, 'text-muted'],
   earnings: [ChartCandlestick, 'text-link'],
   ai: [Cpu, 'text-link'],
-  defi: [Blocks, 'text-brass'],
-  crypto: [Bitcoin, 'text-brass'],
+  defi: [Blocks, 'text-accent'],
+  crypto: [Bitcoin, 'text-accent'],
   macro: [ChartNoAxesCombined, 'text-muted'],
   geopolitics: [Globe, 'text-muted'],
 };
@@ -139,6 +144,7 @@ export function TopicIcon({
   coins,
   size = 16,
   boxed = false,
+  stocks,
 }: {
   title: string;
   summary?: string | null;
@@ -146,14 +152,16 @@ export function TopicIcon({
   coins?: readonly string[];
   size?: number;
   boxed?: boolean;
+  /** Watchlist stocks: their tag shows the company badge instead of a coin logo. */
+  stocks?: ReadonlySet<string>;
 }) {
   const list = coins ?? [];
   const topic = newsTopic(title, summary, category ?? 'macro', list);
   const box = boxed ? Math.round(size * 1.9) : size;
   if (topic === 'coin' && list[0]) {
     return (
-      <span className="inline-flex shrink-0 items-center justify-center" style={{ width: box, height: box }} title={TOPIC_LABEL.coin} aria-hidden>
-        <CoinLogo coin={list[0]} size={boxed ? Math.round(size * 1.5) : size} />
+      <span className="inline-flex shrink-0 items-center justify-center" style={{ width: box, height: box }} title={stocks?.has(list[0]) ? 'acțiune' : TOPIC_LABEL.coin} aria-hidden>
+        <CoinLogo coin={list[0]} size={boxed ? Math.round(size * 1.5) : size} badge={stocks?.has(list[0])} square={stocks?.has(list[0])} />
       </span>
     );
   }
@@ -183,6 +191,7 @@ const EVENT_ICON: Record<EventKind, LucideIcon> = {
   energy: Fuel,
   holiday: CalendarOff,
   custom: Star,
+  earnings: Building2,
   other: CalendarDays,
 };
 
@@ -199,6 +208,7 @@ export const EVENT_LABEL: Record<EventKind, string> = {
   energy: 'energie',
   holiday: 'sărbătoare',
   custom: 'eveniment personal',
+  earnings: 'rezultatele unei companii',
   other: 'eveniment',
 };
 

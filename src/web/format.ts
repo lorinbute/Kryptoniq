@@ -85,6 +85,22 @@ export function fmtUsd(v: number | null | undefined, compact = false): string {
   return numFmt(compact ? 0 : 2, 2, { style: 'currency', currency: 'USD', notation: compact ? 'compact' : 'standard' }).format(v);
 }
 
+/**
+ * An amount in a currency (FD-SENTIQ §3): "1.234,50 €", "980,00 GBP"-style through Intl for ISO codes, and
+ * "1.234,50 USDT" for the crypto quote coins Intl does not know.
+ */
+export function fmtMoney(v: number | null | undefined, currency = 'USD'): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+  if (/^[A-Z]{3}$/.test(currency)) {
+    try {
+      return numFmt(2, 2, { style: 'currency', currency }).format(v);
+    } catch {
+      // unknown ISO code: plain number with the code
+    }
+  }
+  return `${numFmt(2, 2).format(v)} ${currency}`;
+}
+
 /** Decimals that keep ~5 significant digits for prices without exchange precision. */
 export function autoDigits(v: number): number {
   const a = Math.abs(v);

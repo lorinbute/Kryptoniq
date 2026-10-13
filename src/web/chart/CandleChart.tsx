@@ -23,6 +23,17 @@ import { brightness, colorNew, hexToRgba, PINE_BLACK, PINE_GRAY, PINE_WHITE, rgb
 import type { LineStyleName, LmaParams } from '../../shared/indicator/lma-params.ts';
 import { CloudFill, EdgeLabel, GradientFill, HSegments, ShapeLabels, type Segment, type ShapeLabel } from './primitives.ts';
 import { loadView, saveView } from './view-store.ts';
+import { THEME_EVENT, themeColors } from '../theme.ts';
+
+/** The chart's frame in the theme's colours (FD-THEME §1): the canvas does not read CSS by itself. */
+function frameOptions() {
+  const c = themeColors();
+  return {
+    layout: { background: { type: ColorType.Solid, color: c.background }, textColor: c.text, panes: { separatorColor: c.line, separatorHoverColor: c.lineStrong } },
+    rightPriceScale: { borderColor: c.line },
+    timeScale: { borderColor: c.line },
+  };
+}
 
 export interface PriceLineSpec {
   price: number;
@@ -185,23 +196,26 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
   useEffect(() => {
     const el = host.current;
     if (!el) return;
+    // The colours come from the theme's tokens (--color-ink / --color-muted / --color-line), FD-THEME.
+    const frame = frameOptions();
     const chart = createChart(el, {
       autoSize: true,
-      // Matches the --color-ink / --color-line / --color-muted tokens (the chart draws on a canvas, not CSS).
       layout: {
-        background: { type: ColorType.Solid, color: '#07090e' },
-        textColor: '#8d96a8',
+        ...frame.layout,
         fontFamily: '"Geist Mono Variable", ui-monospace, monospace',
         fontSize: 11,
         attributionLogo: false,
-        panes: { separatorColor: '#1a202b', separatorHoverColor: '#2a3242', enableResize: true },
+        panes: { ...frame.layout.panes, enableResize: true },
       },
       // FD-CHARTUX: no grid, no crosshair lines (the axis labels stay).
       grid: { vertLines: { visible: false }, horzLines: { visible: false } },
       crosshair: { mode: CrosshairMode.Normal, vertLine: { visible: false, labelVisible: true }, horzLine: { visible: false, labelVisible: true } },
-      rightPriceScale: { borderColor: '#1a202b' },
-      timeScale: { borderColor: '#1a202b', timeVisible: true, secondsVisible: false, rightOffset: 24 },
+      rightPriceScale: frame.rightPriceScale,
+      timeScale: { ...frame.timeScale, timeVisible: true, secondsVisible: false, rightOffset: 24 },
     });
+    // The theme switched: recolour the frame in place (the zoom stays).
+    const onTheme = () => chart.applyOptions(frameOptions());
+    window.addEventListener(THEME_EVENT, onTheme);
     const candle = chart.addSeries(CandlestickSeries, {
       upColor: '#26a69a',
       downColor: '#ef5350',
@@ -239,6 +253,7 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
     el.addEventListener('touchend', onUp);
     setChartApi(chart);
     return () => {
+      window.removeEventListener(THEME_EVENT, onTheme);
       el.removeEventListener('pointerup', onUp);
       el.removeEventListener('touchend', onUp);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);

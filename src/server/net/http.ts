@@ -132,3 +132,35 @@ export async function fetchJson<T = unknown>(url: string, opts: FetchTextOptions
     throw new HttpError('BAD_JSON', 'JSON invalid', r.status);
   }
 }
+
+export interface HttpResponse {
+  status: number;
+  headers: Headers;
+  body: string;
+}
+
+/**
+ * A request whose HTTP errors are returned, not thrown (brokers explain a 401 / 403 / 429 in the body).
+ * Network failures and timeouts still throw HttpError; the response size is capped as in fetchText.
+ */
+export async function httpRequest(url: string, opts: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number; maxBytes?: number } = {}): Promise<HttpResponse> {
+  const { timeoutMs = 20_000, maxBytes = 10 * 1024 * 1024 } = opts;
+  let res: Response;
+  try {
+    res = await fetchImpl(url, { method: opts.method ?? 'GET', headers: { 'User-Agent': USER_AGENT, ...opts.headers }, body: opts.body, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    const e = err as Error & { cause?: { code?: string } };
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') throw new HttpError('TIMEOUT', `Niciun răspuns în ${Math.round(timeoutMs / 1000)} s`);
+    throw new HttpError('NETWORK', e.cause?.code ? `${e.message} (${e.cause.code})` : e.message);
+  }
+  let body: string;
+  try {
+    body = await readCapped(res, maxBytes);
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    const e = err as Error;
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') throw new HttpError('TIMEOUT', `Niciun răspuns în ${Math.round(timeoutMs / 1000)} s`);
+    throw new HttpError('NETWORK', e.message);
+  }
+  return { status: res.status, headers: res.headers, body };
+}

@@ -72,17 +72,27 @@ export class Db {
   private migrate(): void {
     const row = this.raw.prepare('PRAGMA user_version').get() as { user_version: number };
     let version = row.user_version;
-    for (let i = version; i < MIGRATIONS.length; i++) {
-      this.raw.exec('BEGIN');
-      try {
-        this.raw.exec(MIGRATIONS[i] as string);
-        this.raw.exec(`PRAGMA user_version = ${i + 1}`);
-        this.raw.exec('COMMIT');
-        version = i + 1;
-      } catch (err) {
-        this.raw.exec('ROLLBACK');
-        throw new Error(`Migration ${i + 1} failed: ${(err as Error).message}`);
+    if (version >= MIGRATIONS.length) return;
+    // Rebuilding a table (SQLite's 12-step ALTER) drops the old one: with foreign keys on, that would cascade
+    // into its children (e.g. every news item of `sources`). The pragma only works outside a transaction.
+    this.raw.exec('PRAGMA foreign_keys = OFF');
+    try {
+      for (let i = version; i < MIGRATIONS.length; i++) {
+        this.raw.exec('BEGIN');
+        try {
+          this.raw.exec(MIGRATIONS[i] as string);
+          const broken = this.raw.prepare('PRAGMA foreign_key_check').all();
+          if (broken.length > 0) throw new Error(`foreign key check failed (${broken.length} rows)`);
+          this.raw.exec(`PRAGMA user_version = ${i + 1}`);
+          this.raw.exec('COMMIT');
+          version = i + 1;
+        } catch (err) {
+          this.raw.exec('ROLLBACK');
+          throw new Error(`Migration ${i + 1} failed: ${(err as Error).message}`);
+        }
       }
+    } finally {
+      this.raw.exec('PRAGMA foreign_keys = ON');
     }
   }
 

@@ -10,7 +10,8 @@ export const TV_COUNTRIES = ['US', 'EU', 'DE', 'FR', 'IT', 'ES', 'GB', 'JP', 'CN
 export type CalImpact = 'High' | 'Medium' | 'Low' | 'Holiday';
 
 export interface RawEvent {
-  source: 'ff' | 'tv';
+  /** ForexFactory, TradingView, or the Nasdaq earnings calendar (FD-SENTIQ §4.5). */
+  source: 'ff' | 'tv' | 'earn';
   extId: string;
   title: string;
   currency: string;
@@ -24,6 +25,22 @@ export interface RawEvent {
   unit: string | null;
   scale: string | null;
   period: string | null;
+  /** TradingView only: what the Economy page needs besides the calendar (FD-ECON, TD-ECON §2). */
+  tv?: TvExtra;
+}
+
+export interface TvExtra {
+  ticker: string | null;
+  indicator: string | null;
+  category: string | null;
+  referenceDate: number | null;
+  source: string | null;
+  sourceUrl: string | null;
+  comment: string | null;
+  importance: number | null;
+  actual: number | null;
+  previous: number | null;
+  forecast: number | null;
 }
 
 export class RateLimitedError extends Error {}
@@ -104,7 +121,17 @@ const tvEventSchema = z.object({
   unit: z.string().max(20).optional().nullable(),
   scale: z.string().max(5).optional().nullable(),
   period: z.string().max(30).optional().nullable(),
+  // FD-ECON: kept for the Economy page; anything malformed there only drops the extra, never the event.
+  ticker: z.string().max(80).optional().nullable().catch(null),
+  indicator: z.string().max(200).optional().nullable().catch(null),
+  category: z.string().max(20).optional().nullable().catch(null),
+  referenceDate: z.string().max(40).optional().nullable().catch(null),
+  source: z.string().max(200).optional().nullable().catch(null),
+  source_url: z.string().max(500).optional().nullable().catch(null),
+  comment: z.string().max(4000).optional().nullable().catch(null),
 });
+
+const finite = (n: number | null | undefined) => (typeof n === 'number' && Number.isFinite(n) ? n : null);
 
 const numToStr = (n: number | null | undefined) => (typeof n === 'number' && Number.isFinite(n) ? String(n) : null);
 
@@ -140,6 +167,19 @@ export function parseTradingView(body: string): RawEvent[] {
       unit: e.unit ?? null,
       scale: e.scale ?? null,
       period: e.period ?? null,
+      tv: {
+        ticker: e.ticker?.trim() || null,
+        indicator: e.indicator?.trim() || null,
+        category: e.category?.trim() || null,
+        referenceDate: e.referenceDate && Number.isFinite(Date.parse(e.referenceDate)) ? Date.parse(e.referenceDate) : null,
+        source: e.source?.trim() || null,
+        sourceUrl: e.source_url?.trim() || null,
+        comment: e.comment?.trim() || null,
+        importance: finite(e.importance),
+        actual: finite(e.actual),
+        previous: finite(e.previous),
+        forecast: finite(e.forecast),
+      },
     });
   }
   return out;
@@ -150,8 +190,8 @@ function tvCountryCurrency(country: string): string {
   return map[country.toUpperCase()] ?? country.toUpperCase();
 }
 
-export async function fetchTradingView(from: number, to: number): Promise<RawEvent[]> {
-  const url = `${TV_URL}?from=${encodeURIComponent(new Date(from).toISOString())}&to=${encodeURIComponent(new Date(to).toISOString())}&countries=${TV_COUNTRIES.join(',')}`;
+export async function fetchTradingView(from: number, to: number, countries: readonly string[] = TV_COUNTRIES): Promise<RawEvent[]> {
+  const url = `${TV_URL}?from=${encodeURIComponent(new Date(from).toISOString())}&to=${encodeURIComponent(new Date(to).toISOString())}&countries=${countries.join(',')}`;
   const res = await fetchText(url, { headers: { Accept: 'application/json', Origin: 'https://www.tradingview.com', Referer: 'https://www.tradingview.com/' } });
   return parseTradingView(res.body);
 }

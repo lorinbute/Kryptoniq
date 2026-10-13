@@ -6,7 +6,7 @@ const NY = 'America/New_York';
 
 export interface CalendarEvent {
   id: string;
-  source: 'ff' | 'tv' | 'custom';
+  source: 'ff' | 'tv' | 'custom' | 'earn';
   title: string;
   currency: string;
   ts: number;

@@ -1,0 +1,84 @@
+{
+  "features" : [
+    "refractivity",
+    "specular-location"
+  ],
+  "fill" : {
+    "linear-gradient" : [
+      "display-p3:0.11765,0.14902,0.21176,1.00000",
+      "srgb:0.02745,0.03529,0.05490,1.00000"
+    ]
+  },
+  "groups" : [
+    {
+      "blur-material" : null,
+      "layers" : [
+        {
+          "image-name" : "Path.png",
+          "name" : "Path",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              232,
+              -273.75
+            ]
+          }
+        },
+        {
+          "image-name" : "Path 2.png",
+          "name" : "Path 2",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              29,
+              -126.25
+            ]
+          }
+        },
+        {
+          "image-name" : "Path 3.png",
+          "name" : "Path 3",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              181.5,
+              110.75
+            ]
+          }
+        },
+        {
+          "image-name" : "Path 4.png",
+          "name" : "Path 4",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -33.5,
+              -84.25
+            ]
+          }
+        }
+      ],
+      "lighting" : "individual",
+      "refractivity" : {
+        "depth" : 0,
+        "enabled" : true,
+        "strength" : 0.505703125
+      },
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : "outside",
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

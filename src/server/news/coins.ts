@@ -23,6 +23,12 @@ export const SYMBOL_BLACKLIST = new Set([
   'STOP', 'TIME', 'DEAL', 'CASH', 'BANK', 'LIVE', 'WORLD', 'OPEN', 'BACK', 'FREE', 'GOOD', 'HOLD', 'SAFU', 'SAND', 'MANA', 'ICE', 'GOLD', 'DOGS',
 ]);
 
+/**
+ * Stock index symbols that stock news write as tickers ("$SPX" is the S&P 500 at Barchart / Nasdaq, not the
+ * SPX6900 token). Never a coin unless the user has it in the watchlist (FD-SENTIQ §4.4).
+ */
+export const INDEX_TICKERS = new Set(['SPX', 'SPY', 'NDX', 'IUXX', 'NQ', 'ES', 'YM', 'VIX', 'DJI', 'DJIA', 'DOWI', 'DOW', 'RUT', 'COMP', 'IXIC', 'DXY', 'TNX', 'GSPC', 'QQQ']);
+
 /** Names that are ordinary English words; matched only through their ticker unless the user adds them as aliases. */
 export const AMBIGUOUS_NAMES = new Set([
   'near', 'link', 'sui', 'flow', 'gas', 'one', 'sun', 'act', 'ankr', 'just', 'stacks', 'render', 'graph', 'the graph', 'theta', 'maker',
@@ -92,6 +98,8 @@ interface NameDef {
   symbol: string;
   name: string;
   caseSensitive: boolean;
+  /** Company names also match in Title Case ("NVIDIA" → "Nvidia"). */
+  titleCase?: boolean;
 }
 
 /** Coins of a news item: title and summary are scanned separately (each has its own ALL-CAPS check). */
@@ -100,6 +108,9 @@ export function detectCoins(detector: CoinDetector, title: string, summary: stri
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const titleOf = (s: string) => s.toLowerCase().replace(/(^|[\s\-&.])(\p{L})/gu, (_, sep: string, ch: string) => sep + ch.toUpperCase());
+/** Ticker of a stock after an exchange name: "(NASDAQ: AAPL)", "NYSE:BRK.B", "(Nasdaq: TSLA)". */
+const EXCHANGE_TICKER = /\b(?:NASDAQ|Nasdaq|NYSE|NYSE American|NYSEARCA|NYSE Arca|AMEX|Cboe|CBOE|OTC|OTCQX)\s*:\s*([A-Z][A-Z0-9]{0,9}(?:[.-][A-Z])?)\b/g;
 
 /** Compiled detector; rebuild when the coin list or the watchlist changes. */
 export class CoinDetector {
@@ -107,17 +118,23 @@ export class CoinDetector {
   private readonly symbols: Set<string>;
   /** Watchlist coins: their tickers are always accepted, even when short or blacklisted. */
   private readonly userSymbols: Set<string>;
+  /** Watchlist stocks (FD-SENTIQ §4.4): "$AAPL" and "(NASDAQ: AAPL)" always count, a bare "AAPL" like any ticker. */
+  private readonly stockSymbols: Set<string>;
 
-  constructor(entries: CoinEntry[], userAliases: Record<string, string[]> = {}) {
+  /**
+   * `stocks`: watchlist stocks → their aliases (company names). These are proper nouns, matched in their own
+   * case, in capitals or in Title Case, never in lower case ("Apple" but not "apple pie").
+   */
+  constructor(entries: CoinEntry[], userAliases: Record<string, string[]> = {}, stocks: Record<string, string[]> = {}) {
     const names = new Map<string, NameDef>(); // lower-case name → definition
     const symbols = new Set<string>();
-    const add = (symbol: string, raw: string, force = false) => {
+    const add = (symbol: string, raw: string, force = false, company = false) => {
       const caseSensitive = raw.startsWith('=');
       const n = (caseSensitive ? raw.slice(1) : raw).trim();
       if (n.length < 3) return;
       const lower = n.toLowerCase();
       if (!force && AMBIGUOUS_NAMES.has(lower)) return;
-      if (!names.has(lower) || force) names.set(lower, { symbol, name: n, caseSensitive: caseSensitive && !force });
+      if (!names.has(lower) || force) names.set(lower, company ? { symbol, name: n, caseSensitive: true, titleCase: true } : { symbol, name: n, caseSensitive: caseSensitive && !force });
     };
     for (const e of CORE_COINS) {
       symbols.add(e.symbol);
@@ -133,6 +150,8 @@ export class CoinDetector {
       symbols.add(s);
       for (const a of aliases) add(s, a.replace(/^=/, ''), true);
     }
+    for (const [sym, aliases] of Object.entries(stocks)) for (const a of aliases) add(sym.toUpperCase(), a.replace(/^=/, ''), true, true);
+    this.stockSymbols = new Set(Object.keys(stocks).map((s) => s.toUpperCase()));
     this.symbols = symbols;
     const bounded = (alt: string) => `(?<![\\p{L}\\p{N}])(?:${alt})(?![\\p{L}\\p{N}])`;
     this.nameMatchers = [...names.values()]
@@ -140,7 +159,7 @@ export class CoinDetector {
         symbol: d.symbol,
         len: d.name.length,
         re: d.caseSensitive
-          ? new RegExp(bounded(`${escapeRe(d.name)}|${escapeRe(d.name.toUpperCase())}`), 'gu')
+          ? new RegExp(bounded([...new Set([d.name, d.name.toUpperCase(), ...(d.titleCase ? [titleOf(d.name)] : [])])].map(escapeRe).join('|')), 'gu')
           : new RegExp(bounded(escapeRe(d.name)), 'giu'),
       }))
       .sort((a, b) => b.len - a.len);
@@ -165,7 +184,15 @@ export class CoinDetector {
     // 2) $tickers in any case
     for (const r of text.matchAll(/\$([A-Za-z][A-Za-z0-9]{1,9})\b/g)) {
       const sym = (r[1] as string).toUpperCase();
-      if (this.symbols.has(sym)) found.add(sym);
+      if (this.symbols.has(sym) && (!INDEX_TICKERS.has(sym) || this.userSymbols.has(sym))) found.add(sym);
+    }
+    if (this.stockSymbols.size) {
+      // $F, $BRK.B and "(NYSE: F)" name a stock without doubt, even with one letter.
+      for (const r of text.matchAll(/\$([A-Za-z][A-Za-z0-9]{0,9}(?:[.-][A-Za-z])?)(?![A-Za-z0-9])/g)) {
+        const sym = (r[1] as string).toUpperCase();
+        if (this.stockSymbols.has(sym)) found.add(sym);
+      }
+      for (const r of text.matchAll(EXCHANGE_TICKER)) if (this.stockSymbols.has(r[1] as string)) found.add(r[1] as string);
     }
     // 3) bare upper-case tickers with word boundaries — skipped for ALL-CAPS text ("JUST IN: …"),
     //    where every upper-case word would look like a ticker.
@@ -177,7 +204,15 @@ export class CoinDetector {
       const s = r.index ?? 0;
       if (overlaps(s, s + sym.length)) continue;
       if (!this.symbols.has(sym)) continue;
-      if (!this.userSymbols.has(sym) && (SYMBOL_BLACKLIST.has(sym) || sym.length < 3)) continue;
+      if (!this.userSymbols.has(sym) && (SYMBOL_BLACKLIST.has(sym) || INDEX_TICKERS.has(sym) || sym.length < 3)) continue;
+      found.add(sym);
+    }
+    // 4) bare stock tickers (2+ letters, BRK.B): not the plain words of the blacklist ("AI", "NOW", "META" in
+    //    capitals stay words; "$META" and "(NASDAQ: META)" still count).
+    for (const r of text.matchAll(/(?<![A-Za-z0-9$.])([A-Z][A-Z0-9]{1,9}(?:\.[A-Z])?)(?![A-Za-z0-9])/g)) {
+      const sym = r[1] as string;
+      const s = r.index ?? 0;
+      if (!this.stockSymbols.has(sym) || SYMBOL_BLACKLIST.has(sym) || overlaps(s, s + sym.length)) continue;
       found.add(sym);
     }
     return [...found].sort();

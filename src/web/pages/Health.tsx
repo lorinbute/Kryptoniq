@@ -13,7 +13,10 @@ const JOB_RO: Record<string, string> = {
   'sentiment.daily': 'Indicele zilei',
   'calendar.ff': 'Calendar ForexFactory',
   'calendar.tv': 'Calendar TradingView',
+  'calendar.earnings': 'Rezultate companii (Nasdaq)',
+  'econ.history': 'Indicatori economici (istoric, program)',
   'market.context': 'Context piață',
+  'stocks.market': 'Bursa SUA și indici',
   scanner: 'Scanner Slingshot',
   maintenance: 'Întreținere',
 };
@@ -75,6 +78,21 @@ export default function HealthPage() {
             <div>
               <dt className="text-faint">ForexFactory blocat</dt>
               <dd className="text-warn">până {fmtIn(h.calendar.ffBlockedUntil, now)}</dd>
+            </div>
+          )}
+          {/* `?.`: fields added with FD-SENTIQ, absent from an older server. */}
+          {h.calendar.earn != null && (
+            <div>
+              <dt className="text-faint">Rezultate companii</dt>
+              <dd>{fmtAgo(h.calendar.earn, now)}</dd>
+            </div>
+          )}
+          {h.twelveData && (
+            <div>
+              <dt className="text-faint">Twelve Data (acțiuni)</dt>
+              <dd className="num">
+                {h.twelveData.hasKey ? `${h.twelveData.used} / ${h.twelveData.perDay} cereri azi (UTC)` : 'fără cheie: grafice zilnice de la Nasdaq'}
+              </dd>
             </div>
           )}
         </dl>

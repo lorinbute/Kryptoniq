@@ -1,6 +1,6 @@
 // End-to-end smoke test against the real internet without opening a port: fetches all sources, scores
 // sentiment, refreshes calendar/market data and exercises the API through fastify.inject.
-// Usage: KRYPTONIQ_DATA_DIR=/tmp/kq npm run smoke   (uses a separate data dir; never your real one by accident)
+// Usage: SENTIQ_DATA_DIR=/tmp/sq npm run smoke   (uses a separate data dir; never your real one by accident)
 import path from 'node:path';
 import { loadConfig } from '../src/server/config.ts';
 import { createContext } from '../src/server/context.ts';
@@ -9,15 +9,19 @@ import { createLogger } from '../src/server/log.ts';
 import { fetchDueSources } from '../src/server/news/fetcher.ts';
 import { refreshContext } from '../src/server/market/context.ts';
 
-if (!process.env.KRYPTONIQ_DATA_DIR) {
-  console.error('Set KRYPTONIQ_DATA_DIR to a scratch directory (the smoke test must not touch your real data).');
+if (!process.env.SENTIQ_DATA_DIR && !process.env.KRYPTONIQ_DATA_DIR) {
+  console.error('Set SENTIQ_DATA_DIR to a scratch directory (the smoke test must not touch your real data).');
   process.exit(1);
 }
 const config = loadConfig();
 const log = createLogger(path.join(config.dataDir, 'logs'), true);
 const ctx = createContext(config, log);
 const app = await buildApp(ctx);
-const H = { host: '127.0.0.1:4317' };
+// Every API route needs a signed-in user (FD-USERS): the smoke test acts as the admin (given a password in a fresh
+// scratch directory: a session counts only for an account that can sign in).
+if (ctx.users.setupNeeded()) await ctx.users.setupAdmin({ email: 'smoke@example.com', password: 'Smoke-password-1' });
+const adminId = ctx.users.admin().id;
+const H = { host: '127.0.0.1:4317', cookie: `sentiq_session=${ctx.sessions.create(adminId, 'full')}` };
 const t0 = Date.now();
 const ctxRes = await refreshContext(ctx.db); ctx.coins.invalidate();
 console.log('context', ctxRes, Date.now() - t0, 'ms');
@@ -50,7 +54,8 @@ const sym = await get('/api/market/symbols?q=SOL');
 console.log('symbols', sym.status, sym.body.slice?.(0,5));
 const bad = await get('/api/market/candles?symbol=NOPE/USDT&tf=1h');
 console.log('bad symbol', bad.status, bad.body);
-const scan = await ctx.scanner.run();
+await ctx.scanner.run();
+const scan = ctx.scanner.result(adminId)!;
 console.log('scanner', scan.rows.map(r=>[r.symbol, r.ok, r.uptrend, r.lastSignal?.outcome, r.error]));
 const health = await get('/api/health');
 console.log('health', health.status, health.body.sentiment, health.body.db);

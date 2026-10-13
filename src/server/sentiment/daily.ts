@@ -1,11 +1,20 @@
 // Loads news for a day, computes the index and keeps per-(day, tz) snapshots (final once the day is over).
 import { addDays, dayBounds, dayKey } from '../../shared/time.ts';
 import type { Db } from '../db/database.ts';
+import { readJobData, writeJobData } from '../jobs/scheduler.ts';
 import type { SettingsService } from '../settings.ts';
 import { MAX_ITEM_AGE_MS } from '../news/normalize.ts';
 import { computeIndex, DEFAULT_INDEX_PARAMS, intradaySeries, type Driver, type IndexItem, type IndexResult } from './daily-index.ts';
 
 export const MAX_FINALIZE_DAYS = 120;
+/**
+ * Version of the way the index weighs news. A higher one than the history was built with recomputes it once
+ * (`upgradeHistory`). 2 = FD-IMPACT: Claude's importance, geopolitics at 0.8.
+ */
+export const INDEX_VERSION = 2;
+export const DAILY_JOB = 'sentiment.daily';
+/** Job data of the maintenance job: the latest retention threshold applied (news older than it are gone). */
+export const MAINTENANCE_JOB = 'maintenance';
 /** A day is frozen only after this grace period (late feeds) and once none of its news is still being scored. */
 export const FINALIZE_GRACE_MS = 2 * 3_600_000;
 
@@ -64,7 +73,7 @@ export class DailySentimentService {
   loadItems(start: number, end: number): IndexItem[] {
     const rows = this.db.all<NewsRow>(
       `SELECT n.id, n.title, n.url, n.source_id, s.name AS source_name, s.weight AS source_weight, n.category, n.published_at,
-              n.relevance, n.impact, n.flags, n.cluster_id, n.sentiment
+              n.relevance, COALESCE(n.sentiment_impact, n.impact) AS impact, n.flags, n.cluster_id, n.sentiment
        FROM news n JOIN sources s ON s.id = n.source_id
        WHERE s.enabled = 1 AND n.published_at >= ? AND n.published_at < ?`,
       [start, end],
@@ -112,8 +121,8 @@ export class DailySentimentService {
     for (const d of drivers) d.coins = rows.filter((r) => r.news_id === d.id).map((r) => r.coin);
   }
 
-  today(now = Date.now()): DaySentiment {
-    const tz = this.settings.get().timezone;
+  /** Today in `tz` (every user sees the day of their own time zone, FD-USERS §2). */
+  today(tz: string, now = Date.now()): DaySentiment {
     const day = dayKey(now, tz);
     const res = this.computeDay(day, tz, now);
     this.save(res, false);
@@ -133,15 +142,21 @@ export class DailySentimentService {
     );
   }
 
+  /** `refreshZone` for every time zone in use; the days frozen, without repeats. */
+  refresh(now = Date.now()): { finalized: string[] } {
+    const finalized = new Set<string>();
+    for (const tz of this.settings.timezones()) for (const d of this.refreshZone(tz, now).finalized) finalized.add(d);
+    return { finalized: [...finalized].sort() };
+  }
+
   /**
    * Recomputes today and freezes every elapsed day that has news but no final snapshot yet — after the
    * grace period and once its news are all scored (days older than 3 days are frozen regardless).
    */
-  refresh(now = Date.now()): { today: DaySentiment; finalized: string[] } {
-    const tz = this.settings.get().timezone;
+  refreshZone(tz: string, now = Date.now()): { today: DaySentiment; finalized: string[] } {
     const todayKey = dayKey(now, tz);
     const finalized: string[] = [];
-    // Days before Kryptoniq started collecting only hold the few items the feeds still carried (backlog):
+    // Days before Sentiq started collecting only hold the few items the feeds still carried (backlog):
     // they would enter the history as if complete, so history starts on the first collection day.
     const span = this.db.get<{ t: number | null; f: number | null }>('SELECT min(published_at) AS t, min(fetched_at) AS f FROM news');
     const oldest = span?.t ?? null;
@@ -168,11 +183,10 @@ export class DailySentimentService {
         finalized.push(day);
       }
     }
-    return { today: this.today(now), finalized };
+    return { today: this.today(tz, now), finalized };
   }
 
-  history(days: number, now = Date.now()): HistoryPoint[] {
-    const tz = this.settings.get().timezone;
+  history(days: number, tz: string, now = Date.now()): HistoryPoint[] {
     const todayKey = dayKey(now, tz);
     const from = addDays(todayKey, -(days - 1));
     return this.db
@@ -191,11 +205,32 @@ export class DailySentimentService {
       });
   }
 
-  /** Drops the frozen snapshots of the current time zone and rebuilds them from the stored news. */
+  /**
+   * Rebuilds the snapshots from the stored news (the admin's tool, and `upgradeHistory`), in every time zone in use
+   * or with snapshots.
+   * Days the retention has already thinned out keep the value they had: their news are partly gone, so a new
+   * computation would be wrong (FD-IMPACT §3).
+   */
   recomputeHistory(now = Date.now()): string[] {
-    const tz = this.settings.get().timezone;
-    this.db.run('DELETE FROM daily_sentiment WHERE tz = ?', [tz]);
+    const { retentionCutoff } = readJobData(this.db, MAINTENANCE_JOB, { retentionCutoff: 0 });
+    // Also the zones nobody uses now: whoever picks one again gets days computed the current way (refresh rebuilds
+    // the missing ones), never an older weighing next to a newer one.
+    const stored = this.db.all<{ tz: string }>('SELECT DISTINCT tz FROM daily_sentiment').map((r) => r.tz);
+    for (const tz of new Set([...this.settings.timezones(), ...stored])) {
+      // The day holding the threshold lost its earlier news: the first complete day is the next one.
+      const from = retentionCutoff > 0 ? addDays(dayKey(retentionCutoff, tz), 1) : '';
+      this.db.run('DELETE FROM daily_sentiment WHERE tz = ? AND day >= ?', [tz, from]);
+    }
     this.emptyDays.clear();
     return this.refresh(now).finalized;
+  }
+
+  /** Recomputes the history once after the weighing changed (INDEX_VERSION); true when it did. */
+  upgradeHistory(now = Date.now()): boolean {
+    const state = readJobData(this.db, DAILY_JOB, { indexVersion: 1 });
+    if (state.indexVersion >= INDEX_VERSION) return false;
+    this.recomputeHistory(now);
+    writeJobData(this.db, DAILY_JOB, { ...state, indexVersion: INDEX_VERSION });
+    return true;
   }
 }

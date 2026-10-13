@@ -15,6 +15,8 @@ export interface ScoredItem {
   label: SentimentLabel;
   /** Engine that actually produced the score: 'local', 'rules' or 'claude:<model>'. */
   engine: string;
+  /** The item's importance by the engine (1 minor … 3 market mover), when it gives one (Claude, FD-IMPACT §1). */
+  impact?: number;
   meta: Record<string, unknown>;
 }
 

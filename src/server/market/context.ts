@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Db } from '../db/database.ts';
 import { fetchJson } from '../net/http.ts';
 import { COIN_LIST_CACHE_KEY, type CachedCoin } from '../news/coin-registry.ts';
+import { readStockContext, type StockContext } from './stock-context.ts';
 
 export const FNG_KEY = 'fng';
 export const GLOBAL_KEY = 'coingecko:global';
@@ -41,6 +42,8 @@ export interface GlobalMarket {
 export interface MarketContext {
   fearGreed: (FearGreed & { fetchedAt: number }) | null;
   global: (GlobalMarket & { fetchedAt: number }) | null;
+  /** FD-SENTIQ §4.2. */
+  stocks: StockContext;
 }
 
 function put(db: Db, key: string, value: unknown, now: number): void {
@@ -118,5 +121,5 @@ export async function refreshContext(db: Db, now = Date.now()): Promise<{ coinLi
 }
 
 export function readContext(db: Db): MarketContext {
-  return { fearGreed: get<FearGreed>(db, FNG_KEY), global: get<GlobalMarket>(db, GLOBAL_KEY) };
+  return { fearGreed: get<FearGreed>(db, FNG_KEY), global: get<GlobalMarket>(db, GLOBAL_KEY), stocks: readStockContext(db) };
 }

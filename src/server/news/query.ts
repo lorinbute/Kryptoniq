@@ -8,12 +8,12 @@ export const newsQuerySchema = z.object({
   coins: z
     .string()
     .optional()
-    .transform((s) => (s ? s.split(',').map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z0-9]{1,15}$/.test(c)) : [])),
+    .transform((s) => (s ? s.split(',').map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z0-9][A-Z0-9.-]{0,14}$/.test(c)) : [])),
   favorites: z
     .enum(['0', '1', 'true', 'false'])
     .optional()
     .transform((v) => v === '1' || v === 'true'),
-  category: z.enum(['crypto', 'macro', 'geopolitics']).optional(),
+  category: z.enum(['crypto', 'macro', 'geopolitics', 'stocks']).optional(),
   source: z.string().max(80).optional(),
   sentiment: z.enum(['positive', 'neutral', 'negative', 'pending']).optional(),
   q: z.string().trim().max(100).optional(),
@@ -34,11 +34,15 @@ export interface NewsItemDto {
   source: { id: string; name: string };
   category: string;
   publishedAt: number;
-  /** When Kryptoniq first saw the item (drives the "nou" badge). */
+  /** When Sentiq first saw the item (drives the "nou" badge). */
   fetchedAt: number;
   coins: string[];
   relevance: number;
+  /** The importance the daily index uses (FD-IMPACT §1): the engine's (Claude) when it gave one, else the keywords'. */
   impact: number;
+  impactSource: 'ai' | 'rules';
+  /** The importance by keywords (shown next to Claude's when they differ). */
+  ruleImpact: number;
   flags: string[];
   sentiment: { score: number; label: string; engine: string; meta: unknown } | null;
   clusterId: string;
@@ -64,6 +68,7 @@ interface Row {
   fetched_at: number;
   relevance: number;
   impact: number;
+  sentiment_impact: number | null;
   flags: string;
   sentiment: number | null;
   sentiment_label: string | null;
@@ -99,9 +104,10 @@ export function rangeBounds(range: NewsQuery['range'], tz: string, now: number):
 
 const escapeLike = (s: string) => s.replace(/[\\%_]/g, (m) => `\\${m}`);
 
-export function queryNews(db: Db, q: NewsQuery, tz: string, now = Date.now()): NewsPage {
+/** `userId`: whose favourites the "favourites only" filter uses (FD-USERS §2); the news themselves are common. */
+export function queryNews(db: Db, q: NewsQuery, tz: string, userId: number, now = Date.now()): NewsPage {
   const { from, to } = rangeBounds(q.range, tz, now);
-  const favorites = db.all<{ coin: string }>('SELECT coin FROM watchlist ORDER BY position, coin').map((r) => r.coin);
+  const favorites = db.all<{ coin: string }>('SELECT coin FROM watchlist WHERE user_id = ? ORDER BY position, coin', [userId]).map((r) => r.coin);
   let coins = q.coins;
   if (q.favorites) coins = coins.length ? coins.filter((c) => favorites.includes(c)) : favorites;
   const where: string[] = ['s.enabled = 1', 'n.published_at >= ?', 'n.published_at < ?'];
@@ -135,7 +141,7 @@ export function queryNews(db: Db, q: NewsQuery, tz: string, now = Date.now()): N
     params.push(Number(t), Number(t), id);
   }
   const rows = db.all<Row>(
-    `SELECT n.id, n.title, n.summary, n.url, n.source_id, s.name AS source_name, n.category, n.published_at, n.fetched_at, n.relevance, n.impact, n.flags,
+    `SELECT n.id, n.title, n.summary, n.url, n.source_id, s.name AS source_name, n.category, n.published_at, n.fetched_at, n.relevance, n.impact, n.sentiment_impact, n.flags,
             n.sentiment, n.sentiment_label, n.sentiment_engine, n.sentiment_meta, n.cluster_id,
             (SELECT group_concat(coin) FROM news_coins c WHERE c.news_id = n.id) AS coins
      FROM news n JOIN sources s ON s.id = n.source_id
@@ -180,7 +186,9 @@ export function queryNews(db: Db, q: NewsQuery, tz: string, now = Date.now()): N
       fetchedAt: r.fetched_at,
       coins: r.coins ? r.coins.split(',').sort() : [],
       relevance: r.relevance,
-      impact: r.impact,
+      impact: r.sentiment_impact ?? r.impact,
+      impactSource: r.sentiment_impact !== null ? 'ai' : 'rules',
+      ruleImpact: r.impact,
       flags: safeJson(r.flags, []) as string[],
       sentiment:
         r.sentiment_engine !== null && r.sentiment !== null

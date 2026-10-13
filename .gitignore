@@ -7,4 +7,5 @@ data/
 coverage/
 .env
 .env.*
+Sentiq.app/
 Kryptoniq.app/

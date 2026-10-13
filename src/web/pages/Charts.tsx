@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import type { ZodType } from 'zod';
 import { Bell, EyeOff, Info, ListChecks, Maximize2, Minimize2, Search, Settings2, SlidersHorizontal, X } from 'lucide-react';
-import type { AccountView, CandlesResult, Portfolio, SymbolInfo } from '../../shared/api-types.ts';
+import type { AccountView, CandlesResult, Portfolio, StockQuoteRow, StockSearchHit, SymbolInfo } from '../../shared/api-types.ts';
 import { DEFAULT_SLINGSHOT_PARAMS, SLINGSHOT_VERSION, slingshotParamsSchema, type SlingshotParams } from '../../shared/indicator/params.ts';
 import {
   DEFAULT_LMA_PARAMS,
@@ -26,11 +26,15 @@ import { CHART_SYMBOL_RE, type Settings } from '../../shared/settings.ts';
 import { api, errorMessage, qs } from '../api.ts';
 import { CandleChart, lmaHlines, type PriceLineSpec } from '../chart/CandleChart.tsx';
 import { useFullscreen } from '../chart/fullscreen.ts';
-import { PNL_COLORS, pnlLines } from '../chart/pnl.ts';
+import { PNL_COLORS, PNL_COLORS_LIGHT, pnlLines } from '../chart/pnl.ts';
+import { useTheme } from '../theme.ts';
 import { saveSettingsPatch, type SettingsPatch } from '../chart/prefs.ts';
 import { fmtAgo, fmtDateTime, fmtPct, fmtPrice } from '../format.ts';
-import { useSettings, useTz, useWatchlist } from '../hooks.ts';
+import { chartPathOf, rememberedPath, stockChartPath, stockTimeframe } from '../chart/paths.ts';
+import { useSettings, useStocksInfo, useTz, useWatchlist } from '../hooks.ts';
+import { useIsAdmin } from '../auth.ts';
 import { ErrorNote, Loading, Panel, Warning } from '../components/ui.tsx';
+import { FavoritesDnd, SortableFavorite } from '../components/SortableFavorites.tsx';
 import { AlertIcon, CoinLogo, OutcomeIcon } from '../components/icons.tsx';
 
 const ALERT_RO: Record<string, string> = {
@@ -42,7 +46,8 @@ const ALERT_RO: Record<string, string> = {
   msBearish: 'Bearish Market Structure',
 };
 const OUTCOME_RO: Record<string, string> = { active: 'Activ', tp: 'TP atins', sl: 'SL atins', invalidated: 'Invalidat' };
-const EXCHANGE_NAME: Record<string, string> = { kucoin: 'KuCoin', binance: 'Binance', bybit: 'Bybit', okx: 'OKX' };
+const EXCHANGE_NAME: Record<string, string> = { kucoin: 'KuCoin', binance: 'Binance', bybit: 'Bybit', okx: 'OKX', twelvedata: 'Twelve Data', nasdaq: 'Nasdaq' };
+const MARKET_RO: Record<string, string> = { open: 'bursa e deschisă', pre: 'pre-market', after: 'after-hours', closed: 'bursa e închisă' };
 const REASON_RO: Record<string, string> = {
   takeProfitSignal: 'maximul depășit',
   atrTakeProfit: 'ținta ATR',
@@ -62,44 +67,89 @@ export function collapseAlerts(alerts: SlingshotAlert[]): (SlingshotAlert & { co
   return out;
 }
 
-function SymbolPicker({ current, onPick }: { current: string; onPick: (symbol: string) => void }) {
+function SymbolPicker({ current, onPick }: { current: string; onPick: (path: string) => void }) {
   const watchlist = useWatchlist();
+  const favs = watchlist.data ?? [];
   const [q, setQ] = useState('');
+  const term = q.trim();
   const results = useQuery({
-    queryKey: ['symbols', q],
-    queryFn: () => api.get<SymbolInfo[]>(`/api/market/symbols${qs({ q })}`),
-    enabled: q.trim().length >= 1,
+    queryKey: ['symbols', term],
+    queryFn: () => api.get<SymbolInfo[]>(`/api/market/symbols${qs({ q: term })}`),
+    enabled: term.length >= 1,
     staleTime: 5 * 60_000,
   });
+  // Stocks from two letters on (FD-SENTIQ §4.3): one Nasdaq / Twelve Data search per word typed.
+  const stocks = useQuery({
+    queryKey: ['stocks', 'search', term],
+    queryFn: () => api.get<StockSearchHit[]>(`/api/stocks/search${qs({ q: term })}`),
+    enabled: term.length >= 2,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+  const pick = (path: string) => {
+    onPick(path);
+    setQ('');
+  };
+  const pairs = results.data ?? [];
+  const shares = stocks.data ?? [];
+  const row = 'flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13.5px] transition-colors hover:bg-hover';
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {(watchlist.data ?? []).map((w) => {
-        const sym = `${w.coin}/${w.quote}`;
-        return (
-          <button key={sym} type="button" className="chip gap-1.5 pl-1.5" aria-pressed={sym === current} onClick={() => onPick(sym)}>
-            <CoinLogo coin={w.coin} size={16} />
-            {w.coin}
-          </button>
-        );
-      })}
+      {/* Drag a chip to reorder the favourites; Alt + ←/→ does it from the keyboard (FD-CHARTFAV §2). */}
+      <FavoritesDnd ids={favs.map((w) => w.coin)} layout="wrap">
+        {(order) =>
+          favs.map((w) => {
+            const id = w.kind === 'stock' ? `stock:${w.coin}` : `${w.coin}/${w.quote}`;
+            return (
+              <SortableFavorite key={w.coin} id={w.coin}>
+                {(s) => (
+                  <button
+                    ref={s.setNodeRef}
+                    {...s.attributes}
+                    {...s.listeners}
+                    style={s.style}
+                    type="button"
+                    className={clsx('chip gap-1.5 pl-1.5', s.isDragging && 'shadow-drag')}
+                    aria-pressed={id === current}
+                    aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
+                    onClick={() => !order.justDragged() && onPick(chartPathOf(w))}
+                    onKeyDown={order.keyMove(w.coin, 'x')}
+                    title={`${w.name ? `${w.name}. ` : ''}Trage ca să muți favoritul`}
+                  >
+                    <CoinLogo coin={w.coin} size={16} badge={w.kind === 'stock'} square={w.kind === 'stock'} />
+                    {w.coin}
+                  </button>
+                )}
+              </SortableFavorite>
+            );
+          })
+        }
+      </FavoritesDnd>
       <div className="relative ml-1">
         <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-faint" aria-hidden />
-        <input aria-label="Caută o pereche" placeholder="Altă pereche, ex. PEPE" value={q} onChange={(e) => setQ(e.target.value.toUpperCase())} className="w-56 pl-9" />
-        {q && results.data && (
-          <ul className="absolute z-30 mt-1.5 max-h-72 w-64 overflow-auto rounded-xl border border-line-strong bg-panel-2 py-1.5 shadow-[0_12px_32px_rgb(0_0_0/0.45)]" role="listbox">
-            {results.data.length === 0 && <li className="px-3.5 py-2 text-[13px] text-faint">Nicio pereche</li>}
-            {results.data.map((r) => (
+        <input aria-label="Caută o pereche sau o acțiune" placeholder="Altă pereche sau acțiune" value={q} onChange={(e) => setQ(e.target.value.toUpperCase())} className="w-64 max-w-full pl-9" />
+        {term && (results.data || stocks.data) && (
+          <ul className="absolute z-30 mt-1.5 max-h-80 w-72 overflow-auto rounded-xl border border-line-strong bg-panel-2 py-1.5 shadow-pop" role="listbox">
+            {pairs.length === 0 && shares.length === 0 && <li className="px-3.5 py-2 text-[13px] text-faint">{stocks.isFetching || results.isFetching ? 'Se caută…' : 'Nicio pereche sau acțiune'}</li>}
+            {pairs.length > 0 && shares.length > 0 && <li className="px-3.5 pt-1 pb-0.5 text-[11.5px] text-faint">Crypto</li>}
+            {pairs.map((r) => (
               <li key={r.symbol}>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13.5px] hover:bg-panel-3"
-                  onClick={() => {
-                    onPick(r.symbol);
-                    setQ('');
-                  }}
-                >
+                <button type="button" className={row} onClick={() => pick(`/charts/${r.base}/${r.quote}`)}>
                   <CoinLogo coin={r.base} size={16} />
                   {r.symbol}
+                </button>
+              </li>
+            ))}
+            {shares.length > 0 && <li className="px-3.5 pt-1.5 pb-0.5 text-[11.5px] text-faint">Acțiuni</li>}
+            {shares.map((r) => (
+              <li key={`stock:${r.symbol}`}>
+                <button type="button" className={row} onClick={() => pick(stockChartPath(r.symbol))}>
+                  <CoinLogo coin={r.symbol} size={16} badge square />
+                  <span className="font-medium">{r.symbol}</span>
+                  <span className="min-w-0 truncate text-[12.5px] text-faint">
+                    {r.name}
+                    {r.exchange ? ` · ${r.exchange}` : ''}
+                  </span>
                 </button>
               </li>
             ))}
@@ -373,7 +423,7 @@ function IndicatorForm<P extends Record<string, unknown>>({
       <p className="mb-4 text-[12.5px] text-faint">Aceleași nume, limite și valori implicite ca în TradingView.</p>
       {groups.map((g) => (
         <fieldset key={g.title} className="mb-5">
-          <legend className="mb-2.5 text-[13.5px] font-semibold text-brass">{g.title}</legend>
+          <legend className="mb-2.5 text-[13.5px] font-semibold text-accent">{g.title}</legend>
           <div className="flex flex-col gap-2.5">
             {rowsOf(g.fields).map((row) =>
               row.length > 1 ? (
@@ -547,37 +597,44 @@ function SignalsTable({ signals, precision, tz }: { signals: SlingshotSignal[]; 
   );
 }
 
-function usePositionLines(symbol: string, show: boolean, lastPrice: number | null): PriceLineSpec[] {
+function usePositionLines(symbol: string, show: boolean, lastPrice: number | null, stock: boolean): PriceLineSpec[] {
   const accounts = useQuery({ queryKey: ['accounts'], queryFn: () => api.get<AccountView[]>('/api/accounts'), staleTime: 60_000, enabled: show });
+  // Only the accounts that can hold this chart's asset: brokers for a share, exchanges for a coin (their APIs have limits).
+  const relevant = (accounts.data ?? []).filter((a) => (a.kind === 'stocks') === stock);
   const portfolios = useQueries({
-    queries: (show ? (accounts.data ?? []) : []).map((a) => ({
+    queries: (show ? relevant : []).map((a) => ({
       queryKey: ['portfolio', a.id],
       queryFn: () => api.get<Portfolio>(`/api/portfolio/${a.id}`),
       refetchInterval: 60_000,
     })),
   });
+  // The lines' colours follow the theme (FD-THEME §1).
+  const theme = useTheme();
   return useMemo(() => {
     if (!show) return [];
-    const [base = '', quote = 'USDT'] = symbol.split('/');
+    const colors = theme === 'light' ? PNL_COLORS_LIGHT : PNL_COLORS;
+    const [base = '', quote = 'USDT'] = stock ? [symbol, 'USD'] : symbol.split('/');
     const lines: PriceLineSpec[] = [];
-    const several = (accounts.data?.length ?? 0) > 1;
+    const several = relevant.length > 1;
     for (const p of portfolios) {
       const d = p.data;
-      if (!d) continue;
+      // Stocks come from brokers, coins from exchanges: a ticker can be both (COIN), the account kind decides.
+      if (!d || (d.kind === 'stocks') !== stock) continue;
       // The open trade on this coin: entry, liquidation, SL / TP orders with their PnL, PnL now (FD-PNL).
       const account = several ? accounts.data?.find((a) => a.id === d.accountId)?.label : undefined;
-      const pnl = pnlLines({ base, quote, lastPrice, positions: d.positions, balances: d.balances, orders: d.orders, account });
+      const pnl = pnlLines({ base, quote, lastPrice, positions: d.positions, balances: d.balances, orders: d.orders, account, stock }, colors);
       lines.push(...pnl.lines);
       // Other orders on this coin stay as plain lines.
       for (const o of d.orders) {
         if (pnl.usedOrders.has(`${o.market}:${o.id}`)) continue;
         if (!o.symbol.startsWith(`${base}/`) || (o.market === 'spot' && !o.symbol.startsWith(`${base}/${quote}`))) continue;
         const price = o.triggerPrice ?? o.price;
-        if (price) lines.push({ price, color: PNL_COLORS.other, title: `${o.side} ${o.type}${o.triggerPrice ? ' stop' : ''}`, style: 'dashed' });
+        if (price) lines.push({ price, color: colors.other, title: `${o.side} ${o.type}${o.triggerPrice ? ' stop' : ''}`, style: 'dashed' });
       }
     }
     return lines;
-  }, [portfolios, accounts.data, symbol, show, lastPrice]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `relevant` derives from accounts.data
+  }, [portfolios, accounts.data, symbol, show, lastPrice, stock, theme]);
 }
 
 export default function ChartsPage() {
@@ -585,26 +642,29 @@ export default function ChartsPage() {
   const navigate = useNavigate();
   const settings = useSettings();
   const watchlist = useWatchlist();
-  const hasPair = Boolean(params.base && params.quote);
+  const stock = params.ticker ? params.ticker.toUpperCase() : null;
+  const hasPair = Boolean(stock || (params.base && params.quote));
   // `?.` on charts too: a server started before this version sends no `charts` group (FD-CHARTUX).
   const remembered = settings.data ? (settings.data.charts?.symbol ?? '') : undefined;
   // "Grafice" without a pair opens the last pair shown (FD-CHARTUX §2), else the first favourite.
   useEffect(() => {
     if (hasPair || remembered === undefined || watchlist.isPending) return;
     const first = watchlist.data?.[0];
-    const target = remembered || (first ? `${first.coin}/${first.quote}` : 'BTC/USDT');
-    const [b, q] = target.split('/');
-    navigate(`/charts/${b}/${q}`, { replace: true });
+    navigate(remembered ? rememberedPath(remembered) : first ? chartPathOf(first) : '/charts/BTC/USDT', { replace: true });
   }, [hasPair, remembered, watchlist.isPending, watchlist.data, navigate]);
   if (!hasPair) {
     return settings.isError ? <ErrorNote error={settings.error} onRetry={() => settings.refetch()} /> : <Loading label="Se deschide ultimul grafic…" />;
   }
-  return <ChartView symbol={`${params.base?.toUpperCase()}/${params.quote?.toUpperCase()}`} />;
+  return stock ? <ChartView stock symbol={stock} /> : <ChartView stock={false} symbol={`${params.base?.toUpperCase()}/${params.quote?.toUpperCase()}`} />;
 }
 
-const DEFAULT_CHART_PREFS: Settings['charts'] = { symbol: '', showPositions: true, showLma: true, lmaPane: 0.25 };
+const DEFAULT_CHART_PREFS: Settings['charts'] = { symbol: '', showPositions: true, showLma: true, showSlingshot: true, lmaPane: 0.25 };
 
-function ChartView({ symbol }: { symbol: string }) {
+/** `symbol`: "BTC/USDT", or the ticker ("AAPL") of a stock. */
+function ChartView({ symbol, stock }: { symbol: string; stock: boolean }) {
+  // The Twelve Data key is the admin's to set (FD-USERS §2): the others are told to ask for it.
+  const admin = useIsAdmin();
+  const keyWhere = admin ? 'Setări → Date de piață' : 'o pune adminul';
   const navigate = useNavigate();
   const qc = useQueryClient();
   const tz = useTz();
@@ -612,14 +672,20 @@ function ChartView({ symbol }: { symbol: string }) {
   const s = settings.data;
   // Defaults fill in what an older server does not send yet.
   const prefs: Settings['charts'] = { ...DEFAULT_CHART_PREFS, ...s?.charts };
-  const activeTf: Timeframe = s?.market.defaultTf ?? '1h';
+  const savedTf: Timeframe = s?.market.defaultTf ?? '1h';
+  // A stock source has fewer timeframes (FD-SENTIQ §4.3): the closest one is shown, the saved one is kept for coins.
+  const info = useStocksInfo(stock);
+  // Without an answer from the server, the stock chart still opens on the timeframes that need no key.
+  const stockTfs: Timeframe[] | null = info.data?.timeframes ?? (info.isError ? ['1d', '1w'] : null);
+  const activeTf: Timeframe = stock && stockTfs ? stockTimeframe(savedTf, stockTfs) : savedTf;
   const p = s?.indicator ?? DEFAULT_SLINGSHOT_PARAMS;
   const lmaParams = useMemo(() => ({ ...DEFAULT_LMA_PARAMS, ...s?.lma }), [s?.lma]);
   const limit = s?.market.candles ?? 1500;
   const exchange = s?.market.exchange ?? 'kucoin';
   const chartSec = tfSeconds(activeTf);
   const msSec = p.msTf ? tfSeconds(p.msTf) : chartSec;
-  const needHtf = msSec > chartSec && p.msTf !== '';
+  const htfAvailable = !stock || !p.msTf || (stockTfs?.includes(p.msTf) ?? false);
+  const needHtf = msSec > chartSec && p.msTf !== '' && htfAvailable;
   const [drawer, setDrawer] = useState<DrawerTab | null>(null);
   const closeDrawer = useCallback(() => setDrawer(null), []);
   const frame = useRef<HTMLDivElement>(null);
@@ -627,26 +693,38 @@ function ChartView({ symbol }: { symbol: string }) {
   /** Chart toggles are saved at once (optimistic) and kept on the server. */
   const remember = useCallback((patch: SettingsPatch) => void saveSettingsPatch(qc, patch).catch(() => undefined), [qc]);
 
+  // Stocks: the server keeps candles a minute at least (Twelve Data's free plan has 8 requests a minute).
+  const source = stock ? { asset: 'stock' } : { exchange };
   const candles = useQuery({
-    queryKey: ['candles', exchange, symbol, activeTf, limit],
-    queryFn: () => api.get<CandlesResult>(`/api/market/candles${qs({ exchange, symbol, tf: activeTf, limit })}`),
-    refetchInterval: chartSec <= 900 ? 10_000 : 30_000,
-    enabled: settings.isSuccess,
+    queryKey: ['candles', stock ? 'stock' : exchange, symbol, activeTf, limit],
+    queryFn: () => api.get<CandlesResult>(`/api/market/candles${qs({ ...source, symbol, tf: activeTf, limit })}`),
+    refetchInterval: stock ? 60_000 : chartSec <= 900 ? 10_000 : 30_000,
+    enabled: settings.isSuccess && (!stock || stockTfs !== null),
   });
   const htfLimit = htfCandleCount(limit, chartSec, msSec, p.msSwing);
   const htf = useQuery({
-    queryKey: ['candles', exchange, symbol, p.msTf, htfLimit],
-    queryFn: () => api.get<CandlesResult>(`/api/market/candles${qs({ exchange, symbol, tf: p.msTf, limit: htfLimit })}`),
-    refetchInterval: 60_000,
+    queryKey: ['candles', stock ? 'stock' : exchange, symbol, p.msTf, htfLimit],
+    queryFn: () => api.get<CandlesResult>(`/api/market/candles${qs({ ...source, symbol, tf: p.msTf, limit: htfLimit })}`),
+    refetchInterval: stock ? 5 * 60_000 : 60_000,
     enabled: settings.isSuccess && needHtf,
   });
+  const quoteQ = useQuery({
+    queryKey: ['stocks', 'quotes', symbol],
+    queryFn: () => api.get<StockQuoteRow[]>(`/api/stocks/quotes${qs({ symbols: symbol })}`),
+    refetchInterval: 60_000,
+    enabled: stock,
+  });
+  const stockQuote = quoteQ.data?.[0];
+  const watch = useWatchlist();
+  const companyName = stock ? (watch.data?.find((w) => w.kind === 'stock' && w.coin === symbol)?.name ?? stockQuote?.name ?? null) : null;
 
   // The pair is remembered once its chart has loaded (a mistyped address does not replace the last good pair).
   const loadedSymbol = candles.data?.symbol;
+  const savedSymbol = stock ? `stock:${symbol}` : symbol;
   useEffect(() => {
-    if (!s || loadedSymbol !== symbol || s.charts?.symbol === symbol || !CHART_SYMBOL_RE.test(symbol)) return;
-    remember({ charts: { symbol } });
-  }, [s, loadedSymbol, symbol, remember]);
+    if (!s || loadedSymbol !== symbol || s.charts?.symbol === savedSymbol || !CHART_SYMBOL_RE.test(savedSymbol)) return;
+    remember({ charts: { symbol: savedSymbol } });
+  }, [s, loadedSymbol, symbol, savedSymbol, remember]);
 
   const result = useMemo(() => {
     if (!candles.data) return null;
@@ -661,7 +739,7 @@ function ChartView({ symbol }: { symbol: string }) {
   }, [candles.data, htf.data, needHtf, chartSec, msSec, p]);
   const lma = useMemo(() => (prefs.showLma && candles.data ? runLma(candles.data.candles, lmaParams) : null), [prefs.showLma, candles.data, lmaParams]);
 
-  const rawLines = usePositionLines(symbol, prefs.showPositions, candles.data?.candles.at(-1)?.c ?? null);
+  const rawLines = usePositionLines(symbol, prefs.showPositions, candles.data?.candles.at(-1)?.c ?? null, stock);
   const linesKey = JSON.stringify(rawLines);
   // Keep the array identity stable while the content is unchanged (avoids redrawing price lines every render).
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -673,15 +751,19 @@ function ChartView({ symbol }: { symbol: string }) {
   const change24h = useMemo(() => {
     const cs = candles.data?.candles;
     const end = cs?.at(-1);
-    if (!cs || !end || chartSec > 86_400) return null;
+    if (stock || !cs || !end || chartSec > 86_400) return null;
     const ref = [...cs].reverse().find((c) => c.t <= end.t - 86_400_000);
     return ref ? ((end.c - ref.c) / ref.c) * 100 : null;
-  }, [candles.data, chartSec]);
-  const [base, quote] = symbol.split('/');
+  }, [candles.data, chartSec, stock]);
+  const [base, quote] = stock ? [symbol, null] : symbol.split('/');
+  const market = stock ? info.data?.market : null;
   const onLmaShare = useCallback((share: number) => remember({ charts: { lmaPane: Math.round(share * 1000) / 1000 } }), [remember]);
 
-  const tpSl = result?.atr ? (
-    <div className="absolute right-3 bottom-3 rounded-xl border border-line-strong bg-ink/90 px-4 py-3 text-[13px] backdrop-blur">
+  // FD-CHARTFAV §1: with Slingshot off nothing of it is drawn (the panels below still use `result`).
+  const tpSl = prefs.showSlingshot && result?.atr ? (
+    // The indicator's own table, in its Pine colours: on a dark plate in both themes, or its neon would vanish on white
+    // (FD-THEME §1).
+    <div className="absolute right-3 bottom-3 rounded-xl border border-[#262d3a] bg-[#07090e]/90 px-4 py-3 text-[13px] backdrop-blur">
       <div className="flex justify-between gap-6">
         <span style={{ color: p.longTPColor }}>TAKE PROFIT</span>
         <span className="num font-semibold" style={{ color: p.longTPColor }}>
@@ -720,10 +802,10 @@ function ChartView({ symbol }: { symbol: string }) {
           </span>
         )}
         <span className="pointer-events-auto inline-flex gap-0.5">
-          <button type="button" className="rounded-md p-1 text-faint hover:bg-panel-3 hover:text-text" onClick={() => setDrawer('lma')} aria-label="Setările LMA" title="Setările LMA">
+          <button type="button" className="rounded-md p-1 text-faint transition-colors hover:bg-hover hover:text-accent" onClick={() => setDrawer('lma')} aria-label="Setările LMA" title="Setările LMA">
             <Settings2 size={13} aria-hidden />
           </button>
-          <button type="button" className="rounded-md p-1 text-faint hover:bg-panel-3 hover:text-text" onClick={() => remember({ charts: { showLma: false } })} aria-label="Ascunde LMA" title="Ascunde LMA">
+          <button type="button" className="rounded-md p-1 text-faint transition-colors hover:bg-hover hover:text-accent" onClick={() => remember({ charts: { showLma: false } })} aria-label="Ascunde LMA" title="Ascunde LMA">
             <EyeOff size={13} aria-hidden />
           </button>
         </span>
@@ -738,30 +820,47 @@ function ChartView({ symbol }: { symbol: string }) {
         <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
           <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1.5">
             <h1 className="inline-flex items-center gap-2.5 self-center text-[28px] leading-none font-[650] tracking-[-0.03em]">
-              {base && <CoinLogo coin={base} size={28} />}
+              {base && <CoinLogo coin={base} size={28} badge={stock} square={stock} />}
               <span>
                 {base}
-                <span className="font-medium text-faint">/{quote}</span>
+                {quote && <span className="font-medium text-faint">/{quote}</span>}
               </span>
             </h1>
+            {companyName && <span className="max-w-[260px] truncate self-center text-[14px] text-muted">{companyName}</span>}
             {last && <span className="num text-[28px] leading-none tracking-[-0.03em]">{fmtPrice(last.c, precision)}</span>}
             {change24h !== null && (
               <span className={clsx('num inline-flex h-6 items-center self-center rounded-md px-2 text-[12.5px]', change24h >= 0 ? 'bg-bull/12 text-bull' : 'bg-bear/12 text-bear')}>
                 {fmtPct(change24h)} 24h
               </span>
             )}
-            <span className="text-[12.5px] text-faint">{EXCHANGE_NAME[exchange] ?? exchange}</span>
+            {stock && stockQuote?.changePct != null && (
+              <span className={clsx('num inline-flex h-6 items-center self-center rounded-md px-2 text-[12.5px]', stockQuote.changePct >= 0 ? 'bg-bull/12 text-bull' : 'bg-bear/12 text-bear')} title="Variația ultimei ședințe (Nasdaq)">
+                {/* At night, in the pre-market and on weekends it is the previous session's change. */}
+                {fmtPct(stockQuote.changePct)} {market?.state === 'closed' || market?.state === 'pre' || (!market && stockQuote.status && /closed/i.test(stockQuote.status)) ? 'la închidere' : 'azi'}
+              </span>
+            )}
+            <span className="text-[12.5px] text-faint">
+              {stock ? (candles.data ? (EXCHANGE_NAME[candles.data.exchange] ?? candles.data.exchange) : '') : (EXCHANGE_NAME[exchange] ?? exchange)}
+              {market && ` · ${MARKET_RO[market.state] ?? market.label}`}
+            </span>
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
             <div className="seg" role="group" aria-label="Timeframe">
-              {TIMEFRAMES.map((t) => (
-                <button key={t} type="button" aria-pressed={t === activeTf} onClick={() => t !== activeTf && remember({ market: { defaultTf: t } })}>
-                  {t}
-                </button>
-              ))}
+              {TIMEFRAMES.map((t) => {
+                const off = stock && stockTfs !== null && !stockTfs.includes(t);
+                const why = off ? (info.data?.hasKey ? `Twelve Data nu are ${t}` : `${t} are nevoie de cheia gratuită Twelve Data (${keyWhere}); fără ea sunt 1d și 1w`) : undefined;
+                return (
+                  <button key={t} type="button" aria-pressed={t === activeTf} disabled={off} title={why} onClick={() => t !== activeTf && remember({ market: { defaultTf: t } })}>
+                    {t}
+                  </button>
+                );
+              })}
             </div>
             <label className="inline-flex min-h-[38px] items-center gap-2 rounded-[10px] border border-line px-3 text-[13px] text-muted">
               <input type="checkbox" checked={prefs.showPositions} onChange={(e) => remember({ charts: { showPositions: e.target.checked } })} /> Pozițiile mele
+            </label>
+            <label className="inline-flex min-h-[38px] items-center gap-2 rounded-[10px] border border-line px-3 text-[13px] text-muted" title={`Slingshot System ${SLINGSHOT_VERSION}`}>
+              <input type="checkbox" checked={prefs.showSlingshot} onChange={(e) => remember({ charts: { showSlingshot: e.target.checked } })} /> Slingshot
             </label>
             <label className="inline-flex min-h-[38px] items-center gap-2 rounded-[10px] border border-line px-3 text-[13px] text-muted" title={LMA_TITLE}>
               <input type="checkbox" checked={prefs.showLma} onChange={(e) => remember({ charts: { showLma: e.target.checked } })} /> LMA
@@ -782,16 +881,30 @@ function ChartView({ symbol }: { symbol: string }) {
             )}
           </div>
         </div>
-        <SymbolPicker current={symbol} onPick={(sym) => navigate(`/charts/${sym.split('/')[0]}/${sym.split('/')[1]}`)} />
+        <SymbolPicker current={savedSymbol} onPick={(path) => navigate(path)} />
+        {stock && stockTfs && activeTf !== savedTf && (
+          <p className="text-[12.5px] text-faint">
+            {info.data?.hasKey ? `Twelve Data nu are ${savedTf}; graficul arată ${activeTf}.` : `Fără cheia Twelve Data, acțiunile au doar 1d și 1w; graficul arată ${activeTf}.`}{' '}
+            {!info.data?.hasKey && (admin ? <Link to="/settings#market">Adaugă cheia gratuită</Link> : 'Cheia gratuită o poate pune adminul.')}
+          </p>
+        )}
+        {/* About lines that are drawn only with Slingshot on (FD-CHARTFAV §1). */}
+        {prefs.showSlingshot && stock && !htfAvailable && p.msTf && msSec > chartSec && <Warning>Sursa acțiunilor nu are {p.msTf}; liniile Market Structure sunt ascunse.</Warning>}
 
         {result?.warnings.includes('INSUFFICIENT_HISTORY') && <Warning>Istoric insuficient pentru încălzirea indicatorului; semnalele pot lipsi pe această pereche nouă.</Warning>}
-        {result?.warnings.includes('HTF_UNAVAILABLE') && (htf.isError || htf.data) && (
+        {prefs.showSlingshot && result?.warnings.includes('HTF_UNAVAILABLE') && (htf.isError || htf.data) && (
           <Warning>Nu s-au putut încărca lumânările pe {p.msTf}; liniile Market Structure sunt ascunse.</Warning>
         )}
-        {candles.data && Date.now() - candles.data.fetchedAt > 5 * 60_000 && <Warning>Date vechi de {fmtAgo(candles.data.fetchedAt)}.</Warning>}
+        {candles.data?.notice && (
+          <Warning>
+            Se afișează lumânările primite {fmtAgo(candles.data.fetchedAt)}, pentru că {candles.data.notice}.
+          </Warning>
+        )}
+        {/* Outside the regular session a stock's candles do not change until the open: not stale. */}
+        {candles.data && !candles.data.notice && Date.now() - candles.data.fetchedAt > 5 * 60_000 && !(stock && market && market.state !== 'open') && <Warning>Date vechi de {fmtAgo(candles.data.fetchedAt)}.</Warning>}
 
         {candles.isError && candles.data && <Warning>Actualizarea a eșuat ({errorMessage(candles.error)}); graficul arată ultimele date primite.</Warning>}
-        <div className={clsx('panel relative overflow-hidden bg-ink', fs.active && 'min-h-[320px] flex-1')}>
+        <div className={clsx('panel relative overflow-hidden bg-chart', fs.active && 'min-h-[320px] flex-1')}>
           {!candles.data && !candles.isError ? (
             <div className="px-6">
               <Loading label="Se încarcă lumânările…" />
@@ -803,12 +916,12 @@ function ChartView({ symbol }: { symbol: string }) {
           ) : (
             <CandleChart
               candles={candles.data.candles}
-              result={result}
+              result={prefs.showSlingshot ? result : null}
               params={p}
               precision={precision}
               tz={tz}
               priceLines={priceLines}
-              viewKey={`${exchange}|${symbol}|${activeTf}`}
+              viewKey={stock ? `stock|${symbol}|${activeTf}` : `${exchange}|${symbol}|${activeTf}`}
               lma={lma}
               lmaShare={prefs.lmaPane}
               onLmaShareChange={onLmaShare}
@@ -835,9 +948,9 @@ function ChartView({ symbol }: { symbol: string }) {
           {alerts.length === 0 ? (
             <p className="text-[13.5px] text-faint">Nicio alertă în istoricul încărcat.</p>
           ) : (
-            <ul className="max-h-[380px] divide-y divide-line-soft overflow-auto text-[13.5px]">
+            <ul className="rows -mx-5 max-h-[380px] divide-y divide-line-soft overflow-auto text-[13.5px]">
               {alerts.map((a) => (
-                <li key={`${a.bar}-${a.type}`} className="flex items-center justify-between gap-3 py-2.5">
+                <li key={`${a.bar}-${a.type}`} className="flex items-center justify-between gap-3 px-5 py-2.5">
                   <span className="flex flex-wrap items-center gap-x-2">
                     <AlertIcon type={a.type} />
                     <span>{ALERT_RO[a.type]}</span>

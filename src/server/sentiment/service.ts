@@ -82,9 +82,9 @@ export class SentimentService {
       for (const s of scored) {
         // Only store when the title did not change meanwhile (the update path resets the score).
         this.db.run(
-          `UPDATE news SET sentiment = ?, sentiment_label = ?, sentiment_engine = ?, sentiment_meta = ?, scored_at = ?
+          `UPDATE news SET sentiment = ?, sentiment_label = ?, sentiment_engine = ?, sentiment_meta = ?, sentiment_impact = ?, scored_at = ?
            WHERE id = ? AND sentiment_engine IS NULL AND title = ?`,
-          [s.score, s.label, s.engine, JSON.stringify(s.meta), now, s.id, rows.find((r) => r.id === s.id)?.title_now ?? ''],
+          [s.score, s.label, s.engine, JSON.stringify(s.meta), s.impact ?? null, now, s.id, rows.find((r) => r.id === s.id)?.title_now ?? ''],
         );
       }
     });
@@ -93,7 +93,7 @@ export class SentimentService {
 
   /** Clears scores of news published since `since` (optionally only those from one engine). */
   reset(since: number, engine?: string): number {
-    const sql = `UPDATE news SET sentiment = NULL, sentiment_label = NULL, sentiment_engine = NULL, sentiment_meta = NULL, scored_at = NULL
+    const sql = `UPDATE news SET sentiment = NULL, sentiment_label = NULL, sentiment_engine = NULL, sentiment_meta = NULL, sentiment_impact = NULL, scored_at = NULL
                  WHERE published_at >= ?${engine ? ' AND sentiment_engine = ?' : ''}`;
     return this.db.run(sql, engine ? [since, engine] : [since]).changes;
   }

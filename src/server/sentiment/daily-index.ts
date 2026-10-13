@@ -170,7 +170,7 @@ export function computeIndex(allItems: IndexItem[], window: { start: number; end
   const total = aggregate(weighted, p);
 
   const breakdown = {} as Record<SourceCategory, SubIndex>;
-  for (const cat of ['crypto', 'macro', 'geopolitics'] as const) {
+  for (const cat of ['crypto', 'macro', 'geopolitics', 'stocks'] as const) {
     const sub = aggregate(
       weighted.filter((r) => r.item.category === cat),
       p,

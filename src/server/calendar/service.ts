@@ -3,13 +3,21 @@ import { z } from 'zod';
 import type { Db } from '../db/database.ts';
 import { readJobData, writeJobData } from '../jobs/scheduler.ts';
 import type { Logger } from '../log.ts';
+import { cleanCompanyName, type EarningsRow } from '../market/stocks.ts';
 import { formatIssues, ValidationError } from '../settings.ts';
+import { addDays, dayBounds, dayKey, zonedTimeToUtc } from '../../shared/time.ts';
 import { explain } from './glossary.ts';
 import { ffWeekRange, mergeCalendar, type CalendarEvent } from './merge.ts';
 import { fetchForexFactory, fetchTradingView, RateLimitedError, type CalImpact, type RawEvent } from './sources.ts';
 
 export const FF_JOB = 'calendar.ff';
 export const TV_JOB = 'calendar.tv';
+export const EARN_JOB = 'calendar.earnings';
+/** Custom events per user: a person adds a few; the cap keeps one account from filling the database. */
+export const MAX_CUSTOM_EVENTS = 1000;
+/** Weekdays of earnings looked up ahead (one Nasdaq request each). */
+export const EARN_DAYS = 10;
+const NY = 'America/New_York';
 export const FF_MIN_INTERVAL_MS = 60 * 60_000;
 export const FF_BLOCK_MS = 60 * 60_000;
 const DAY = 86_400_000;
@@ -22,7 +30,7 @@ interface FfState {
 }
 
 interface RawRow {
-  source: 'ff' | 'tv';
+  source: 'ff' | 'tv' | 'earn';
   ext_id: string;
   title: string;
   currency: string;
@@ -65,11 +73,60 @@ export const customEventSchema = z.object({
 });
 
 export interface CalendarQuery {
+  /** Whose custom events and whose watchlist stocks (FD-USERS §2). */
+  userId: number;
   from: number;
   to: number;
   impacts?: string[];
   currencies?: string[];
+  /** Quarterly results of the watchlist stocks; on unless false. */
+  earnings?: boolean;
 }
+
+/** Next `n` weekdays in New York, starting today (YYYY-MM-DD). */
+export function earningsDays(now: number, n = EARN_DAYS): string[] {
+  const out: string[] = [];
+  for (let d = dayKey(now, NY); out.length < n; d = addDays(d, 1)) {
+    const wd = new Date(`${d}T12:00:00Z`).getUTCDay();
+    if (wd !== 0 && wd !== 6) out.push(d);
+  }
+  return out;
+}
+
+/** Nasdaq's earnings row → calendar event: before the open at 08:00 ET, after the close at 16:30 ET, else all day. */
+export function earningsEvent(day: string, r: EarningsRow): RawEvent {
+  const allDay = r.time === 'unknown';
+  return {
+    source: 'earn',
+    extId: `${r.symbol}:${day}`,
+    title: `${r.symbol}: rezultate trimestriale`,
+    currency: 'USD',
+    country: 'US',
+    ts: r.time === 'pre' ? zonedTimeToUtc(day, NY, 8, 0) : r.time === 'after' ? zonedTimeToUtc(day, NY, 16, 30) : zonedTimeToUtc(day, NY),
+    allDay,
+    impact: 'High',
+    forecast: r.epsForecast,
+    previous: r.lastYearEps,
+    actual: null,
+    unit: null,
+    scale: null,
+    // pre / after / unknown, for the note; the quarter after the bar ("Sep/2026").
+    period: `${r.time}|${r.quarter ?? ''}`,
+  };
+}
+
+const MONTH_RO: Record<string, string> = {
+  Jan: 'ianuarie', Feb: 'februarie', Mar: 'martie', Apr: 'aprilie', May: 'mai', Jun: 'iunie',
+  Jul: 'iulie', Aug: 'august', Sep: 'septembrie', Oct: 'octombrie', Nov: 'noiembrie', Dec: 'decembrie',
+};
+/** Nasdaq's "Sep/2026" → "septembrie 2026". */
+export const quarterRo = (q: string) => q.replace(/^(\w{3})\/(\d{4})$/, (m, mon: string, y: string) => (MONTH_RO[mon] ? `${MONTH_RO[mon]} ${y}` : m));
+
+const EARN_WHEN: Record<string, string> = {
+  pre: 'înainte de deschiderea bursei (în jur de 08:00, ora New York-ului)',
+  after: 'după închiderea bursei (în jur de 16:30, ora New York-ului)',
+  unknown: 'în cursul zilei (compania nu a anunțat ora)',
+};
 
 export class CalendarService {
   private readonly db: Db;
@@ -84,7 +141,7 @@ export class CalendarService {
     return readJobData<FfState>(this.db, FF_JOB, { lastOk: 0, blockedUntil: 0, weeks: [] });
   }
 
-  private replace(source: 'ff' | 'tv', range: { start: number; end: number }, events: RawEvent[], now: number): void {
+  private replace(source: RawEvent['source'], range: { start: number; end: number }, events: RawEvent[], now: number): void {
     this.db.tx(() => {
       this.db.run('DELETE FROM calendar_raw WHERE source = ? AND ts >= ? AND ts < ?', [source, range.start, range.end]);
       for (const e of events) {
@@ -144,10 +201,43 @@ export class CalendarService {
     return r?.n ?? 0;
   }
 
+  /**
+   * Earnings of the watchlist stocks for the next weekdays, from Nasdaq. Each day is replaced only when its
+   * request succeeded; a stock that left the watchlist loses its future events. Returns the stored events.
+   */
+  async refreshEarnings(symbols: string[], fetchDay: (day: string) => Promise<EarningsRow[]>, now = Date.now()): Promise<number> {
+    const wanted = new Set(symbols);
+    const today = dayBounds(dayKey(now, NY), NY).start;
+    if (wanted.size === 0) {
+      this.db.run("DELETE FROM calendar_raw WHERE source = 'earn' AND ts >= ?", [today]);
+      return 0;
+    }
+    let stored = 0;
+    const errors: string[] = [];
+    for (const day of earningsDays(now)) {
+      let rows: EarningsRow[];
+      try {
+        rows = await fetchDay(day);
+      } catch (err) {
+        errors.push(`${day}: ${(err as Error).message}`);
+        continue;
+      }
+      const events = rows.filter((r) => wanted.has(r.symbol)).map((r) => earningsEvent(day, r));
+      this.replace('earn', dayBounds(day, NY), events, now);
+      stored += events.length;
+    }
+    // Days not looked at any more (e.g. after a long pause) keep their events; symbols removed from the watchlist do not.
+    const placeholders = [...wanted].map(() => '?').join(',');
+    this.db.run(`DELETE FROM calendar_raw WHERE source = 'earn' AND ts >= ? AND substr(ext_id, 1, instr(ext_id, ':') - 1) NOT IN (${placeholders})`, [today, ...wanted]);
+    if (errors.length === EARN_DAYS) throw new Error(`Nasdaq earnings: ${errors[0]}`);
+    if (errors.length) this.log.warn(`earnings: ${errors.length} days failed (${errors[0]})`);
+    return stored;
+  }
+
   /** Next High-impact event start time after `now` (for burst scheduling). */
   nextImportant(now = Date.now()): number | null {
     const r = this.db.get<{ ts: number | null }>(
-      "SELECT min(ts) AS ts FROM calendar_raw WHERE impact IN ('High', 'Medium') AND all_day = 0 AND ts > ?",
+      "SELECT min(ts) AS ts FROM calendar_raw WHERE source IN ('ff', 'tv') AND impact IN ('High', 'Medium') AND all_day = 0 AND ts > ?",
       [now],
     );
     return r?.ts ?? null;
@@ -160,10 +250,39 @@ export class CalendarService {
       tv: rows.filter((r) => r.source === 'tv'),
       ffCoverage: this.ffState().weeks,
     });
+    const stocks = new Map(
+      this.db.all<{ coin: string; name: string | null }>("SELECT coin, name FROM watchlist WHERE kind = 'stock' AND user_id = ?", [q.userId]).map((w) => [w.coin, w.name]),
+    );
+    const earnings =
+      q.earnings === false
+        ? []
+        : rows
+            .filter((r) => r.source === 'earn' && stocks.has(r.extId.slice(0, r.extId.indexOf(':'))))
+            .map((r): CalendarEvent => {
+              const sym = r.extId.slice(0, r.extId.indexOf(':'));
+              const [when = 'unknown', quarter = ''] = (r.period ?? '').split('|');
+              const name = stocks.get(sym);
+              const who = name ? cleanCompanyName(name) || sym : sym;
+              return {
+                id: `earn:${r.extId}`,
+                source: 'earn',
+                title: `Rezultate trimestriale ${who}`,
+                currency: sym,
+                ts: r.ts,
+                allDay: r.allDay,
+                impact: r.impact,
+                actual: null,
+                forecast: r.forecast,
+                previous: r.previous,
+                deviation: null,
+                matched: false,
+                note: `${who} își publică rezultatele ${quarter ? `trimestrului încheiat în ${quarterRo(quarter)} ` : ''}${EARN_WHEN[when] ?? EARN_WHEN.unknown}. Prognoza este EPS-ul estimat de analiști, iar Anterior este EPS-ul din același trimestru de anul trecut (Nasdaq).`,
+              };
+            });
     const custom = this.db
       .all<{ id: number; title: string; ts: number; all_day: number; impact: CalImpact; currency: string; note: string }>(
-        'SELECT id, title, ts, all_day, impact, currency, note FROM calendar_custom WHERE ts >= ? AND ts < ?',
-        [q.from, q.to],
+        'SELECT id, title, ts, all_day, impact, currency, note FROM calendar_custom WHERE user_id = ? AND ts >= ? AND ts < ?',
+        [q.userId, q.from, q.to],
       )
       .map(
         (c): CalendarEvent => ({
@@ -184,19 +303,24 @@ export class CalendarService {
       );
     const impacts = q.impacts && q.impacts.length ? new Set(q.impacts) : null;
     const currencies = q.currencies && q.currencies.length ? new Set(q.currencies) : null;
-    return [...merged, ...custom]
+    return [...merged, ...custom, ...earnings]
       .filter((e) => e.ts >= q.from && e.ts < q.to)
       .filter((e) => e.source === 'custom' || !impacts || impacts.has(e.impact))
-      .filter((e) => e.source === 'custom' || !currencies || currencies.has(e.currency))
+      // Earnings have their own switch, not a currency.
+      .filter((e) => e.source === 'custom' || e.source === 'earn' || !currencies || currencies.has(e.currency))
       .map((e) => ({ ...e, note: e.note ?? explain(e.title) }))
       .sort((a, b) => a.ts - b.ts || a.title.localeCompare(b.title));
   }
 
-  addCustom(input: unknown): number {
+  addCustom(userId: number, input: unknown): number {
     const r = customEventSchema.safeParse(input);
     if (!r.success) throw new ValidationError(`Eveniment invalid: ${formatIssues(r.error.issues)}`, r.error.issues);
     const e = r.data;
-    return this.db.run('INSERT INTO calendar_custom(title, ts, all_day, impact, currency, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [
+    if ((this.db.get<{ n: number }>('SELECT count(*) AS n FROM calendar_custom WHERE user_id = ?', [userId])?.n ?? 0) >= MAX_CUSTOM_EVENTS) {
+      throw new ValidationError(`Poți avea cel mult ${MAX_CUSTOM_EVENTS} evenimente proprii; șterge din cele vechi.`);
+    }
+    return this.db.run('INSERT INTO calendar_custom(user_id, title, ts, all_day, impact, currency, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [
+      userId,
       e.title,
       e.ts,
       e.allDay ? 1 : 0,
@@ -207,12 +331,14 @@ export class CalendarService {
     ]).lastInsertRowid;
   }
 
-  deleteCustom(id: number): boolean {
-    return this.db.run('DELETE FROM calendar_custom WHERE id = ?', [id]).changes > 0;
+  /** Only the owner's own event (anybody else's id is "not found"). */
+  deleteCustom(userId: number, id: number): boolean {
+    return this.db.run('DELETE FROM calendar_custom WHERE id = ? AND user_id = ?', [id, userId]).changes > 0;
   }
 
-  lastUpdate(): { ff: number | null; tv: number | null } {
+  lastUpdate(): { ff: number | null; tv: number | null; earn: number | null } {
     const r = this.db.all<{ source: string; t: number | null }>('SELECT source, max(fetched_at) AS t FROM calendar_raw GROUP BY source');
-    return { ff: r.find((x) => x.source === 'ff')?.t ?? null, tv: r.find((x) => x.source === 'tv')?.t ?? null };
+    const at = (s: string) => r.find((x) => x.source === s)?.t ?? null;
+    return { ff: at('ff'), tv: at('tv'), earn: at('earn') };
   }
 }

@@ -1,4 +1,4 @@
-// Minimal API client. Mutations carry X-Kryptoniq (the server's CSRF guard).
+// Minimal API client. Mutations carry X-Sentiq (the server's CSRF guard).
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -13,17 +13,28 @@ export class ApiError extends Error {
   }
 }
 
+let sessionEpoch = 0;
+/**
+ * A sign-in or sign-out happened: answers to requests sent before it belong to the previous user and are dropped
+ * (a late save of user A must not land in user B's screens).
+ */
+export function newSessionEpoch(): void {
+  sessionEpoch++;
+}
+
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const epoch = sessionEpoch;
   const headers: Record<string, string> = {};
-  if (method !== 'GET') headers['X-Kryptoniq'] = '1';
+  if (method !== 'GET') headers['X-Sentiq'] = '1';
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   let res: Response;
   try {
     res = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   } catch {
-    throw new ApiError(0, 'OFFLINE', 'Serverul Kryptoniq nu răspunde. Pornește-l cu `npm start`.');
+    throw new ApiError(0, 'OFFLINE', 'Serverul Sentiq nu răspunde. Pornește-l cu `scripts/sentiq.sh start`.');
   }
   const text = await res.text();
+  if (epoch !== sessionEpoch) throw new ApiError(0, 'STALE', 'Răspunsul era pentru sesiunea anterioară.');
   let json: unknown = null;
   try {
     json = text ? JSON.parse(text) : null;
@@ -32,6 +43,8 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   }
   if (!res.ok) {
     const err = (json as { error?: { code?: string; message?: string; details?: unknown; suggestions?: string[] } } | null)?.error;
+    // The session ended (signed out elsewhere, disabled, expired): the app goes back to the sign-in screen.
+    if (res.status === 401 && err?.code === 'AUTH_REQUIRED') window.dispatchEvent(new Event('sentiq:signed-out'));
     throw new ApiError(res.status, err?.code ?? 'HTTP', err?.message ?? `HTTP ${res.status}`, err?.details, err?.suggestions ?? []);
   }
   return json as T;

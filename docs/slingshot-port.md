@@ -1,4 +1,6 @@
-# Portul Slingshot System 3.3 în Kryptoniq
+# Portul Slingshot System 3.3 în Sentiq
+
+> Sentiq se numea Kryptoniq când a fost portat indicatorul (12 oct 2026). Al doilea indicator al graficelor, [DI] Logarithmic Moving Average, e portat la fel, linie cu linie: TD-CHARTUX §2 și TD §9.4 (`src/shared/indicator/lma.ts`).
 
 Sursa: `Sling Shot System/sling-shot-system.pine` (v3.3 = v3.2 „Market Structure Levels” + urmărirea TP/SL reparată, vezi FD-SS33 / TD-SS33).
 Implementare: `src/shared/indicator/slingshot.ts` (logica) + `src/shared/indicator/pine.ts` (funcțiile `ta.*`).

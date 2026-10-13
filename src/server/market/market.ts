@@ -26,6 +26,8 @@ export interface CandlesResult {
   /** Index of the last candle whose period has ended (−1 if none). */
   lastClosedIndex: number;
   fetchedAt: number;
+  /** Stocks: why older candles are shown (the source refused, e.g. the Twelve Data limit), FD-SENTIQ §4.3. */
+  notice?: string;
 }
 
 export interface SymbolInfo {

@@ -3,7 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router';
 import { App } from './App.tsx';
+import { installStaleRecovery } from './stale.ts';
 import './styles.css';
+
+// FD-STALE: a page whose code is gone after an update reloads onto the new version.
+installStaleRecovery();
 
 const queryClient = new QueryClient({
   defaultOptions: {

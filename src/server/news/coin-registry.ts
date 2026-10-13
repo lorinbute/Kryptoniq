@@ -1,4 +1,4 @@
-// Builds the CoinDetector from the CoinGecko top list (market_cache) and the user's watchlist.
+// Builds the CoinDetector from the CoinGecko top list (market_cache) and the users' watchlists.
 import type { Db } from '../db/database.ts';
 import { CoinDetector, type CoinEntry } from './coins.ts';
 
@@ -12,6 +12,7 @@ export interface CachedCoin {
 
 export class CoinRegistry {
   private detector: CoinDetector | null = null;
+  private classifying: CoinDetector | null = null;
   private readonly db: Db;
 
   constructor(db: Db) {
@@ -20,6 +21,7 @@ export class CoinRegistry {
 
   invalidate(): void {
     this.detector = null;
+    this.classifying = null;
   }
 
   coinList(): CachedCoin[] {
@@ -33,13 +35,34 @@ export class CoinRegistry {
     }
   }
 
+  /** The tags of the news (what each user's "favourites only" filter reads): every user's favourites and aliases. */
   get(): CoinDetector {
-    if (this.detector) return this.detector;
+    this.detector ??= this.build(false);
+    return this.detector;
+  }
+
+  /**
+   * What weighs a news item in the common sentiment (relevance, impact): the coin list and the ADMIN's favourites
+   * only (FD-USERS §2). Another user's free-text alias ("the" → BTC) tags news for their own filter, but never
+   * changes the index everybody sees.
+   */
+  classifier(): CoinDetector {
+    this.classifying ??= this.build(true);
+    return this.classifying;
+  }
+
+  private build(adminOnly: boolean): CoinDetector {
     const entries: CoinEntry[] = this.coinList()
       .filter((c) => typeof c.symbol === 'string' && typeof c.name === 'string')
       .map((c) => ({ symbol: c.symbol.toUpperCase(), names: [c.name] }));
     const aliases: Record<string, string[]> = {};
-    for (const w of this.db.all<{ coin: string; aliases: string }>('SELECT coin, aliases FROM watchlist')) {
+    const stocks: Record<string, string[]> = {};
+    // Every user's favourites (FD-USERS §2): news are tagged once for everybody, so the aliases of a symbol are the
+    // union of what each user gave it.
+    const rows = this.db.all<{ coin: string; aliases: string; kind: string }>(
+      `SELECT coin, aliases, kind FROM watchlist ${adminOnly ? "WHERE user_id IN (SELECT id FROM users WHERE role = 'admin')" : ''} ORDER BY user_id, position`,
+    );
+    for (const w of rows) {
       let list: string[] = [];
       try {
         const parsed = JSON.parse(w.aliases) as unknown;
@@ -47,9 +70,9 @@ export class CoinRegistry {
       } catch {
         list = [];
       }
-      aliases[w.coin] = list;
+      const into = w.kind === 'stock' ? stocks : aliases;
+      into[w.coin] = [...new Set([...(into[w.coin] ?? []), ...list])];
     }
-    this.detector = new CoinDetector(entries, aliases);
-    return this.detector;
+    return new CoinDetector(entries, aliases, stocks);
   }
 }

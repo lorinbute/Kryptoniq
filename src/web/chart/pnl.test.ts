@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BalanceRow, OrderRow, PositionRow } from '../../shared/api-types.ts';
-import { PNL_COLORS, pnlLines, pnlText } from './pnl.ts';
+import { PNL_COLORS, PNL_COLORS_LIGHT, pnlLines, pnlText } from './pnl.ts';
 
 const pos = (over: Partial<PositionRow> = {}): PositionRow => ({
   symbol: 'INJ/USDT:USDT', side: 'long', contracts: 5, size: 5, entryPrice: 7.62, markPrice: 7.7, unrealizedPnl: 0.4, percentage: 1, liquidationPrice: 5.1, leverage: 5, marginMode: 'isolated', notional: 38, ...over,
@@ -93,6 +93,22 @@ describe('pnlLines', () => {
     expect(titles(r)).toContain('PnL futures +0,40 USDT (+1,0%) @7.7');
   });
 
+  it('shares at a broker: their entry is just shares, their stop and limit sells are SL / TP (FD-SENTIQ)', () => {
+    const r = pnlLines({
+      base: 'AAPL',
+      quote: 'USD',
+      lastPrice: 340.97,
+      stock: true,
+      positions: [],
+      balances: [bal({ asset: 'AAPL', total: 3, avgPrice: 320, price: 340.97, value: 1022.91 })],
+      orders: [
+        order({ id: 'sl', market: 'spot', symbol: 'AAPL/USD', type: 'stop', price: null, triggerPrice: 310, stop: 'down', amount: 3 }),
+        order({ id: 'tp', market: 'spot', symbol: 'AAPL/USD', type: 'limit', price: 365, triggerPrice: null, stop: null, amount: 3 }),
+      ],
+    });
+    expect(r.lines.map((l) => l.title)).toEqual(['Intrare 3 AAPL', 'SL −30,00 USD (−3,1%)', 'TP +135,00 USD (+14,1%)', 'PnL +62,91 USD (+6,6%)']);
+  });
+
   it('names the account when several are shown', () => {
     const r = pnlLines({ base: 'INJ', quote: 'USDT', lastPrice: 7.7, positions: [pos({ liquidationPrice: null })], balances: [], orders: [order()], account: 'Main' });
     expect(r.lines.map((l) => l.title)).toEqual(['Intrare LONG 5 INJ (Main)', 'SL (Main) −1,14 USDT (−3,0%)', 'PnL (Main) +0,40 USDT (+1,0%)']);
@@ -106,5 +122,12 @@ describe('pnlLines', () => {
   it('no PnL without an average price or a trade on this coin', () => {
     expect(pnlLines({ base: 'INJ', quote: 'USDT', lastPrice: 7.7, positions: [], balances: [bal({ avgPrice: null })], orders: [order({ market: 'spot', symbol: 'INJ/USDT' })] }).lines).toEqual([]);
     expect(pnlLines({ base: 'BTC', quote: 'USDT', lastPrice: 80000, positions: [pos()], balances: [bal()], orders: [order()] }).lines).toEqual([]);
+  });
+
+  it('draws in the light palette when asked (FD-THEME §1)', () => {
+    const input = { base: 'INJ', quote: 'USDT', lastPrice: 7.727, positions: [pos()], balances: [], orders: [order(), order({ id: 'o2', type: 'limit', price: 8.359, triggerPrice: null, stop: null })] };
+    const r = pnlLines(input, PNL_COLORS_LIGHT);
+    expect(r.lines.map((l) => l.color)).toEqual([PNL_COLORS_LIGHT.entry, PNL_COLORS_LIGHT.liquidation, PNL_COLORS_LIGHT.sl, PNL_COLORS_LIGHT.tp, PNL_COLORS_LIGHT.tp]);
+    expect(pnlLines(input).lines.map((l) => l.color)).toEqual([PNL_COLORS.entry, PNL_COLORS.liquidation, PNL_COLORS.sl, PNL_COLORS.tp, PNL_COLORS.tp]);
   });
 });
