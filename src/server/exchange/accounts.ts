@@ -8,6 +8,7 @@ import { HttpError } from '../net/http.ts';
 import { secretHint, type SecretBox } from '../secrets/crypto.ts';
 import { ValidationError } from '../settings.ts';
 import { costBasis, STABLES, type FillLike } from './cost-basis.ts';
+import { fetchClosedPositions, HISTORY, historyFetch, periodStart, settleCoins, summarizeClosed, type StatsPeriod } from './trade-stats.ts';
 import { isRateLimitError, withRetry } from './retry.ts';
 import { BROKER_IDS, BrokerError, brokerAdapter, type BrokerAdapter, type BrokerId, type BrokerOptions } from './brokers.ts';
 
@@ -137,8 +138,9 @@ export interface Portfolio {
   positions: PositionRow[];
   orders: OrderRow[];
   fills: FillRow[];
-  totals: { spotValue: number; unrealizedPnl: number };
-  errors: Partial<Record<'balances' | 'positions' | 'orders' | 'fills' | 'prices' | 'mode', { code: ErrorCode; message: string }>>;
+  /** `futuresAvailable` (FD-TRADESTATS §2): free USDT in the futures account; null without futures (or before reading). */
+  totals: { spotValue: number; unrealizedPnl: number; futuresAvailable: number | null };
+  errors: Partial<Record<'balances' | 'positions' | 'orders' | 'fills' | 'prices' | 'mode' | 'futures', { code: ErrorCode; message: string }>>;
   /** Sections that failed now and show the last good data instead, with the time of that data. */
   stale: Partial<Record<StaleSection | 'prices', number>>;
   fetchedAt: number;
@@ -156,6 +158,37 @@ export interface ExchangeClients {
   spot: Exchange;
   futures: Exchange | null;
 }
+
+/**
+ * How the free USDT of the futures account is read (TD-TRADESTATS §1): ccxt params for `fetchBalance`, 'spot' when the
+ * account read for the balances already is the one (unified accounts), absent without futures (Kraken, Coinbase).
+ */
+const FUTURES_BALANCE: Record<string, Record<string, unknown> | 'spot'> = {
+  kucoin: { type: 'contract', code: 'USDT' },
+  binance: { type: 'future' },
+  bybit: 'spot',
+  okx: 'spot',
+  bitget: { type: 'swap' },
+};
+
+/** The results of closed futures positions (FD-TRADESTATS): the counts for one period of one account. */
+export interface TradeStats {
+  period: StatsPeriod;
+  from: number;
+  to: number;
+  /** The exchange gives a closed-position history (KuCoin, Bybit, OKX, Bitget). */
+  supported: boolean;
+  wins: number | null;
+  losses: number | null;
+  breakeven: number | null;
+  successRate: number | null;
+  /** In dollars. */
+  net: number | null;
+  netPartial: boolean;
+  error: { code: ErrorCode; message: string } | null;
+  fetchedAt: number;
+}
+const STATS_TTL_MS = 5 * 60_000;
 
 // KuCoin accepts at most 7 days per fills query; stay a minute inside the limit.
 const FILLS_WINDOW_MS = 7 * 86_400_000 - 60_000;
@@ -178,6 +211,8 @@ interface PriceSnapshot {
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+/** The free USDT of a balance (0 when the account has none). */
+const usdtFree = (bal: object): number => num((((bal as { free?: unknown }).free ?? {}) as Record<string, unknown>).USDT) ?? 0;
 
 interface AccountRow {
   id: number;
@@ -316,6 +351,8 @@ export class AccountsService {
   private readonly brokers = new Map<number, { adapter: BrokerAdapter; at: number }>();
   private readonly portfolios = new Map<number, { data: Portfolio; at: number }>();
   private readonly inflight = new Map<number, Promise<Portfolio>>();
+  private readonly stats = new Map<string, { data: TradeStats; at: number }>();
+  private readonly statsInflight = new Map<string, Promise<TradeStats>>();
   /** Last successful data per section, shown (marked stale) when a later refresh of that section fails. */
   private readonly lastGood = new Map<number, LastGood>();
   /** Latest good ticker list per exchange, and the request in flight for it. */
@@ -377,20 +414,20 @@ export class AccountsService {
   }
 
   /** A user's own accounts (FD-USERS §2: nobody sees anybody else's). */
-  list(userId: number): AccountView[] {
-    return this.db.all<AccountRow>('SELECT * FROM exchange_accounts WHERE user_id = ? ORDER BY id', [userId]).map((r) => this.toView(r));
+  async list(userId: number): Promise<AccountView[]> {
+    return (await this.db.all<AccountRow>('SELECT * FROM exchange_accounts WHERE user_id = ? ORDER BY id', [userId])).map((r) => this.toView(r));
   }
 
   /** Is account `id` this user's? Every route that names an account asks first (anybody else's is "not found"). */
-  owns(userId: number, id: number): boolean {
-    return this.db.get('SELECT 1 AS x FROM exchange_accounts WHERE id = ? AND user_id = ?', [id, userId]) !== undefined;
+  async owns(userId: number, id: number): Promise<boolean> {
+    return (await this.db.get('SELECT 1 AS x FROM exchange_accounts WHERE id = ? AND user_id = ?', [id, userId])) !== undefined;
   }
 
   /**
    * Saves an account: `{ exchange, label, env?, credentials: { …provider fields } }` (FD-SENTIQ §2). The older KuCoin
    * shape `{ exchange, label, apiKey, secret, password }` is still accepted.
    */
-  create(userId: number, input: unknown): AccountView {
+  async create(userId: number, input: unknown): Promise<AccountView> {
     const raw = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
     const provider: ProviderDef | undefined = typeof raw.exchange === 'string' ? providerById(raw.exchange) : undefined;
     if (!provider) throw new ValidationError(`Platformă necunoscută: ${String(raw.exchange ?? '')}`);
@@ -404,15 +441,20 @@ export class AccountsService {
       throw new ValidationError(`Date de cont invalide: ${r.error.issues.map((i) => i.message).join('; ')}`, r.error.issues);
     }
     const a = r.data;
-    if ((this.db.get<{ n: number }>('SELECT count(*) AS n FROM exchange_accounts WHERE user_id = ?', [userId])?.n ?? 0) >= MAX_ACCOUNTS_PER_USER) {
-      throw new ValidationError(`Poți conecta cel mult ${MAX_ACCOUNTS_PER_USER} conturi.`);
-    }
     const first = provider.fields[0]?.key ?? '';
-    const id = this.db.run(
-      'INSERT INTO exchange_accounts(user_id, exchange, label, api_key, secret, password, credentials, env, key_hint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [userId, a.exchange, a.label, '', '', null, this.box.encrypt(JSON.stringify(a.credentials)), a.env, secretHint(a.credentials[first] ?? ''), Date.now()],
-    ).lastInsertRowid;
-    return this.toView(this.row(id) as AccountRow);
+    // Counted and added in one transaction: two saves at once never pass the limit.
+    const id = await this.db.tx(async () => {
+      if (((await this.db.get<{ n: number }>('SELECT count(*) AS n FROM exchange_accounts WHERE user_id = ?', [userId]))?.n ?? 0) >= MAX_ACCOUNTS_PER_USER) {
+        throw new ValidationError(`Poți conecta cel mult ${MAX_ACCOUNTS_PER_USER} conturi.`);
+      }
+      return (
+        await this.db.run(
+          'INSERT INTO exchange_accounts(user_id, exchange, label, api_key, secret, password, credentials, env, key_hint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [userId, a.exchange, a.label, '', '', null, this.box.encrypt(JSON.stringify(a.credentials)), a.env, secretHint(a.credentials[first] ?? ''), Date.now()],
+        )
+      ).lastInsertRowid;
+    });
+    return this.toView((await this.row(id)) as AccountRow);
   }
 
   /**
@@ -420,17 +462,17 @@ export class AccountsService {
    * On failure the account is removed and the reason is thrown, so the form can show it and keep what was typed.
    */
   async connect(userId: number, input: unknown): Promise<AccountView> {
-    const created = this.create(userId, input);
+    const created = await this.create(userId, input);
     let view: AccountView;
     try {
       view = await this.test(created.id);
     } catch (err) {
       // E.g. a client that cannot even be built from these keys: nothing half-saved stays behind.
-      this.delete(created.id);
+      await this.delete(created.id);
       throw err;
     }
     if (view.lastError) {
-      this.delete(created.id);
+      await this.delete(created.id);
       throw new ValidationError(view.lastError.replace(/^[A-Z_]+:\s*/, ''));
     }
     return view;
@@ -450,23 +492,21 @@ export class AccountsService {
     return adapter;
   }
 
-  delete(id: number): boolean {
+  async delete(id: number): Promise<boolean> {
     this.clients.delete(id);
     this.brokers.delete(id);
     this.portfolios.delete(id);
     this.lastGood.delete(id);
-    return this.db.run('DELETE FROM exchange_accounts WHERE id = ?', [id]).changes > 0;
+    return (await this.db.run('DELETE FROM exchange_accounts WHERE id = ?', [id])).changes > 0;
   }
 
-  private row(id: number): AccountRow | undefined {
+  private row(id: number): Promise<AccountRow | undefined> {
     return this.db.get<AccountRow>('SELECT * FROM exchange_accounts WHERE id = ?', [id]);
   }
 
-  private clientsFor(id: number): ExchangeClients {
+  private clientsFor(id: number, row: AccountRow): ExchangeClients {
     const cached = this.clients.get(id);
     if (cached && Date.now() - cached.at < CLIENT_TTL_MS) return cached.clients;
-    const row = this.row(id);
-    if (!row) throw new ValidationError(`Contul ${id} nu există`);
     const clients = this.factory(row.exchange, this.credsOf(row));
     this.clients.set(id, { clients, at: Date.now() });
     return clients;
@@ -474,45 +514,45 @@ export class AccountsService {
 
   /** Verifies the key with a read (balance, account summary or report) and, on KuCoin, reads its permissions. */
   async test(id: number): Promise<AccountView> {
-    const row = this.row(id);
+    const row = await this.row(id);
     if (!row) throw new ValidationError(`Contul ${id} nu există`);
     if (isBroker(row.exchange)) {
       try {
         await this.brokerFor(id, row as AccountRow & { exchange: BrokerId }).test();
-        this.db.run('UPDATE exchange_accounts SET last_ok_at = ?, last_error = NULL WHERE id = ?', [Date.now(), id]);
+        await this.db.run('UPDATE exchange_accounts SET last_ok_at = ?, last_error = NULL WHERE id = ?', [Date.now(), id]);
       } catch (err) {
         const e = mapExchangeError(err);
-        this.db.run('UPDATE exchange_accounts SET last_error = ? WHERE id = ?', [`${e.code}: ${e.message}`, id]);
+        await this.db.run('UPDATE exchange_accounts SET last_error = ? WHERE id = ?', [`${e.code}: ${e.message}`, id]);
         this.brokers.delete(id);
       }
-      return this.toView(this.row(id) as AccountRow);
+      return this.toView((await this.row(id)) as AccountRow);
     }
-    const { spot } = this.clientsFor(id);
+    const { spot } = this.clientsFor(id, row);
     try {
       await this.ensureMarkets(spot);
       await this.retryOn(spot, () => spot.fetchBalance());
       const permissions = await keyPermissions(row.exchange, spot);
-      this.db.run('UPDATE exchange_accounts SET last_ok_at = ?, last_error = NULL, permissions = ? WHERE id = ?', [Date.now(), permissions, id]);
+      await this.db.run('UPDATE exchange_accounts SET last_ok_at = ?, last_error = NULL, permissions = ? WHERE id = ?', [Date.now(), permissions, id]);
     } catch (err) {
       const e = mapExchangeError(err);
       const text = e.code === 'RATE_LIMIT' ? 'exchange-ul limitează temporar cererile; încearcă din nou peste un minut' : e.message;
-      this.db.run('UPDATE exchange_accounts SET last_error = ? WHERE id = ?', [`${e.code}: ${text}`, id]);
+      await this.db.run('UPDATE exchange_accounts SET last_error = ? WHERE id = ?', [`${e.code}: ${text}`, id]);
       this.clients.delete(id);
     }
-    return this.toView(this.row(id) as AccountRow);
+    return this.toView((await this.row(id)) as AccountRow);
   }
 
-  setCostBasis(accountId: number, asset: string, avgPrice: number | null): void {
-    if (!this.row(accountId)) throw new ValidationError(`Contul ${accountId} nu există`);
+  async setCostBasis(accountId: number, asset: string, avgPrice: number | null): Promise<void> {
+    if (!(await this.row(accountId))) throw new ValidationError(`Contul ${accountId} nu există`);
     const a = asset.trim().toUpperCase();
     if (!/^[A-Z0-9][A-Z0-9.-]{0,19}$/.test(a)) throw new ValidationError('Activ invalid');
     if (avgPrice === null) {
-      this.db.run('DELETE FROM cost_basis WHERE account_id = ? AND asset = ?', [accountId, a]);
+      await this.db.run('DELETE FROM cost_basis WHERE account_id = ? AND asset = ?', [accountId, a]);
     } else {
       if (!Number.isFinite(avgPrice) || avgPrice <= 0) throw new ValidationError('Prețul mediu trebuie să fie pozitiv');
-      this.db.run(
-        'INSERT INTO cost_basis(account_id, asset, avg_price, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(account_id, asset) DO UPDATE SET avg_price = excluded.avg_price, updated_at = excluded.updated_at',
-        [accountId, a, avgPrice, Date.now()],
+      await this.db.run(
+        'UPDATE cost_basis SET avg_price = @p, updated_at = @t WHERE account_id = @id AND asset = @a; IF @@ROWCOUNT = 0 INSERT INTO cost_basis(account_id, asset, avg_price, updated_at) VALUES (@id, @a, @p, @t)',
+        { id: accountId, a, p: avgPrice, t: Date.now() },
       );
     }
     this.portfolios.delete(accountId);
@@ -528,12 +568,54 @@ export class AccountsService {
     return p;
   }
 
+  /** FD-TRADESTATS: closed futures positions of one period, kept 5 minutes per account and period. */
+  async tradeStats(id: number, period: StatsPeriod, tz: string, force = false): Promise<TradeStats> {
+    const key = `${id}|${period}|${tz}`;
+    const cached = this.stats.get(key);
+    if (!force && cached && Date.now() - cached.at < STATS_TTL_MS) return cached.data;
+    const pending = this.statsInflight.get(key);
+    if (pending) return pending;
+    const p = this.loadStats(id, period, tz)
+      .then((data) => {
+        if (!data.error) this.stats.set(key, { data, at: Date.now() });
+        return data;
+      })
+      .finally(() => this.statsInflight.delete(key));
+    this.statsInflight.set(key, p);
+    return p;
+  }
+
+  private async loadStats(id: number, period: StatsPeriod, tz: string): Promise<TradeStats> {
+    const row = await this.row(id);
+    if (!row) throw new ValidationError(`Contul ${id} nu există`);
+    const now = Date.now();
+    const from = periodStart(period, now, tz);
+    const base = { period, from, to: now, wins: null, losses: null, breakeven: null, successRate: null, net: null, netPartial: false, error: null, fetchedAt: now };
+    if (isBroker(row.exchange) || !HISTORY[row.exchange]) return { ...base, supported: false };
+    const { spot } = this.clientsFor(id, row);
+    const retry = <T>(fn: () => Promise<T>) => this.retryOn(spot, fn);
+    try {
+      await this.ensureMarkets(spot);
+      const closed = await fetchClosedPositions(row.exchange, historyFetch(spot, retry), from, now);
+      // Results settled in a coin (BTC-margined contracts) are turned into dollars at today's price.
+      const prices = new Map<string, number | null>();
+      for (const coin of settleCoins(closed)) {
+        prices.set(coin, await retry(() => spot.fetchTicker(`${coin}/USDT`)).then((t) => num(t.last), () => null));
+      }
+      return { ...base, supported: true, ...summarizeClosed(closed, (c) => prices.get(c) ?? null) };
+    } catch (err) {
+      const error = mapExchangeError(err);
+      this.log.warn(`trade stats ${id} (${period}): ${error.code}`);
+      return { ...base, supported: true, error };
+    }
+  }
+
   private async loadPortfolio(id: number): Promise<Portfolio> {
-    const row = this.row(id);
+    const row = await this.row(id);
     if (!row) throw new ValidationError(`Contul ${id} nu există`);
     if (isBroker(row.exchange)) return this.loadBroker(id, row as AccountRow & { exchange: BrokerId });
     const isKucoin = row.exchange === 'kucoin';
-    const { spot, futures } = this.clientsFor(id);
+    const { spot, futures } = this.clientsFor(id, row);
     const errors: Portfolio['errors'] = {};
     const since = Date.now() - FILLS_WINDOW_MS;
     const call = async <T>(section: keyof Portfolio['errors'], fn: () => Promise<T>): Promise<T | null> => {
@@ -580,7 +662,8 @@ export class AccountsService {
 
     type OrderIn = { o: Awaited<ReturnType<Exchange['fetchOpenOrders']>>[number]; market: 'spot' | 'futures' };
     type FillIn = { t: Awaited<ReturnType<Exchange['fetchMyTrades']>>[number]; market: 'spot' | 'futures' };
-    const [balancesRaw, positionsRaw, triggerOrders, futuresOrders, futuresFills] = await Promise.all([
+    const futuresHow = FUTURES_BALANCE[row.exchange];
+    const [balancesRaw, positionsRaw, triggerOrders, futuresOrders, futuresFills, futuresOwn] = await Promise.all([
       call('balances', async () => {
         if (!isKucoin) return [{ account: 'spot', bal: await rs(() => spot.fetchBalance()) }];
         if (!classic) return [{ account: 'unified', bal: await rs(() => spot.fetchBalance()) }];
@@ -608,7 +691,10 @@ export class AccountsService {
           : [],
       ),
       call('fills', async () => (classic && futures ? (await rf(() => futures.fetchMyTrades(undefined, since, 200))).map((t): FillIn => ({ t, market: 'futures' })) : [])),
+      // FD-TRADESTATS §2: the free USDT of the futures account (its own read, unless it is the unified one above).
+      futuresHow && futuresHow !== 'spot' ? call('futures', async () => usdtFree(await rs(() => spot.fetchBalance(futuresHow)))) : Promise.resolve(null),
     ]);
+    const futuresAvailable = futuresHow === 'spot' ? (balancesRaw?.[0] ? usdtFree(balancesRaw[0].bal) : null) : (futuresOwn ?? null);
 
     // Non-stable assets with a balance, across all accounts (trade + main).
     const held = new Set<string>();
@@ -619,8 +705,12 @@ export class AccountsService {
     // The pairs of the held coins and the favourites, for the exchanges (and KuCoin HF accounts) that need a symbol.
     const wanted = new Set(held);
     // The favourites of the account's owner (FD-USERS §2).
-    for (const w of this.db.all<{ coin: string; kind: string }>('SELECT w.coin, w.kind FROM watchlist w JOIN exchange_accounts a ON a.user_id = w.user_id WHERE a.id = ?', [id])) {
-      if (w.kind !== 'stock') wanted.add(w.coin);
+    for (const w of await this.db.all<{ coin: string; kind: string }>(
+      'SELECT w.coin, w.kind FROM watchlist w JOIN exchange_accounts a ON a.user_id = w.user_id WHERE a.id = ? ORDER BY w.position, w.coin',
+      [id],
+    )) {
+      // Coins only: a share or an index (^SPX) is not a pair on the exchange.
+      if (w.kind !== 'stock' && w.kind !== 'index') wanted.add(w.coin);
     }
     const symbols = [...wanted].map((a) => `${a}/USDT`).filter((sym) => Boolean(spot.markets?.[sym])).slice(0, 25);
     const perSymbolOrders = async () => {
@@ -710,7 +800,7 @@ export class AccountsService {
       .filter((f) => Number.isFinite(f.price) && Number.isFinite(f.amount))
       .sort((a, b) => b.timestamp - a.timestamp);
 
-    const manual = new Map(this.db.all<{ asset: string; avg_price: number }>('SELECT asset, avg_price FROM cost_basis WHERE account_id = ?', [id]).map((r) => [r.asset, r.avg_price]));
+    const manual = new Map((await this.db.all<{ asset: string; avg_price: number }>('SELECT asset, avg_price FROM cost_basis WHERE account_id = ?', [id])).map((r) => [r.asset, r.avg_price]));
     const costFills: FillLike[] = fills
       .filter((f) => f.market === 'spot' && (f.side === 'buy' || f.side === 'sell'))
       .map((f) => ({ symbol: f.symbol, side: f.side as 'buy' | 'sell', price: f.price, amount: f.amount, timestamp: f.timestamp, fee: { cost: f.fee ?? 0, currency: f.feeCurrency ?? undefined } }));
@@ -841,13 +931,14 @@ export class AccountsService {
       totals: {
         spotValue: finalBalances.reduce((a, b) => a + (b.value ?? 0), 0),
         unrealizedPnl: finalPositions.reduce((a, b) => a + (b.unrealizedPnl ?? 0), 0),
+        futuresAvailable,
       },
       errors,
       stale,
       fetchedAt,
     };
     const hardFailure = errors.balances?.code === 'AUTH' || errors.balances?.code === 'PERMISSION';
-    this.db.run('UPDATE exchange_accounts SET last_ok_at = CASE WHEN ? THEN last_ok_at ELSE ? END, last_error = ? WHERE id = ?', [
+    await this.db.run('UPDATE exchange_accounts SET last_ok_at = CASE WHEN ? = 1 THEN last_ok_at ELSE ? END, last_error = ? WHERE id = ?', [
       hardFailure ? 1 : 0,
       Date.now(),
       hardFailure ? `${errors.balances?.code}: ${errors.balances?.message}` : null,
@@ -871,7 +962,7 @@ export class AccountsService {
       snap = { currency: this.portfolios.get(id)?.data.currency ?? 'USD', balances: [], positions: [], orders: [], fills: [], cash: null, errors: { balances: e, positions: e, orders: e, fills: e } };
     }
     const errors: Portfolio['errors'] = { ...snap.errors };
-    const manual = new Map(this.db.all<{ asset: string; avg_price: number }>('SELECT asset, avg_price FROM cost_basis WHERE account_id = ?', [id]).map((r) => [r.asset, r.avg_price]));
+    const manual = new Map((await this.db.all<{ asset: string; avg_price: number }>('SELECT asset, avg_price FROM cost_basis WHERE account_id = ?', [id])).map((r) => [r.asset, r.avg_price]));
     const balances = snap.balances
       .map((b): BalanceRow => {
         const m = manual.get(b.asset);
@@ -917,6 +1008,7 @@ export class AccountsService {
       totals: {
         spotValue: finalBalances.reduce((a, b) => a + (b.value ?? 0), 0),
         unrealizedPnl: finalPositions.reduce((a, b) => a + (b.unrealizedPnl ?? 0), 0),
+        futuresAvailable: null,
       },
       errors,
       stale,
@@ -924,7 +1016,7 @@ export class AccountsService {
     };
     const first = errors.balances;
     const hardFailure = first?.code === 'AUTH' || first?.code === 'PERMISSION';
-    this.db.run('UPDATE exchange_accounts SET last_ok_at = CASE WHEN ? THEN last_ok_at ELSE ? END, last_error = ? WHERE id = ?', [
+    await this.db.run('UPDATE exchange_accounts SET last_ok_at = CASE WHEN ? = 1 THEN last_ok_at ELSE ? END, last_error = ? WHERE id = ?', [
       hardFailure ? 1 : 0,
       Date.now(),
       hardFailure ? `${first?.code}: ${first?.message}` : null,

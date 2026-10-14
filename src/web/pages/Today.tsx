@@ -4,16 +4,18 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { clsx } from 'clsx';
 import type { CalendarResponse, DaySentiment, HistoryPoint, NewsPage, ScanResult, ScanRow, WatchItem } from '../../shared/api-types.ts';
-import { addDays, dayBounds, dayKey } from '../../shared/time.ts';
-import { api, qs } from '../api.ts';
+import { addDays, dayBounds, dayKey, type Timeframe } from '../../shared/time.ts';
+import { INDEX_DELAY_NOTE, plainSymbol } from '../../shared/indices.ts';
+import { SCANNER_TFS } from '../../shared/settings.ts';
+import { api, errorMessage, qs } from '../api.ts';
 import { confidenceLabel, fmtAgo, fmtCountdown, fmtDate, fmtPct, fmtPrice, fmtTime, fmtWeekday, indexLabel, indexTone, type Tone } from '../format.ts';
-import { useNextHighImpact, useNow, useSettings, useStockSet, useTz, useWatchlist } from '../hooks.ts';
+import { useNextHighImpact, useNow, useSaveSettings, useSettings, useStockSet, useTz, useWatchlist } from '../hooks.ts';
 import { Sparkline, useSparks, useStockQuotes, useStockSparks } from '../components/MarketStrip.tsx';
 import { chartPathOf } from '../chart/paths.ts';
 import { sparkChange } from '../spark.ts';
 import { ErrorNote, fmtScore, Loading } from '../components/ui.tsx';
 import { CoinLogo, EventIcon, TopicIcon } from '../components/icons.tsx';
-import { CalendarClock, Flame, Gauge, History, Radio, type LucideIcon } from 'lucide-react';
+import { CalendarClock, Flame, Gauge, History, Radio, TrendingDown, TrendingUp, type LucideIcon } from 'lucide-react';
 
 const HOUR = 3_600_000;
 const TONE_TEXT: Record<Tone, string> = { bull: 'text-bull', bear: 'text-bear', neutral: 'text-text' };
@@ -93,9 +95,9 @@ function Spectrum({ index }: { index: number | null }) {
       </div>
       <div className="flex justify-between text-[11.5px] text-faint" aria-hidden>
         <span>Foarte negativ</span>
-        <span className="max-sm:hidden">Negativ</span>
+        <span className="@max-sm:hidden">Negativ</span>
         <span>Neutru</span>
-        <span className="max-sm:hidden">Pozitiv</span>
+        <span className="@max-sm:hidden">Pozitiv</span>
         <span>Foarte pozitiv</span>
       </div>
     </div>
@@ -160,7 +162,8 @@ function SentimentTile() {
       label="Sentimentul zilei"
       labelId="tile-sentiment"
       icon={Gauge}
-      className="gap-4 px-6 py-5 xl:col-span-7 xl:row-span-2 md:col-span-2"
+      // From 768 px: the left column, as tall as the two tiles beside it (FD-TODAYGRID §2). A container: its parts follow its width.
+      className="@container gap-4 px-6 py-5 md:row-span-2 xl:col-span-7"
       actions={
         s ? (
           <span className="text-right text-[12.5px] text-faint">
@@ -199,7 +202,7 @@ function SentimentTile() {
           </div>
           <Spectrum index={scored ? s.index : null} />
           <DayChart s={s} tz={tz} />
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-2.5">
+          <div className="grid grid-cols-2 gap-2 @lg:grid-cols-4 @lg:gap-2.5">
             {(
               [
                 ['Crypto', s.breakdown.crypto],
@@ -212,7 +215,7 @@ function SentimentTile() {
               <div key={label} className="min-w-0 rounded-xl border border-line-soft bg-panel-2 px-3 py-2.5 sm:px-3.5">
                 <div className="truncate text-[12px] text-muted">
                   {label}
-                  <span className="max-sm:hidden">, {b.count} știri</span>
+                  <span className="@max-sm:hidden">, {b.count} știri</span>
                 </div>
                 <div className={clsx('num-display mt-0.5 text-[22px] font-semibold', b.count ? TONE_TEXT[indexTone(b.index)] : 'text-faint')}>{b.count ? b.index.toFixed(1) : '—'}</div>
               </div>
@@ -399,12 +402,44 @@ function ScanLines({ r, digits, tf }: { r: ScanRow | undefined; digits: number; 
   );
 }
 
+/** FD-MARKETSRC §2: the timeframe of the Slingshot signals on the cards, chosen here where they are seen. */
+function SignalTimeframe({ tf }: { tf: Timeframe }) {
+  const save = useSaveSettings();
+  // A timeframe saved before (e.g. 30m) stays on the switch until another one is chosen.
+  const options: Timeframe[] = (SCANNER_TFS as readonly Timeframe[]).includes(tf) ? [...SCANNER_TFS] : [...SCANNER_TFS, tf];
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2.5 text-[12.5px] text-muted">
+      <span id="signal-tf">Semnale Slingshot pe</span>
+      <div className="seg" role="group" aria-labelledby="signal-tf">
+        {options.map((t) => (
+          <button key={t} type="button" aria-pressed={t === tf} disabled={save.isPending} onClick={() => t !== tf && save.mutate({ scanner: { tf: t } })}>
+            {t}
+          </button>
+        ))}
+      </div>
+      {save.error && <span className="text-bear">{errorMessage(save.error)}</span>}
+    </div>
+  );
+}
+
+/** The Slingshot trend on a card (FD-UIPOLISH): an arrow, green up or red down; the word in its tooltip and label. */
+function TrendArrow({ up }: { up: boolean }) {
+  const label = up ? 'Uptrend (Slingshot)' : 'Downtrend (Slingshot)';
+  const Icon = up ? TrendingUp : TrendingDown;
+  return (
+    <span className={clsx('inline-flex shrink-0', up ? 'text-bull' : 'text-bear')} title={label} role="img" aria-label={label}>
+      <Icon size={18} strokeWidth={2.2} aria-hidden />
+    </span>
+  );
+}
+
 function CoinsTile() {
   const settings = useSettings();
   const watchlist = useWatchlist();
   const all = watchlist.data ?? [];
-  const coins = all.filter((w) => w.kind !== 'stock');
-  const stocks = all.filter((w) => w.kind === 'stock');
+  // Shares and indices (FD-INDICES) share the stock card and its data; everything else is a coin.
+  const coins = all.filter((w) => w.kind === 'crypto');
+  const stocks = all.filter((w) => w.kind !== 'crypto');
   const sparks = useSparks(coins.map((w) => `${w.coin}/${w.quote}`));
   const stockSymbols = stocks.map((w) => w.coin);
   const quotes = useStockQuotes(stockSymbols);
@@ -425,14 +460,14 @@ function CoinsTile() {
     return (
       <Link key={sym} to={`/charts/${w.coin}/${w.quote}`} className={card}>
         <div className="flex items-center justify-between gap-2">
-          <span className="inline-flex items-center gap-2 text-[15px] font-semibold">
+          <span className="inline-flex min-w-0 items-center gap-2 text-[15px] font-semibold">
             <CoinLogo coin={w.coin} size={22} />
-            <span>
+            <span className="truncate">
               {w.coin}
               <span className="font-normal text-faint">/{w.quote}</span>
             </span>
           </span>
-          {r?.ok && <span className={clsx('text-[12px]', r.uptrend ? 'text-bull' : 'text-bear')}>{r.uptrend ? 'Uptrend' : 'Downtrend'}</span>}
+          {r?.ok && <TrendArrow up={Boolean(r.uptrend)} />}
         </div>
         <div className="flex items-baseline justify-between gap-2">
           <span className="num text-[20px] tracking-[-0.02em]">{price !== undefined ? fmtPrice(price, digits) : '…'}</span>
@@ -457,13 +492,15 @@ function CoinsTile() {
         <div className="flex items-center justify-between gap-2">
           <span className="inline-flex min-w-0 items-center gap-2 text-[15px] font-semibold">
             <CoinLogo coin={w.coin} size={22} badge square />
-            <span className="shrink-0">{w.coin}</span>
+            <span className="shrink-0">{plainSymbol(w.coin)}</span>
             {w.name && <span className="truncate text-[12.5px] font-normal text-faint">{w.name}</span>}
           </span>
-          {r?.ok && <span className={clsx('shrink-0 text-[12px]', r.uptrend ? 'text-bull' : 'text-bear')}>{r.uptrend ? 'Uptrend' : 'Downtrend'}</span>}
+          {r?.ok && <TrendArrow up={Boolean(r.uptrend)} />}
         </div>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="num text-[20px] tracking-[-0.02em]">{price !== undefined ? fmtPrice(price, digits) : q?.error ? '—' : '…'}</span>
+          <span className="num text-[20px] tracking-[-0.02em]" title={w.kind === 'index' && q?.delayed ? INDEX_DELAY_NOTE : undefined}>
+            {price !== undefined ? fmtPrice(price, digits) : q?.error ? '—' : '…'}
+          </span>
           <span className="flex items-baseline gap-2">
             {closed && <span className="text-[11.5px] text-faint">închis</span>}
             {change !== null && <span className={clsx('num text-[12.5px]', change >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(change)}</span>}
@@ -475,10 +512,11 @@ function CoinsTile() {
     );
   };
   return (
-    <section aria-labelledby="tile-coins" className="flex min-w-0 flex-col gap-2 md:col-span-2 xl:col-span-6">
+    <section aria-labelledby="tile-coins" className="flex min-w-0 flex-col gap-2 md:col-span-2 xl:col-span-12">
       <h2 id="tile-coins" className="sr-only">
         Favoritele mele
       </h2>
+      {all.length > 0 && <SignalTimeframe tf={tf} />}
       {watchlist.data && all.length === 0 ? (
         <div className="panel flex h-full flex-col items-start justify-center gap-3 px-5 py-4 text-[13.5px] text-muted">
           Nu ai monede sau acțiuni favorite încă.
@@ -489,7 +527,7 @@ function CoinsTile() {
       ) : (
         <div className="grid h-full grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3.5">
           {/* In the order of the watchlist (Settings → Favorite), coins and stocks mixed. */}
-          {all.map((w) => (w.kind === 'stock' ? stockCard(w, stockSymbols.indexOf(w.coin)) : coinCard(w, coins.indexOf(w))))}
+          {all.map((w) => (w.kind !== 'crypto' ? stockCard(w, stockSymbols.indexOf(w.coin)) : coinCard(w, coins.indexOf(w))))}
         </div>
       )}
     </section>
@@ -509,7 +547,7 @@ function DriversTile() {
       label="Ce mișcă piața"
       labelId="tile-drivers"
       icon={Flame}
-      className="xl:col-span-3"
+      className="xl:col-span-7"
       actions={
         total > 4 ? (
           <button type="button" className="link-accent" onClick={() => setAll((a) => !a)} aria-expanded={all}>
@@ -555,7 +593,7 @@ function HistoryTile() {
   const slots = Array.from({ length: DAYS }, (_, k) => addDays(today, k - (DAYS - 1)));
   const byDay = new Map(pts.map((p) => [p.day, p]));
   return (
-    <Tile label="Ultimele 30 de zile" labelId="tile-history" icon={History} className="xl:col-span-3">
+    <Tile label="Ultimele 30 de zile" labelId="tile-history" icon={History} className="xl:col-span-5">
       <div className="grid h-16 grid-cols-[repeat(30,minmax(0,1fr))] gap-[3px]" role="img" aria-label="Indicele zilnic din ultimele 30 de zile, față de pragul neutru 50">
         {slots.map((day) => {
           const p = byDay.get(day);
@@ -584,9 +622,10 @@ export function TodayPage() {
       <SentimentTile />
       <NextEventTile />
       <LiveNewsTile />
-      <CoinsTile />
+      {/* Above the favourites at every width, never beside them (FD-TODAYGRID): a long watchlist stretched them. */}
       <DriversTile />
       <HistoryTile />
+      <CoinsTile />
     </div>
   );
 }

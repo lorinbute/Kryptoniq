@@ -1,4 +1,5 @@
-// Append-only list of schema migrations; index + 1 = PRAGMA user_version after it runs.
+// The SQLite migrations of Sentiq before FD-AZURE (index + 1 = PRAGMA user_version after it runs). Frozen: only the
+// importer uses them, to bring an older file to version 8 before copying it into Azure SQL (TD-AZURE §9).
 export const MIGRATIONS: string[] = [
   `
   CREATE TABLE settings (

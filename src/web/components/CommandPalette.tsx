@@ -6,9 +6,10 @@ import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { CornerDownLeft, FileText, Newspaper, Search, type LucideIcon } from 'lucide-react';
 import type { StockSearchHit, SymbolInfo } from '../../shared/api-types.ts';
-import { chartPathOf, stockChartPath } from '../chart/paths.ts';
+import { chartPathOf, indexChartPath, stockChartPath } from '../chart/paths.ts';
+import { plainSymbol, searchIndices } from '../../shared/indices.ts';
 import { api, qs } from '../api.ts';
-import { useSettings, useWatchlist } from '../hooks.ts';
+import { useMarketSource, useWatchlist } from '../hooks.ts';
 import { CoinLogo } from './icons.tsx';
 
 export interface PaletteLink {
@@ -19,7 +20,7 @@ export interface PaletteLink {
 
 interface Item {
   id: string;
-  group: 'Pagini' | 'Favorite' | 'Perechi' | 'Acțiuni' | 'Știri';
+  group: 'Pagini' | 'Favorite' | 'Perechi' | 'Acțiuni' | 'Indici' | 'Știri';
   label: string;
   hint?: string;
   to: string;
@@ -48,7 +49,8 @@ function useDebounced<T>(value: T, ms: number): T {
 export function CommandPalette({ open, onClose, pages }: { open: boolean; onClose: () => void; pages: PaletteLink[] }) {
   const navigate = useNavigate();
   const watchlist = useWatchlist();
-  const exchange = useSettings().data?.market.exchange;
+  // The search covers the user's exchange and the default one (FD-MARKETSRC); the key follows the user's.
+  const exchange = useMarketSource().data?.userExchange;
   const [text, setText] = useState('');
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -76,10 +78,11 @@ export function CommandPalette({ open, onClose, pages }: { open: boolean; onClos
     const favs = new Set<string>();
     for (const w of watchlist.data ?? []) {
       const stock = w.kind === 'stock';
-      const sym = stock ? w.coin : `${w.coin}/${w.quote}`;
-      favs.add(stock ? `stock:${w.coin}` : sym);
+      // A share by its ticker, an index by its symbol without "^" (FD-INDICES), a coin by its pair.
+      const sym = w.kind === 'crypto' ? `${w.coin}/${w.quote}` : plainSymbol(w.coin);
+      favs.add(w.kind === 'crypto' ? sym : `${w.kind}:${w.coin}`);
       if (!f || fold(sym).includes(f) || w.aliases.some((a) => fold(a).includes(f)) || (w.name !== null && fold(w.name).includes(f)))
-        out.push({ id: `w:${sym}`, group: 'Favorite', label: sym, hint: stock ? (w.name ?? 'acțiune') : 'grafic', to: chartPathOf(w), coin: w.coin, stock });
+        out.push({ id: `w:${w.kind}:${sym}`, group: 'Favorite', label: sym, hint: w.kind === 'crypto' ? 'grafic' : (w.name ?? (stock ? 'acțiune' : 'indice')), to: chartPathOf(w), coin: w.coin, stock });
     }
     if (q.length >= 2)
       for (const s of (symbols.data ?? []).filter((s) => !favs.has(s.symbol)).slice(0, 6))
@@ -87,6 +90,9 @@ export function CommandPalette({ open, onClose, pages }: { open: boolean; onClos
     if (q.length >= 2)
       for (const s of (stocks.data ?? []).filter((s) => !favs.has(`stock:${s.symbol}`)).slice(0, 6))
         out.push({ id: `a:${s.symbol}`, group: 'Acțiuni', label: s.symbol, hint: [s.name, s.exchange].filter(Boolean).join(' · '), to: stockChartPath(s.symbol), coin: s.symbol, stock: true });
+    if (q.length >= 2)
+      for (const i of searchIndices(q).filter((i) => !favs.has(`index:${i.id}`)))
+        out.push({ id: `i:${i.id}`, group: 'Indici', label: i.symbol, hint: i.name, to: indexChartPath(i.id), coin: i.id });
     if (q) out.push({ id: 'n:search', group: 'Știri', label: `Caută în știri „${q}”`, to: `/news${qs({ q })}`, icon: Newspaper });
     return out;
   }, [q, pages, watchlist.data, symbols.data, stocks.data]);

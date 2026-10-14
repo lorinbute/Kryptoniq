@@ -5,26 +5,28 @@ export type { NewsItemDto, NewsPage } from '../server/news/query.ts';
 export type { EconIndicator, EconomyView } from '../server/economy/service.ts';
 export type { StoredSummary, SummaryContent } from '../server/summary/service.ts';
 export type { SummaryChart } from '../server/summary/context.ts';
-import type { Connection as McpConnection } from '../server/mcp/oauth.ts';
-export type { McpConnection };
 
-/** FD-MCP §5: the Claude connector on the Security page. */
-export type McpStatus = { enabled: false } | { enabled: true; url: string; connections: McpConnection[] };
-
-/** FD-MCP §4: an app asking to connect, as the consent page shows it. */
-export interface OAuthRequestInfo {
-  client: { name: string; host: string; kind: 'cimd' | 'dcr' };
-  redirectHost: string;
-  /** The callback is this computer (Claude Code). */
-  loopback: boolean;
-  scopes: string[];
-  account: { name: string; email: string | null };
+/** FD-MARKETSRC: where the user's crypto prices come from (`/api/market/source`). */
+export interface MarketSourceInfo {
+  /** The exchange used for the pair asked about (without one: the user's). */
+  exchange: string;
+  /** The user's exchange: the connected one, the one chosen among several, or the default. */
+  userExchange: string;
+  /** Connected exchanges that can give prices, first added first (a choice is offered from two up). */
+  connected: string[];
+  defaultExchange: string;
+  /** Candles loaded per chart. */
+  candles: number;
+  /** The timeframes `exchange` offers. */
+  timeframes: import('./time.ts').Timeframe[];
 }
+
 export type { CalendarEvent } from '../server/calendar/merge.ts';
 export type { CandlesResult, SymbolInfo } from '../server/market/market.ts';
 export type { MarketContext, FearGreed, GlobalMarket } from '../server/market/context.ts';
 export type { ScanResult, ScanRow } from '../server/scanner/scanner.ts';
-export type { AccountView, Portfolio, BalanceRow, PositionRow, OrderRow, FillRow } from '../server/exchange/accounts.ts';
+export type { AccountView, Portfolio, BalanceRow, PositionRow, OrderRow, FillRow, TradeStats } from '../server/exchange/accounts.ts';
+export type { StatsPeriod } from '../server/exchange/trade-stats.ts';
 export type { SourceRow } from '../server/news/sources.ts';
 export type { JobStatus } from '../server/jobs/scheduler.ts';
 export type { ModelStatus } from '../server/sentiment/local.ts';
@@ -36,9 +38,9 @@ export interface WatchItem {
   quote: string;
   position: number;
   aliases: string[];
-  /** FD-SENTIQ §4.1; rows saved before it are crypto. */
-  kind: 'crypto' | 'stock';
-  /** Company name and exchange (stocks only). */
+  /** FD-SENTIQ §4.1 (rows saved before it are crypto); an index (FD-INDICES) has its id as `coin` ("^SPX"). */
+  kind: 'crypto' | 'stock' | 'index';
+  /** Company or index name; exchange (stocks only). */
   name: string | null;
   exchange: string | null;
 }
@@ -77,8 +79,13 @@ export interface Health {
   sources: HealthSource[];
   sentiment: { engine: string; model: import('../server/sentiment/local.ts').ModelStatus; pending: number; claude: import('../server/sentiment/claude.ts').ClaudeStatus | null };
   calendar: { ff: number | null; tv: number | null; earn: number | null; ffBlockedUntil: number | null };
-  db: { sizeBytes: number; news: number };
+  /** FD-AZURE §5: Azure SQL; the size is null when the database user may not read it. */
+  db: { sizeBytes: number | null; maxSizeBytes?: number | null; server?: string; database?: string; edition?: string | null; objective?: string | null; news: number };
+  /** TD-AZURE §6: the instance running the background jobs. */
+  jobsLeader?: import('../server/jobs/scheduler.ts').JobsLeader;
   twelveData: TdBudget & { hasKey: boolean };
+  /** FD-AICLARITY: what Sentiq itself spent on the Claude key today (UTC); `?`: a server from before it sends none. */
+  claudeUsage?: import('../server/sentiment/usage.ts').ClaudeUsageDay & { sentimentModel: string; summaryModel: string };
 }
 
 export interface CalendarResponse {
@@ -137,6 +144,8 @@ export interface AuthState {
   adminEmail: string | null;
   /** Passkeys work on this address (localhost or HTTPS, never a bare IP). */
   passkeys: boolean;
+  /** The public address (FD-ONLINE §2), when there is one. Absent from a server before FD-ONLINE. */
+  publicUrl?: string | null;
   /** Mail goes through Resend's test sender (or nowhere): only the Resend account's owner receives it. */
   devMail: boolean;
   passwordRule: string;

@@ -8,6 +8,7 @@ import type { AccountView } from '../../shared/api-types.ts';
 import { PROVIDERS, type ProviderDef } from '../../shared/providers.ts';
 import { api, errorMessage } from '../api.ts';
 import { ProviderLogo } from './ProviderLogo.tsx';
+import { invalidatePriceSource } from '../hooks.ts';
 
 type Filter = 'all' | 'crypto' | 'stocks';
 const KIND_RO = { crypto: 'Crypto', stocks: 'Acțiuni' } as const;
@@ -74,6 +75,8 @@ function KeyForm({ p, onBack, onConnected }: { p: ProviderDef; onBack: () => voi
     onSuccess: (a) => {
       void qc.invalidateQueries({ queryKey: ['accounts'] });
       void qc.invalidateQueries({ queryKey: ['portfolio'] });
+      // A new exchange can become where this user's crypto prices come from (FD-MARKETSRC).
+      invalidatePriceSource(qc);
       onConnected(a);
     },
   });
@@ -112,7 +115,7 @@ function KeyForm({ p, onBack, onConnected }: { p: ProviderDef; onBack: () => voi
           </a>
         )}
         <p className="rounded-lg border border-line-soft bg-panel-2 px-3 py-2.5 text-[12px] leading-[1.5] text-faint">
-          Sentiq doar citește: nu plasează, nu modifică și nu anulează ordine și nu mută fonduri. Cheile se păstrează criptat pe acest Mac și nu mai sunt afișate.
+          Sentiq doar citește: nu plasează, nu modifică și nu anulează ordine și nu mută fonduri. Cheile se păstrează criptat în baza Sentiq și nu mai sunt afișate.
         </p>
       </section>
       <form onSubmit={submit} className="flex flex-col gap-3.5" aria-describedby={error ? `${formId}-err` : undefined} noValidate>

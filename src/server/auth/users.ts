@@ -90,6 +90,9 @@ export function cleanName(raw: unknown): string {
     .slice(0, 80);
 }
 
+const UPSERT_TOKEN = `UPDATE user_tokens SET token_hash = @h, expires_at = @e, created_at = @c WHERE user_id = @u AND kind = @k;
+IF @@ROWCOUNT = 0 INSERT INTO user_tokens(user_id, kind, token_hash, expires_at, created_at) VALUES (@u, @k, @h, @e, @c)`;
+
 export class UserService {
   private readonly db: Db;
   private readonly box: SecretBox;
@@ -100,19 +103,19 @@ export class UserService {
     this.now = now;
   }
 
-  byId(id: number): UserRow | undefined {
+  byId(id: number): Promise<UserRow | undefined> {
     return this.db.get<UserRow>('SELECT * FROM users WHERE id = ?', [id]);
   }
 
-  byEmail(email: string): UserRow | undefined {
+  byEmail(email: string): Promise<UserRow | undefined> {
     return this.db.get<UserRow>('SELECT * FROM users WHERE email = ?', [email]);
   }
 
-  admin(): UserRow {
-    return this.db.get<UserRow>("SELECT * FROM users WHERE role = 'admin' ORDER BY id LIMIT 1") as UserRow;
+  async admin(): Promise<UserRow> {
+    return (await this.db.get<UserRow>("SELECT TOP (1) * FROM users WHERE role = N'admin' ORDER BY id")) as UserRow;
   }
 
-  publicUser(u: UserRow): PublicUser {
+  private toPublic(u: UserRow, passkeys: number): PublicUser {
     return {
       id: u.id,
       email: u.email,
@@ -122,24 +125,29 @@ export class UserService {
       activated: u.password_hash !== null,
       twoFactor: u.totp_confirmed_at !== null,
       recoveryCodesLeft: countRecoveryCodes(u.recovery_codes),
-      passkeys: this.db.get<{ n: number }>('SELECT count(*) AS n FROM passkeys WHERE user_id = ?', [u.id])?.n ?? 0,
+      passkeys,
       createdAt: u.created_at,
       lastLoginAt: u.last_login_at,
       disabled: u.disabled_at !== null,
     };
   }
 
+  async publicUser(u: UserRow): Promise<PublicUser> {
+    const n = (await this.db.get<{ n: number }>('SELECT count(*) AS n FROM passkeys WHERE user_id = ?', [u.id]))?.n ?? 0;
+    return this.toPublic(u, n);
+  }
+
   // ── The admin's first password (FD-USERS §3) ─────────────────────────────────────────────────────────
 
   /** True while the admin account cannot be signed into yet (no password, or no email). */
-  setupNeeded(): boolean {
-    const a = this.admin();
+  async setupNeeded(): Promise<boolean> {
+    const a = await this.admin();
     return !a.password_hash || !a.email;
   }
 
   /** Sets the admin's email (when it has none) and first password. Refused once a password exists. */
   async setupAdmin(input: { email?: unknown; name?: unknown; password: unknown }): Promise<UserRow> {
-    const a = this.admin();
+    const a = await this.admin();
     if (a.password_hash) throw new UserError('Contul de admin are deja o parolă.');
     const email = a.email ?? normalizeEmail(input.email);
     if (!email) throw new UserError('Scrie o adresă de email validă.');
@@ -147,29 +155,36 @@ export class UserService {
     if (problem) throw new UserError(problem);
     const hash = await hashPassword(input.password as string);
     const name = cleanName(input.name) || a.name || email.split('@')[0] || '';
-    const other = this.byEmail(email);
-    if (other && other.id !== a.id) throw new UserError('Adresa e deja folosită de alt cont.');
     // Two first passwords sent at once: only the first one counts; the other is refused, never signed in.
-    const changed = this.db.run('UPDATE users SET email = ?, name = ?, password_hash = ?, email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ? AND password_hash IS NULL', [
-      email,
-      name,
-      hash,
-      this.now(),
-      a.id,
-    ]).changes;
+    const changed = await this.db.tx(async () => {
+      const other = await this.byEmail(email);
+      if (other && other.id !== a.id) throw new UserError('Adresa e deja folosită de alt cont.');
+      return (
+        await this.db.run('UPDATE users SET email = ?, name = ?, password_hash = ?, email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ? AND password_hash IS NULL', [
+          email,
+          name,
+          hash,
+          this.now(),
+          a.id,
+        ])
+      ).changes;
+    });
     if (changed === 0) throw new UserError('Contul de admin are deja o parolă.');
-    return this.byId(a.id) as UserRow;
+    return (await this.byId(a.id)) as UserRow;
   }
 
   /** The admin's email, set before the first sign-in (`scripts/sentiq.sh admin <email>`). */
-  setAdminEmail(raw: unknown): UserRow {
+  async setAdminEmail(raw: unknown): Promise<UserRow> {
     const email = normalizeEmail(raw);
     if (!email) throw new UserError('Adresă de email invalidă.');
-    const a = this.admin();
-    const other = this.byEmail(email);
-    if (other && other.id !== a.id) throw new UserError('Adresa e deja folosită de alt cont.');
-    this.db.run('UPDATE users SET email = ?, email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?', [email, this.now(), a.id]);
-    return this.byId(a.id) as UserRow;
+    const id = await this.db.tx(async () => {
+      const a = await this.admin();
+      const other = await this.byEmail(email);
+      if (other && other.id !== a.id) throw new UserError('Adresa e deja folosită de alt cont.');
+      await this.db.run('UPDATE users SET email = ?, email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?', [email, this.now(), a.id]);
+      return a.id;
+    });
+    return (await this.byId(id)) as UserRow;
   }
 
   // ── Requests, activation and the one-time links (FD-INVITE) ──────────────────────────────────────────
@@ -178,65 +193,76 @@ export class UserService {
    * Somebody asks for an account. `ignored` when the address already has an account or a request (the caller says
    * the same either way, and the first request's name stays), `full` when too many wait.
    */
-  requestAccount(input: { email: unknown; name: unknown }): 'created' | 'ignored' | 'full' {
+  /** The address and name of a request, or the UserError saying what is wrong with them. */
+  checkRequest(input: { email: unknown; name: unknown }): { email: string; name: string } {
     const email = normalizeEmail(input.email);
     if (!email) throw new UserError('Scrie o adresă de email validă.');
     const name = cleanName(input.name);
     if (!name) throw new UserError('Scrie-ți numele.');
-    if (this.byEmail(email) || this.db.get('SELECT 1 AS x FROM account_requests WHERE email = ?', [email])) return 'ignored';
-    if ((this.db.get<{ n: number }>('SELECT count(*) AS n FROM account_requests')?.n ?? 0) >= MAX_PENDING_REQUESTS) return 'full';
-    try {
-      this.db.run('INSERT INTO account_requests(email, name, created_at) VALUES (?, ?, ?)', [email, name, this.now()]);
-    } catch {
-      return 'ignored'; // the same address asked in between (UNIQUE)
-    }
-    return 'created';
+    return { email, name };
+  }
+
+  async requestAccount(input: { email: unknown; name: unknown }): Promise<'created' | 'ignored' | 'full'> {
+    const { email, name } = this.checkRequest(input);
+    // One transaction: the same address asked twice at once gets one request.
+    return this.db.tx(async () => {
+      if ((await this.byEmail(email)) || (await this.db.get('SELECT 1 AS x FROM account_requests WHERE email = ?', [email]))) return 'ignored';
+      if (((await this.db.get<{ n: number }>('SELECT count(*) AS n FROM account_requests'))?.n ?? 0) >= MAX_PENDING_REQUESTS) return 'full';
+      await this.db.run('INSERT INTO account_requests(email, name, created_at) VALUES (?, ?, ?)', [email, name, this.now()]);
+      return 'created';
+    });
   }
 
   /** The requests waiting for the admin, oldest first. */
-  accountRequests(): AccountRequest[] {
-    return this.db
-      .all<{ id: number; email: string; name: string; created_at: number }>('SELECT id, email, name, created_at FROM account_requests ORDER BY created_at, id')
-      .map((r) => ({ id: r.id, email: r.email, name: r.name, createdAt: r.created_at }));
+  async accountRequests(): Promise<AccountRequest[]> {
+    return (await this.db.all<{ id: number; email: string; name: string; created_at: number }>('SELECT id, email, name, created_at FROM account_requests ORDER BY created_at, id')).map((r) => ({
+      id: r.id,
+      email: r.email,
+      name: r.name,
+      createdAt: r.created_at,
+    }));
   }
 
   /**
    * The admin approves: an account without a password (it cannot sign in yet) with the default favourites, and its
    * activation link. The request goes either way; an address that got an account meanwhile is refused.
    */
-  approveRequest(id: number): { user: UserRow; token: string } {
-    const r = this.db.get<{ email: string; name: string }>('SELECT email, name FROM account_requests WHERE id = ?', [id]);
-    if (!r) throw new UserMissingError('Cererea nu mai există.');
+  async approveRequest(id: number): Promise<{ user: UserRow; token: string }> {
     const now = this.now();
-    const made = this.db.tx(() => {
-      this.db.run('DELETE FROM account_requests WHERE id = ?', [id]);
-      if (this.byEmail(r.email)) return null;
-      const uid = this.db.run("INSERT INTO users(email, name, password_hash, role, created_at) VALUES (?, ?, NULL, 'user', ?)", [r.email, r.name, now]).lastInsertRowid;
-      NEW_USER_FAVORITES.forEach((coin, i) =>
-        this.db.run("INSERT INTO watchlist(user_id, coin, quote, position, aliases, added_at, kind) VALUES (?, ?, 'USDT', ?, '[]', ?, 'crypto')", [uid, coin, i, now]),
+    const made = await this.db.tx(async () => {
+      const r = await this.db.get<{ email: string; name: string }>('SELECT email, name FROM account_requests WHERE id = ?', [id]);
+      if (!r) throw new UserMissingError('Cererea nu mai există.');
+      await this.db.run('DELETE FROM account_requests WHERE id = ?', [id]);
+      if (await this.byEmail(r.email)) return null;
+      const uid = (await this.db.run("INSERT INTO users(email, name, password_hash, role, created_at) VALUES (?, ?, NULL, N'user', ?)", [r.email, r.name, now])).lastInsertRowid;
+      await this.db.run(
+        `INSERT INTO watchlist(user_id, coin, quote, position, aliases, added_at, kind) VALUES ${NEW_USER_FAVORITES.map(() => "(?, ?, N'USDT', ?, N'[]', ?, N'crypto')").join(', ')}`,
+        NEW_USER_FAVORITES.flatMap((coin, i) => [uid, coin, i, now]),
       );
-      return { uid, token: this.issueToken(uid, 'activate', ACTIVATE_TTL_MS, false) as string };
+      return { uid, token: (await this.issueToken(uid, 'activate', ACTIVATE_TTL_MS, false)) as string };
     });
     if (made === null) throw new UserError('Adresa are deja un cont.');
-    return { user: this.byId(made.uid) as UserRow, token: made.token };
+    return { user: (await this.byId(made.uid)) as UserRow, token: made.token };
   }
 
   /** The admin refuses: the request goes, nobody is told. */
-  rejectRequest(id: number): void {
-    if (this.db.run('DELETE FROM account_requests WHERE id = ?', [id]).changes === 0) throw new UserMissingError('Cererea nu mai există.');
+  async rejectRequest(id: number): Promise<void> {
+    if ((await this.db.run('DELETE FROM account_requests WHERE id = ?', [id])).changes === 0) throw new UserMissingError('Cererea nu mai există.');
   }
 
   /** A new activation link for an approved account not activated yet (the old one stops working). */
-  newActivation(id: number): { user: UserRow; token: string } {
-    const u = this.target(id);
-    if (u.password_hash !== null) throw new UserError('Contul e deja activat.');
-    return { user: u, token: this.issueToken(id, 'activate', ACTIVATE_TTL_MS, false) as string };
+  async newActivation(id: number): Promise<{ user: UserRow; token: string }> {
+    return this.db.tx(async () => {
+      const u = await this.target(id);
+      if (u.password_hash !== null) throw new UserError('Contul e deja activat.');
+      return { user: u, token: (await this.issueToken(id, 'activate', ACTIVATE_TTL_MS, false)) as string };
+    });
   }
 
   /** Who an activation link is for, while it can still be used. */
-  activationInfo(token: unknown): { email: string; name: string } | null {
-    const id = this.tokenUser('activate', token);
-    const u = id === null ? undefined : this.byId(id);
+  async activationInfo(token: unknown): Promise<{ email: string; name: string } | null> {
+    const id = await this.tokenUser('activate', token);
+    const u = id === null ? undefined : await this.byId(id);
     if (!u || !u.email || u.password_hash !== null || u.disabled_at !== null) return null;
     return { email: u.email, name: u.name };
   }
@@ -245,50 +271,54 @@ export class UserService {
   async activate(token: unknown, password: unknown): Promise<UserRow> {
     const problem = passwordProblem(password);
     if (problem) throw new UserError(problem);
-    if (!this.activationInfo(token)) throw new UserError('Linkul nu mai e valabil. Cere adminului unul nou.');
+    if (!(await this.activationInfo(token))) throw new UserError('Linkul nu mai e valabil. Cere adminului unul nou.');
     const hash = await hashPassword(password as string);
-    // Checked again after the (slow) hash: two submissions at once, or the admin acting meanwhile.
-    const id = this.tokenUser('activate', token);
-    const done =
-      id !== null &&
-      this.db.tx(() => {
-        const n = this.db.run('UPDATE users SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ? AND password_hash IS NULL AND disabled_at IS NULL', [
+    // Checked again after the (slow) hash, in the transaction: two submissions at once, or the admin acting meanwhile.
+    const id = await this.db.tx(async () => {
+      const uid = await this.tokenUser('activate', token);
+      if (uid === null) return null;
+      const n = (
+        await this.db.run('UPDATE users SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ? AND password_hash IS NULL AND disabled_at IS NULL', [
           hash,
           this.now(),
-          id,
-        ]).changes;
-        if (n) this.db.run("DELETE FROM user_tokens WHERE user_id = ? AND kind = 'activate'", [id]);
-        return n > 0;
-      });
-    if (!done) throw new UserError('Linkul nu mai e valabil. Cere adminului unul nou.');
-    return this.byId(id) as UserRow;
+          uid,
+        ])
+      ).changes;
+      if (!n) return null;
+      await this.db.run("DELETE FROM user_tokens WHERE user_id = ? AND kind = N'activate'", [uid]);
+      return uid;
+    });
+    if (id === null) throw new UserError('Linkul nu mai e valabil. Cere adminului unul nou.');
+    return (await this.byId(id)) as UserRow;
   }
 
   /** Requests nobody answered within REQUEST_MAX_AGE_MS. */
-  purgeOldRequests(): number {
-    return this.db.run('DELETE FROM account_requests WHERE created_at < ?', [this.now() - REQUEST_MAX_AGE_MS]).changes;
+  async purgeOldRequests(): Promise<number> {
+    return (await this.db.run('DELETE FROM account_requests WHERE created_at < ?', [this.now() - REQUEST_MAX_AGE_MS])).changes;
   }
 
   /**
    * A fresh one-time link of `kind`. With `keepLive`, a link still valid is left alone and null is returned (reset
    * links: nobody can invalidate the one already in the mailbox by asking again).
    */
-  issueToken(userId: number, kind: 'reset' | 'activate', ttlMs: number, keepLive: boolean): string | null {
-    const now = this.now();
-    const live = this.db.get<{ expires_at: number }>('SELECT expires_at FROM user_tokens WHERE user_id = ? AND kind = ?', [userId, kind]);
-    if (keepLive && live && live.expires_at > now) return null;
-    const token = randomBytes(32).toString('base64url');
-    this.db.run(
-      'INSERT INTO user_tokens(user_id, kind, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id, kind) DO UPDATE SET token_hash = excluded.token_hash, expires_at = excluded.expires_at, created_at = excluded.created_at',
-      [userId, kind, sha(token), now + ttlMs, now],
-    );
-    return token;
+  async issueToken(userId: number, kind: 'reset' | 'activate', ttlMs: number, keepLive: boolean): Promise<string | null> {
+    return this.db.tx(async () => {
+      const now = this.now();
+      const live = await this.db.get<{ expires_at: number }>('SELECT expires_at FROM user_tokens WHERE user_id = ? AND kind = ?', [userId, kind]);
+      if (keepLive && live && live.expires_at > now) return null;
+      const token = randomBytes(32).toString('base64url');
+      await this.db.run(UPSERT_TOKEN, { u: userId, k: kind, h: sha(token), e: now + ttlMs, c: now });
+      return token;
+    });
   }
 
   /** The user a live link belongs to (without using it up). */
-  tokenUser(kind: 'reset' | 'activate', token: unknown): number | null {
+  async tokenUser(kind: 'reset' | 'activate', token: unknown): Promise<number | null> {
     if (typeof token !== 'string' || token.length < 20 || token.length > 100) return null;
-    const row = this.db.get<{ user_id: number; token_hash: string; expires_at: number }>('SELECT user_id, token_hash, expires_at FROM user_tokens WHERE token_hash = ? AND kind = ?', [sha(token), kind]);
+    const row = await this.db.get<{ user_id: number; token_hash: string; expires_at: number }>('SELECT user_id, token_hash, expires_at FROM user_tokens WHERE token_hash = ? AND kind = ?', [
+      sha(token),
+      kind,
+    ]);
     if (!row || row.expires_at <= this.now()) return null;
     return timingSafeEqual(Buffer.from(row.token_hash), Buffer.from(sha(token))) ? row.user_id : null;
   }
@@ -297,7 +327,7 @@ export class UserService {
 
   async login(rawEmail: unknown, password: unknown): Promise<LoginResult> {
     const email = normalizeEmail(rawEmail);
-    const u = email ? this.byEmail(email) : undefined;
+    const u = email ? await this.byEmail(email) : undefined;
     if (!u || !u.password_hash || typeof password !== 'string') {
       await burnPasswordCheck(typeof password === 'string' ? password : '');
       return { status: 'invalid' };
@@ -309,26 +339,31 @@ export class UserService {
     return { status: u.totp_confirmed_at !== null ? '2fa' : 'ok', user: u };
   }
 
-  touchLogin(userId: number): void {
-    this.db.run('UPDATE users SET last_login_at = ? WHERE id = ?', [this.now(), userId]);
+  async touchLogin(userId: number): Promise<void> {
+    await this.db.run('UPDATE users SET last_login_at = ? WHERE id = ?', [this.now(), userId]);
   }
 
-  /** Six digits = an authenticator code; anything else is tried as a recovery code (the two cannot be confused). */
-  verifySecondFactor(userId: number, entered: unknown): SecondFactor {
-    const u = this.byId(userId);
-    if (!u || u.totp_confirmed_at === null) return 'invalid';
-    const input = normalizeCode(entered);
-    if (!input) return 'invalid';
-    if (/^\d{6}$/.test(input)) {
-      const step = verifyTotp(this.secretOf(u), input, u.totp_last_step, this.now());
-      if (step === null) return 'invalid';
-      this.db.run('UPDATE users SET totp_last_step = ? WHERE id = ?', [step, userId]);
-      return 'totp';
-    }
-    const rest = redeemRecoveryCode(u.recovery_codes, input);
-    if (rest === null) return 'invalid';
-    this.db.run('UPDATE users SET recovery_codes = ? WHERE id = ?', [rest, userId]);
-    return 'recovery';
+  /**
+   * Six digits = an authenticator code; anything else is tried as a recovery code (the two cannot be confused). In a
+   * transaction: the same code sent twice at once is accepted once (the second sees the step or the code spent).
+   */
+  async verifySecondFactor(userId: number, entered: unknown): Promise<SecondFactor> {
+    return this.db.tx(async () => {
+      const u = await this.byId(userId);
+      if (!u || u.totp_confirmed_at === null) return 'invalid';
+      const input = normalizeCode(entered);
+      if (!input) return 'invalid';
+      if (/^\d{6}$/.test(input)) {
+        const step = verifyTotp(this.secretOf(u), input, u.totp_last_step, this.now());
+        if (step === null) return 'invalid';
+        await this.db.run('UPDATE users SET totp_last_step = ? WHERE id = ?', [step, userId]);
+        return 'totp';
+      }
+      const rest = redeemRecoveryCode(u.recovery_codes, input);
+      if (rest === null) return 'invalid';
+      await this.db.run('UPDATE users SET recovery_codes = ? WHERE id = ?', [rest, userId]);
+      return 'recovery';
+    });
   }
 
   // ── Two-factor (TOTP) ────────────────────────────────────────────────────────────────────────────────
@@ -343,8 +378,8 @@ export class UserService {
   }
 
   /** The pending secret is shown only before confirmation; a confirmed one never leaves the database again. */
-  twoFactorState(userId: number): { enabled: boolean; confirmedAt: number | null; pendingSecret: string | null; uri: string | null; recoveryCodesLeft: number } {
-    const u = this.byId(userId) as UserRow;
+  async twoFactorState(userId: number): Promise<{ enabled: boolean; confirmedAt: number | null; pendingSecret: string | null; uri: string | null; recoveryCodesLeft: number }> {
+    const u = (await this.byId(userId)) as UserRow;
     const pending = u.totp_confirmed_at === null ? this.secretOf(u) : null;
     return {
       enabled: u.totp_confirmed_at !== null,
@@ -356,121 +391,142 @@ export class UserService {
   }
 
   /** Starts (or restarts) enrolment; refused while two-factor is on (turn it off first). */
-  beginTwoFactor(userId: number, restart: boolean): boolean {
-    const u = this.byId(userId) as UserRow;
-    if (u.totp_confirmed_at !== null) return false;
-    if (!u.totp_secret || restart) this.db.run('UPDATE users SET totp_secret = ?, totp_last_step = 0 WHERE id = ?', [this.box.encrypt(newSecret()), userId]);
-    return true;
+  async beginTwoFactor(userId: number, restart: boolean): Promise<boolean> {
+    return this.db.tx(async () => {
+      const u = (await this.byId(userId)) as UserRow;
+      if (u.totp_confirmed_at !== null) return false;
+      if (!u.totp_secret || restart) await this.db.run('UPDATE users SET totp_secret = ?, totp_last_step = 0 WHERE id = ?', [this.box.encrypt(newSecret()), userId]);
+      return true;
+    });
   }
 
   /** Abandons an unconfirmed enrolment; never turns a live one off. */
-  cancelTwoFactor(userId: number): void {
-    this.db.run('UPDATE users SET totp_secret = NULL, totp_last_step = 0 WHERE id = ? AND totp_confirmed_at IS NULL', [userId]);
+  async cancelTwoFactor(userId: number): Promise<void> {
+    await this.db.run('UPDATE users SET totp_secret = NULL, totp_last_step = 0 WHERE id = ? AND totp_confirmed_at IS NULL', [userId]);
   }
 
   /** Proves the enrolment, turns two-factor on and returns the recovery codes: the only time they exist in clear. */
-  confirmTwoFactor(userId: number, code: unknown): string[] | null {
-    const u = this.byId(userId) as UserRow;
-    if (u.totp_confirmed_at !== null || !u.totp_secret) return null;
-    const step = verifyTotp(this.secretOf(u), code, u.totp_last_step, this.now());
-    if (step === null) return null;
-    const codes = newRecoveryCodes();
-    // The step that confirmed is spent: the same six digits do not work again at the next sign-in.
-    this.db.run('UPDATE users SET totp_last_step = ?, totp_confirmed_at = ?, recovery_codes = ? WHERE id = ?', [step, this.now(), hashRecoveryCodes(codes), userId]);
-    return codes;
+  async confirmTwoFactor(userId: number, code: unknown): Promise<string[] | null> {
+    return this.db.tx(async () => {
+      const u = (await this.byId(userId)) as UserRow;
+      if (u.totp_confirmed_at !== null || !u.totp_secret) return null;
+      const step = verifyTotp(this.secretOf(u), code, u.totp_last_step, this.now());
+      if (step === null) return null;
+      const codes = newRecoveryCodes();
+      // The step that confirmed is spent: the same six digits do not work again at the next sign-in.
+      await this.db.run('UPDATE users SET totp_last_step = ?, totp_confirmed_at = ?, recovery_codes = ? WHERE id = ?', [step, this.now(), hashRecoveryCodes(codes), userId]);
+      return codes;
+    });
   }
 
   /** Both factors (a recovery code counts as the second), the password first. */
   async disableTwoFactor(userId: number, password: unknown, code: unknown): Promise<boolean> {
-    const u = this.byId(userId) as UserRow;
+    const u = (await this.byId(userId)) as UserRow;
     if (u.totp_confirmed_at === null || typeof password !== 'string' || !(await verifyPassword(password, u.password_hash))) return false;
-    if (this.verifySecondFactor(userId, code) === 'invalid') return false;
-    this.db.run('UPDATE users SET totp_secret = NULL, totp_confirmed_at = NULL, totp_last_step = 0, recovery_codes = NULL WHERE id = ?', [userId]);
-    return true;
+    return this.db.tx(async () => {
+      if ((await this.verifySecondFactor(userId, code)) === 'invalid') return false;
+      await this.db.run('UPDATE users SET totp_secret = NULL, totp_confirmed_at = NULL, totp_last_step = 0, recovery_codes = NULL WHERE id = ?', [userId]);
+      return true;
+    });
   }
 
   async regenerateRecoveryCodes(userId: number, password: unknown, code: unknown): Promise<string[] | null> {
-    const u = this.byId(userId) as UserRow;
+    const u = (await this.byId(userId)) as UserRow;
     if (u.totp_confirmed_at === null || typeof password !== 'string' || !(await verifyPassword(password, u.password_hash))) return null;
-    if (this.verifySecondFactor(userId, code) === 'invalid') return null;
-    const codes = newRecoveryCodes();
-    this.db.run('UPDATE users SET recovery_codes = ? WHERE id = ?', [hashRecoveryCodes(codes), userId]);
-    return codes;
+    return this.db.tx(async () => {
+      if ((await this.verifySecondFactor(userId, code)) === 'invalid') return null;
+      const codes = newRecoveryCodes();
+      await this.db.run('UPDATE users SET recovery_codes = ? WHERE id = ?', [hashRecoveryCodes(codes), userId]);
+      return codes;
+    });
   }
 
   // ── Passwords ────────────────────────────────────────────────────────────────────────────────────────
 
   /** null on success, else why not. */
   async changePassword(userId: number, current: unknown, next: unknown): Promise<string | null> {
-    const u = this.byId(userId) as UserRow;
+    const u = (await this.byId(userId)) as UserRow;
     const problem = passwordProblem(next);
     if (problem) return problem;
     if (typeof current !== 'string' || !(await verifyPassword(current, u.password_hash))) return 'Parola actuală nu e corectă.';
-    this.db.run('UPDATE users SET password_hash = ? WHERE id = ?', [await hashPassword(next as string), userId]);
+    await this.db.run('UPDATE users SET password_hash = ? WHERE id = ?', [await hashPassword(next as string), userId]);
     return null;
   }
 
   /** A reset link for a confirmed, active account; null otherwise or while a previous link is still valid. */
-  beginReset(rawEmail: unknown): { user: UserRow; token: string } | null {
+  async beginReset(rawEmail: unknown): Promise<{ user: UserRow; token: string } | null> {
     const email = normalizeEmail(rawEmail);
-    const u = email ? this.byEmail(email) : undefined;
+    const u = email ? await this.byEmail(email) : undefined;
     if (!u || u.email_verified_at === null || u.disabled_at !== null) return null;
-    const token = this.issueToken(u.id, 'reset', RESET_TTL_MS, true);
+    const token = await this.issueToken(u.id, 'reset', RESET_TTL_MS, true);
     return token ? { user: u, token } : null;
   }
 
-  /** Sets the password from a live reset link (two-factor untouched). */
+  /** Sets the password from a live reset link (two-factor untouched); the link works once. */
   async completeReset(token: unknown, password: unknown): Promise<UserRow> {
     const problem = passwordProblem(password);
     if (problem) throw new UserError(problem);
-    const id = this.tokenUser('reset', token);
-    if (id === null) throw new UserError('Linkul nu mai e valabil. Cere altul din „Am uitat parola”.');
+    const expired = 'Linkul nu mai e valabil. Cere altul din „Am uitat parola”.';
+    if ((await this.tokenUser('reset', token)) === null) throw new UserError(expired);
     const hash = await hashPassword(password as string);
-    this.db.tx(() => {
-      this.db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, id]);
-      this.db.run("DELETE FROM user_tokens WHERE user_id = ? AND kind = 'reset'", [id]);
+    const id = await this.db.tx(async () => {
+      const uid = await this.tokenUser('reset', token);
+      if (uid === null) return null;
+      await this.db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, uid]);
+      await this.db.run("DELETE FROM user_tokens WHERE user_id = ? AND kind = N'reset'", [uid]);
+      return uid;
     });
-    return this.byId(id) as UserRow;
+    if (id === null) throw new UserError(expired);
+    return (await this.byId(id)) as UserRow;
   }
 
   // ── The admin's tools (FD-USERS §8) ──────────────────────────────────────────────────────────────────
 
-  list(): PublicUser[] {
-    return this.db.all<UserRow>('SELECT * FROM users ORDER BY role, created_at').map((u) => this.publicUser(u));
+  async list(): Promise<PublicUser[]> {
+    const rows = await this.db.all<UserRow & { passkey_count: number }>(
+      'SELECT u.*, (SELECT count(*) FROM passkeys p WHERE p.user_id = u.id) AS passkey_count FROM users u ORDER BY u.role, u.created_at, u.id',
+    );
+    return rows.map((u) => this.toPublic(u, u.passkey_count));
   }
 
-  private target(id: number): UserRow {
-    const u = this.byId(id);
+  private async target(id: number): Promise<UserRow> {
+    const u = await this.byId(id);
     if (!u) throw new UserMissingError('Utilizatorul nu există.');
     if (u.role === 'admin') throw new UserError('Contul de admin nu poate fi modificat de aici.');
     return u;
   }
 
-  setDisabled(id: number, disabled: boolean): void {
-    this.target(id);
-    this.db.run('UPDATE users SET disabled_at = ? WHERE id = ?', [disabled ? this.now() : null, id]);
+  async setDisabled(id: number, disabled: boolean): Promise<void> {
+    await this.db.tx(async () => {
+      await this.target(id);
+      await this.db.run('UPDATE users SET disabled_at = ? WHERE id = ?', [disabled ? this.now() : null, id]);
+    });
   }
 
-  resetTwoFactor(id: number): void {
-    this.target(id);
-    this.db.run('UPDATE users SET totp_secret = NULL, totp_confirmed_at = NULL, totp_last_step = 0, recovery_codes = NULL WHERE id = ?', [id]);
+  async resetTwoFactor(id: number): Promise<void> {
+    await this.db.tx(async () => {
+      await this.target(id);
+      await this.db.run('UPDATE users SET totp_secret = NULL, totp_confirmed_at = NULL, totp_last_step = 0, recovery_codes = NULL WHERE id = ?', [id]);
+    });
   }
 
   /** Removes the account and, through the foreign keys, its sessions, passkeys, favourites, accounts and events. */
-  remove(id: number): void {
-    this.target(id);
-    this.db.run('DELETE FROM users WHERE id = ?', [id]);
+  async remove(id: number): Promise<void> {
+    await this.db.tx(async () => {
+      await this.target(id);
+      await this.db.run('DELETE FROM users WHERE id = ?', [id]);
+    });
   }
 
   // ── Passkey user handle ──────────────────────────────────────────────────────────────────────────────
 
   /** The stable, random WebAuthn user handle (never the id or the email), created on first use. */
-  userHandle(userId: number): Uint8Array<ArrayBuffer> {
-    const u = this.byId(userId) as UserRow;
+  async userHandle(userId: number): Promise<Uint8Array<ArrayBuffer>> {
+    const u = (await this.byId(userId)) as UserRow;
     if (!u.passkey_user_handle || !u.passkey_user_handle.length) {
-      this.db.run('UPDATE users SET passkey_user_handle = ? WHERE id = ? AND passkey_user_handle IS NULL', [randomBytes(32), userId]);
+      await this.db.run('UPDATE users SET passkey_user_handle = ? WHERE id = ? AND passkey_user_handle IS NULL', [randomBytes(32), userId]);
     }
-    const stored = (this.byId(userId) as UserRow).passkey_user_handle as Uint8Array;
+    const stored = ((await this.byId(userId)) as UserRow).passkey_user_handle as Uint8Array;
     const out = new Uint8Array(new ArrayBuffer(stored.length));
     out.set(stored);
     return out;

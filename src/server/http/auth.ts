@@ -48,6 +48,7 @@ const ADMIN_ONLY: { method: string; re: RegExp }[] = [
   { method: 'DELETE', re: /^\/api\/sources\// },
   { method: 'POST', re: /^\/api\/sentiment\/(rescore|recompute-history)$/ },
   { method: 'PUT', re: /^\/api\/settings\/(claude-key|twelvedata-key|resend)$/ },
+  { method: 'POST', re: /^\/api\/settings\/twelvedata-plan$/ },
 ];
 
 const asGet = (method: string) => (method === 'HEAD' ? 'GET' : method);
@@ -89,15 +90,15 @@ export function registerAuth(app: FastifyInstance, ctx: AppContext): void {
     const route = req.routeOptions.url;
     req.user = null;
     const token = sessionToken(req);
-    const session = token ? ctx.sessions.read(token) : null;
+    const session = token ? await ctx.sessions.read(token) : null;
     if (session?.kind === 'full') {
-      const u = ctx.users.byId(session.user_id);
+      const u = await ctx.users.byId(session.user_id);
       // A disabled (or deleted) account's sessions end at its next request.
       if (isActive(u)) {
         req.user = toAuthUser(u);
         // 30 days from the last use (FD-USERS §5): the browser's cookie is renewed with the server's expiry.
         if (session.slid && token) setCookie(req, reply, SESSION_COOKIE, token, { maxAgeMs: FULL_SESSION_MS });
-      } else ctx.sessions.destroyAll(session.user_id);
+      } else await ctx.sessions.destroyAll(session.user_id);
     }
     if (isPublicRoute(req.method, route)) return undefined;
     if (!req.user) return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', message: 'Intră în cont ca să continui.' } });

@@ -7,6 +7,7 @@ import { networkInterfaces, tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { isoCBOR } from '@simplewebauthn/server/helpers';
+import { testDb } from './test/db.ts';
 import { createContext, type AppContext } from './context.ts';
 import { loadConfig } from './config.ts';
 import { buildApp } from './http/app.ts';
@@ -18,6 +19,7 @@ import type { ClientFactory } from './exchange/accounts.ts';
 import { computeCode, decodeBase32, stepFor } from './auth/totp.ts';
 import { hashPassword } from './auth/passwords.ts';
 import { ingestItems } from './news/ingest.ts';
+import { publishPublicInstance } from './settings.ts';
 
 const fakeNli: NliScorer = { status: () => ({ state: 'ready', progress: 100, error: null, model: 'fake' }), warmUp: () => {}, score: async () => 0, onReady: () => {} };
 const fakeClients: ClientFactory = () => {
@@ -90,10 +92,11 @@ function loggedLink(kind: 'reset-password'): string | null {
 }
 const linkCount = (kind: string) => logLines.filter((l) => l.includes(`/${kind}?token=`)).length;
 
-async function until(cond: () => boolean, ms = 2000): Promise<void> {
-  const end = Date.now() + ms;
+async function until(cond: () => boolean, ms = 5000): Promise<void> {
+  // performance.now(): Date may be faked by the test.
+  const end = performance.now() + ms;
   while (!cond()) {
-    if (Date.now() > end) throw new Error('timed out');
+    if (performance.now() > end) throw new Error('timed out');
     await new Promise((r) => setTimeout(r, 5));
   }
 }
@@ -107,7 +110,7 @@ beforeEach(async () => {
   logLines = [];
   dir = mkdtempSync(path.join(tmpdir(), 'sq-users-'));
   const config = { ...loadConfig({ SENTIQ_DATA_DIR: dir, SENTIQ_ALLOWED_HOSTS: 'sentiq.lan' } as NodeJS.ProcessEnv), webDist: path.join(dir, 'no-web') };
-  ctx = createContext(config, makeLogger(), { nli: fakeNli, clientFactory: fakeClients, box: new SecretBox(Buffer.alloc(32, 9)), retryDelaysMs: [0, 0] });
+  ctx = await createContext(config, makeLogger(), { nli: fakeNli, clientFactory: fakeClients, box: new SecretBox(Buffer.alloc(32, 9)), retryDelaysMs: [0, 0], db: await testDb() });
   app = await buildApp(ctx);
 });
 
@@ -115,13 +118,12 @@ afterEach(async () => {
   vi.useRealTimers();
   setFetchImpl(null);
   await app.close();
-  ctx.db.close();
   rmSync(dir, { recursive: true, force: true });
 });
 
 /** The admin with a password (without going through the setup page) and a signed-in browser. */
 async function adminBrowser(): Promise<Browser> {
-  ctx.db.run('UPDATE users SET email = ?, name = ?, password_hash = ? WHERE id = 1', [ADMIN.email, 'Admin', adminHash]);
+  await ctx.db.run('UPDATE users SET email = ?, name = ?, password_hash = ? WHERE id = 1', [ADMIN.email, 'Admin', adminHash]);
   const b = browser();
   expect((await b.post('/api/auth/login', { email: ADMIN.email, password: ADMIN.password })).json()).toMatchObject({ status: 'ok' });
   return b;
@@ -131,11 +133,14 @@ async function adminBrowser(): Promise<Browser> {
 async function anaBrowser(): Promise<Browser> {
   const b = browser({ ip: '192.168.1.40' });
   expect((await b.post('/api/auth/request-account', { name: ANA.name, email: ANA.email })).statusCode).toBe(200);
-  const { token } = ctx.users.approveRequest(ctx.users.accountRequests()[0]!.id);
+  const { token } = await ctx.users.approveRequest((await ctx.users.accountRequests())[0]!.id);
   expect((await b.post('/api/auth/activate', { token, password: ANA.password })).statusCode).toBe(200);
   expect((await b.post('/api/auth/login', { email: ANA.email, password: ANA.password })).json()).toMatchObject({ status: 'ok' });
   return b;
 }
+
+/** Mail goes out in the background (it reads its settings from the database first): long enough for one to show. */
+const settle = () => new Promise((r) => setTimeout(r, 400));
 
 /** The token of an activation link the admin got back. */
 const tokenOf = (link: string) => new URL(link).searchParams.get('token') as string;
@@ -166,7 +171,7 @@ describe('the admin account and its first password (FD-USERS §3)', () => {
   });
 
   it('takes the email given by SENTIQ_ADMIN_EMAIL before the first sign-in, shown on this Mac only', async () => {
-    ctx.users.setAdminEmail('Boss@Example.com');
+    await ctx.users.setAdminEmail('Boss@Example.com');
     expect((await browser().get('/api/auth/state')).json()).toMatchObject({ setupNeeded: true, adminEmail: 'boss@example.com' });
     expect((await browser({ ip: '192.168.1.31' }).get('/api/auth/state')).json()).toMatchObject({ setupNeeded: true, adminEmail: null });
     const b = browser();
@@ -201,17 +206,26 @@ describe('account requests (FD-INVITE §1, §2)', () => {
     for (let i = 0; i < 3; i++) expect((await b.post('/api/auth/request-account', { name: `U${i}`, email: `u${i}@example.com` })).statusCode).toBe(200);
     expect((await b.post('/api/auth/request-account', { name: 'U9', email: 'u9@example.com' })).statusCode).toBe(429);
     expect((await browser({ ip: '192.168.1.43' }).post('/api/auth/request-account', { name: 'U9', email: 'u9@example.com' })).statusCode).toBe(200);
-    for (let i = 10; ctx.users.accountRequests().length < 50; i++) ctx.users.requestAccount({ name: `U${i}`, email: `u${i}@example.com` });
+    for (let i = 10; (await ctx.users.accountRequests()).length < 50; i++) await ctx.users.requestAccount({ name: `U${i}`, email: `u${i}@example.com` });
     const full = await browser({ ip: '192.168.1.44' }).post('/api/auth/request-account', { name: 'Late', email: 'late@example.com' });
     expect(full.statusCode).toBe(429);
     expect(full.json().error.message).toBe('Nu mai primim cereri acum. Încearcă mai târziu.');
-    ctx.db.run('UPDATE account_requests SET created_at = ? WHERE email = ?', [Date.now() - 31 * 86_400_000, 'u0@example.com']);
-    expect(ctx.users.purgeOldRequests()).toBe(1);
-    expect(ctx.users.accountRequests()).toHaveLength(49);
+    await ctx.db.run('UPDATE account_requests SET created_at = ? WHERE email = ?', [Date.now() - 31 * 86_400_000, 'u0@example.com']);
+    expect(await ctx.users.purgeOldRequests()).toBe(1);
+    expect(await ctx.users.accountRequests()).toHaveLength(49);
   });
 });
 
 describe('approval and activation (FD-INVITE §2, §3)', () => {
+  it('on the Mac, the activation link points to the public address the public instance wrote (FD-ONLINE §2)', async () => {
+    await publishPublicInstance(ctx.db, { publicUrl: 'https://sentiq.example', proxy: 'azure' });
+    const admin = await adminBrowser();
+    const anon = browser({ ip: '192.168.1.45' });
+    await anon.post('/api/auth/request-account', { name: ANA.name, email: ANA.email });
+    const reqId = (await admin.get('/api/admin/account-requests')).json()[0].id as number;
+    expect((await admin.post(`/api/admin/account-requests/${reqId}/approve`)).json().link).toMatch(/^https:\/\/sentiq\.example\/activate\?token=[A-Za-z0-9_-]{43}$/);
+  });
+
   it('creates an account waiting for activation; its link sets the password once, then the user signs in', async () => {
     const admin = await adminBrowser();
     const anon = browser({ ip: '192.168.1.45' });
@@ -230,6 +244,7 @@ describe('approval and activation (FD-INVITE §2, §3)', () => {
     // Not activated: no password to sign in with, no reset link either.
     expect((await anon.post('/api/auth/login', { email: ANA.email, password: ANA.password })).json().error.code).toBe('INVALID_CREDENTIALS');
     await anon.post('/api/auth/forgot', { email: ANA.email });
+    await settle();
     expect(linkCount('reset-password')).toBe(0);
     expect((await anon.post('/api/auth/activate/check', { token })).json()).toEqual({ valid: true, email: ANA.email, name: 'Ana' });
     expect((await anon.post('/api/auth/activate', { token, password: 'weakpassword' })).statusCode).toBe(400);
@@ -248,7 +263,7 @@ describe('approval and activation (FD-INVITE §2, §3)', () => {
     const anon = browser({ ip: '192.168.1.46' });
     const ask = async (name: string, email: string) => {
       await browser({ ip: `10.0.0.${name.length + email.length}` }).post('/api/auth/request-account', { name, email });
-      return ctx.users.accountRequests().find((r) => r.email === email)!.id;
+      return (await ctx.users.accountRequests()).find((r) => r.email === email)!.id;
     };
     const approve = async (id: number) => (await admin.post(`/api/admin/account-requests/${id}/approve`)).json();
     const ana = await approve(await ask(ANA.name, ANA.email));
@@ -275,9 +290,9 @@ describe('approval and activation (FD-INVITE §2, §3)', () => {
     expect(logLines.some((l) => l.includes('bob@example.com') && l.includes('email'))).toBe(false);
     // An address that got an account meanwhile: refused, and the request is gone.
     const cara = await ask('Cara', 'cara@example.com');
-    ctx.db.run("INSERT INTO users(email, name, password_hash, role, email_verified_at, created_at) VALUES ('cara@example.com', 'Cara', ?, 'user', 1, 1)", [adminHash]);
+    await ctx.db.run("INSERT INTO users(email, name, password_hash, role, email_verified_at, created_at) VALUES ('cara@example.com', 'Cara', ?, 'user', 1, 1)", [adminHash]);
     expect((await admin.post(`/api/admin/account-requests/${cara}/approve`)).json().error.message).toBe('Adresa are deja un cont.');
-    expect(ctx.users.accountRequests()).toEqual([]);
+    expect(await ctx.users.accountRequests()).toEqual([]);
     // Behind a public address, the links use it.
     (ctx.config as { publicUrl: string | null }).publicUrl = 'https://sentiq.example.com';
     const dan = await approve(await ask('Dan', 'dan@example.com'));
@@ -288,7 +303,7 @@ describe('approval and activation (FD-INVITE §2, §3)', () => {
     await adminBrowser();
     const ana = await anaBrowser();
     await browser({ ip: '192.168.1.47' }).post('/api/auth/request-account', { name: 'Bob', email: 'bob@example.com' });
-    const id = ctx.users.accountRequests()[0]!.id;
+    const id = (await ctx.users.accountRequests())[0]!.id;
     expect((await ana.get('/api/admin/account-requests')).statusCode).toBe(403);
     expect((await ana.post(`/api/admin/account-requests/${id}/approve`)).statusCode).toBe(403);
     expect((await ana.del(`/api/admin/account-requests/${id}`)).statusCode).toBe(403);
@@ -326,6 +341,10 @@ describe('data of each user (FD-USERS §2)', () => {
     expect((await ana.put('/api/settings/claude-key', { key: null })).statusCode).toBe(403);
     expect((await ana.get('/api/settings')).json()).toMatchObject({ claudeKeySet: true, claudeKeyHint: null });
     expect((await admin.get('/api/settings')).json().claudeKeyHint).not.toBeNull();
+    // The mail settings are the admin's alone (FD-ADMINSET §1): not even whether they are set.
+    const anaView = (await ana.get('/api/settings')).json();
+    for (const k of ['resendKeySet', 'resendKeyHint', 'resendFrom', 'resendDev']) expect(anaView, k).not.toHaveProperty(k);
+    expect((await admin.get('/api/settings')).json()).toMatchObject({ resendKeySet: false, resendDev: true });
     for (const [method, url] of [
       ['GET', '/api/health'],
       ['POST', '/api/sources'],
@@ -372,14 +391,14 @@ describe('shared news, own tags (FD-USERS §2, review round 1)', () => {
     const ana = await anaBrowser();
     expect((await ana.put('/api/watchlist/BTC', { aliases: ['Zorblax Prime'] })).statusCode).toBe(200);
     const now = Date.now();
-    ingestItems(ctx.db, { id: 'coindesk', category: 'crypto' }, [{ guid: 'z1', link: 'https://example.com/z1', title: 'Zorblax Prime rallies again', summary: '', publishedAt: now - 60_000 }], ctx.coins.get(), now, ctx.coins.classifier());
-    const row = () => ctx.db.get<{ impact: number; coins: string | null }>("SELECT impact, (SELECT group_concat(coin) FROM news_coins c WHERE c.news_id = n.id) AS coins FROM news n WHERE title LIKE 'Zorblax%'");
-    expect(row()).toEqual({ impact: 1, coins: 'BTC' });
+    await ingestItems(ctx.db, { id: 'coindesk', category: 'crypto' }, [{ guid: 'z1', link: 'https://example.com/z1', title: 'Zorblax Prime rallies again', summary: '', publishedAt: now - 60_000 }], await ctx.coins.get(), now, await ctx.coins.classifier());
+    const row = () => ctx.db.get<{ impact: number; coins: string | null }>("SELECT impact, (SELECT STRING_AGG(coin, ',') FROM news_coins c WHERE c.news_id = n.id) AS coins FROM news n WHERE title LIKE 'Zorblax%'");
+    expect(await row()).toEqual({ impact: 1, coins: 'BTC' });
     const fav = (await ana.get('/api/news?range=24h&favorites=1')).json();
     expect(fav.items.map((i: { title: string }) => i.title)).toContain('Zorblax Prime rallies again');
     // The admin's own alias does weigh (as before FD-USERS): BTC news count double.
     expect((await admin.put('/api/watchlist/BTC', { aliases: ['Zorblax Prime'] })).statusCode).toBe(200);
-    expect(row()?.impact).toBe(2);
+    expect((await row())?.impact).toBe(2);
   });
 });
 
@@ -430,6 +449,13 @@ describe('sign-in (FD-USERS §5)', () => {
     expect((await browser({ ip: '192.168.1.61' }).post('/api/auth/login', { email: ADMIN.email, password: ADMIN.password })).statusCode).toBe(200);
   });
 
+  it('counts guesses sent in parallel one by one: the fourth and fifth meet the lock (TD-AZURE §5)', async () => {
+    await adminBrowser();
+    const b = browser({ ip: '192.168.1.62' });
+    const codes = (await Promise.all(Array.from({ length: 5 }, () => b.post('/api/auth/login', { email: ADMIN.email, password: 'Wrong-password-1' })))).map((r) => r.statusCode);
+    expect(codes.sort()).toEqual([400, 400, 429, 429, 429]);
+  });
+
   it('signs out here or everywhere, and ends the sessions of a disabled account', async () => {
     const admin = await adminBrowser();
     const ana = await anaBrowser();
@@ -442,7 +468,7 @@ describe('sign-in (FD-USERS §5)', () => {
     expect((await ana.post('/api/account/logout-all')).statusCode).toBe(200);
     expect((await ana2.get('/api/watchlist')).statusCode).toBe(401);
     await ana.post('/api/auth/login', { email: ANA.email, password: ANA.password });
-    const anaId = ctx.users.byEmail(ANA.email)!.id;
+    const anaId = (await ctx.users.byEmail(ANA.email))!.id;
     expect((await admin.post(`/api/admin/users/${anaId}/disable`)).statusCode).toBe(200);
     expect((await ana.get('/api/watchlist')).statusCode).toBe(401);
     expect((await ana.post('/api/auth/login', { email: ANA.email, password: ANA.password })).json().error.code).toBe('ACCOUNT_DISABLED');
@@ -564,13 +590,16 @@ describe('forgotten password (FD-USERS §6)', () => {
     await ana.post('/api/account/2fa/enable', { code: computeCode(decodeBase32(s.secret.replace(/ /g, '')), stepFor(t0)) });
     const anon = browser({ ip: '192.168.1.90' });
     const generic = (await anon.post('/api/auth/forgot', { email: 'nobody@example.com' })).json();
+    await settle();
     expect(linkCount('reset-password')).toBe(0);
     const sent = (await anon.post('/api/auth/forgot', { email: ANA.email })).json();
     expect(sent.message).toBe(generic.message);
+    await until(() => loggedLink('reset-password') !== null);
     const token = loggedLink('reset-password');
     expect(token).not.toBeNull();
     // A second request while the first link lives sends nothing new.
     await browser({ ip: '192.168.1.91' }).post('/api/auth/forgot', { email: ANA.email });
+    await settle();
     expect(linkCount('reset-password')).toBe(1);
     expect((await anon.post('/api/auth/reset/check', { token })).json()).toEqual({ valid: true });
     expect((await anon.post('/api/auth/reset', { token, password: 'weak' })).statusCode).toBe(400);
@@ -582,7 +611,7 @@ describe('forgotten password (FD-USERS §6)', () => {
     // An hour later a new link can be asked for.
     vi.setSystemTime(t0 + 61 * 60_000);
     await browser({ ip: '192.168.1.92' }).post('/api/auth/forgot', { email: ANA.email });
-    expect(linkCount('reset-password')).toBe(2);
+    await until(() => linkCount('reset-password') === 2);
   });
 });
 
@@ -606,9 +635,9 @@ describe('the Users page (FD-USERS §8)', () => {
     expect((await admin.post(`/api/admin/users/${anaId}/verify`)).statusCode).toBe(404);
     expect((await admin.del(`/api/admin/users/${anaId}`)).json()).toHaveLength(1);
     expect((await ana.get('/api/watchlist')).statusCode).toBe(401);
-    expect(ctx.db.get<{ n: number }>('SELECT count(*) AS n FROM watchlist WHERE user_id = ?', [anaId])?.n).toBe(0);
+    expect((await ctx.db.get<{ n: number }>('SELECT count(*) AS n FROM watchlist WHERE user_id = ?', [anaId]))?.n).toBe(0);
     // Her stock's Nasdaq feed goes with her (nobody else follows it).
-    expect(ctx.db.get("SELECT id FROM sources WHERE auto = 'nasdaq:AAPL'")).toBeUndefined();
+    expect(await ctx.db.get("SELECT id FROM sources WHERE auto = 'nasdaq:AAPL'")).toBeUndefined();
   });
 });
 
@@ -622,7 +651,7 @@ describe('mail through Resend (FD-USERS §6, FD-INVITE)', () => {
     const saved = (await admin.put('/api/settings/resend', { key: 're_test_1234567890abcdef', from: 'Sentiq <onboarding@resend.dev>' })).json();
     expect(saved).toMatchObject({ resendKeySet: true, resendFrom: 'Sentiq <onboarding@resend.dev>' });
     expect(saved.resendKeyHint).not.toContain('1234567890abcdef');
-    const stored = ctx.db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'resend_key'")!.value;
+    const stored = (await ctx.db.get<{ value: string }>("SELECT value FROM settings WHERE [key] = 'resend_key'"))!.value;
     expect(stored).not.toContain('re_test');
     const sent: { to: string[]; subject: string; html: string; auth: string }[] = [];
     let status = 403;
@@ -642,7 +671,7 @@ describe('mail through Resend (FD-USERS §6, FD-INVITE)', () => {
     expect(sent[0]?.html).toContain('http://localhost:4317/users');
     // The activation mail refused (Resend's test sender): the admin is told, and has the link; the log does not.
     status = 403;
-    const reqId = ctx.users.accountRequests()[0]!.id;
+    const reqId = (await ctx.users.accountRequests())[0]!.id;
     const approved = (await admin.post(`/api/admin/account-requests/${reqId}/approve`)).json();
     expect(approved).toMatchObject({ mailed: false, to: ANA.email });
     expect(sent[1]).toMatchObject({ to: [ANA.email], subject: 'Sentiq · contul tău a fost aprobat' });
@@ -650,7 +679,7 @@ describe('mail through Resend (FD-USERS §6, FD-INVITE)', () => {
     expect(logLines.some((l) => l.startsWith('warn email: Resend refused the activate mail for ana@example.com') && l.endsWith('the link is not logged'))).toBe(true);
     expect(logLines.some((l) => l.includes(tokenOf(approved.link)))).toBe(false);
     status = 200;
-    const id = ctx.users.byEmail(ANA.email)!.id;
+    const id = (await ctx.users.byEmail(ANA.email))!.id;
     const resent = (await admin.post(`/api/admin/users/${id}/activation-link`)).json();
     expect(resent).toMatchObject({ mailed: true, to: ANA.email });
     await browser({ ip: '192.168.1.99' }).post('/api/auth/activate', { token: tokenOf(resent.link), password: ANA.password });

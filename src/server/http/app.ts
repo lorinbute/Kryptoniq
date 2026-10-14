@@ -16,11 +16,11 @@ import { ConflictError, NotFoundError } from './errors.ts';
 import { UserError, UserMissingError } from '../auth/users.ts';
 import { PasskeyError } from '../auth/passkeys.ts';
 import { SummaryCooldownError, SummaryFailedError, SummaryUnavailableError } from '../summary/service.ts';
-import { BEARER_ROUTES, registerMcp, registerMcpApi } from '../mcp/routes.ts';
+import { DbUnavailableError } from '../db/database.ts';
 
 export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 256 * 1024, trustProxy: false });
-  registerSecurity(app, new HostAllowlist(ctx.config.allowedHosts), { bearerRoutes: ctx.oauth ? BEARER_ROUTES : undefined });
+  registerSecurity(app, new HostAllowlist(ctx.config.allowedHosts), { proxy: ctx.config.proxy });
   // After the Host / Origin / CSRF checks: who is asking (FD-USERS).
   registerAuth(app, ctx);
 
@@ -57,6 +57,11 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
       return reply.code(status).send({ error: { code: err.code, message: err.message, suggestions: err.suggestions } });
     }
     if (err instanceof HttpError) return reply.code(502).send({ error: { code: err.code, message: err.message } });
+    // FD-AZURE §2: the database is unreachable for now (or a write waited too long); the page says to retry.
+    if (err instanceof DbUnavailableError) {
+      ctx.log.warn(`database: ${(err.cause as Error)?.message ?? err.message}`);
+      return reply.code(503).header('Retry-After', '5').send({ error: { code: err.code, message: err.message } });
+    }
     const e = err as { statusCode?: number; code?: string; message?: string };
     if (e.statusCode && e.statusCode >= 400 && e.statusCode < 500) {
       return reply.code(e.statusCode).send({ error: { code: e.code ?? 'BAD_REQUEST', message: e.message ?? 'Cerere invalidă' } });
@@ -67,9 +72,6 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
 
   await registerAuthRoutes(app, ctx);
   await registerRoutes(app, ctx);
-  // FD-MCP: the Claude connector exists only when it is on (TD-MCP §4); its page API always answers.
-  registerMcpApi(app, ctx.oauth);
-  if (ctx.oauth) await registerMcp(app, ctx, ctx.oauth);
 
   const webDist = ctx.config.webDist;
   const hasWeb = existsSync(path.join(webDist, 'index.html'));
@@ -89,8 +91,9 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   }
 
   app.setNotFoundHandler((req, reply) => {
-    // The connector's addresses are never the page (FD-MCP §2): off, they simply do not exist. Its consent page is.
-    const connector = /^\/(?:\.well-known\/|mcp(?:[/?]|$)|oauth\/(?!consent(?:[/?]|$)))/.test(req.url);
+    // The removed connector's addresses (FD-MCPREMOVE), which an AI app connected before may still call: a plain 404,
+    // never the page.
+    const connector = /^\/(?:\.well-known\/|mcp(?:[/?]|$)|oauth\/)/.test(req.url);
     if (req.url.startsWith('/api/') || req.method !== 'GET' || connector) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: `Ruta ${req.method} ${req.url.split('?')[0]} nu există` } });
     }

@@ -1,6 +1,7 @@
 // Calendar persistence, fetch policies (FF ≤ 1/h, rate-limit backoff; TV every 15 min + bursts) and queries.
 import { z } from 'zod';
 import type { Db } from '../db/database.ts';
+import { BIN } from '../db/schema.ts';
 import { readJobData, writeJobData } from '../jobs/scheduler.ts';
 import type { Logger } from '../log.ts';
 import { cleanCompanyName, type EarningsRow } from '../market/stocks.ts';
@@ -137,47 +138,77 @@ export class CalendarService {
     this.log = log;
   }
 
-  ffState(): FfState {
+  ffState(): Promise<FfState> {
     return readJobData<FfState>(this.db, FF_JOB, { lastOk: 0, blockedUntil: 0, weeks: [] });
   }
 
-  private replace(source: RawEvent['source'], range: { start: number; end: number }, events: RawEvent[], now: number): void {
-    this.db.tx(() => {
-      this.db.run('DELETE FROM calendar_raw WHERE source = ? AND ts >= ? AND ts < ?', [source, range.start, range.end]);
-      for (const e of events) {
-        if (e.ts < range.start || e.ts >= range.end) continue;
-        this.db.run(
-          `INSERT OR REPLACE INTO calendar_raw(source, ext_id, title, currency, country, ts, all_day, impact, forecast, previous, actual, unit, scale, period, fetched_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [e.source, e.extId, e.title, e.currency, e.country, e.ts, e.allDay ? 1 : 0, e.impact, e.forecast, e.previous, e.actual, e.unit, e.scale, e.period, now],
-        );
-      }
+  /**
+   * The events of `source` inside `range` become `events`. An event already stored under the same id (moved in time,
+   * so outside the range) is replaced, as SQLite's INSERT OR REPLACE did; within `events` the last one of an id wins.
+   */
+  private async replace(source: RawEvent['source'], range: { start: number; end: number }, events: RawEvent[], now: number): Promise<void> {
+    const rows = new Map<string, Record<string, unknown>>();
+    for (const e of events) {
+      if (e.ts < range.start || e.ts >= range.end) continue;
+      rows.set(`${e.source}\u0000${e.extId}`, {
+        source: e.source,
+        ext_id: String(e.extId),
+        title: e.title,
+        currency: e.currency,
+        country: e.country,
+        ts: e.ts,
+        all_day: e.allDay ? 1 : 0,
+        impact: e.impact,
+        forecast: e.forecast,
+        previous: e.previous,
+        actual: e.actual,
+        unit: e.unit,
+        scale: e.scale,
+        period: e.period,
+        fetched_at: now,
+      });
+    }
+    const json = JSON.stringify([...rows.values()]);
+    await this.db.tx(async () => {
+      await this.db.run('DELETE FROM calendar_raw WHERE source = ? AND ts >= ? AND ts < ?', [source, range.start, range.end]);
+      if (!rows.size) return;
+      await this.db.run(
+        `DELETE c FROM calendar_raw c JOIN OPENJSON(?) WITH (source nvarchar(16), ext_id nvarchar(200)) j ON c.source = j.source COLLATE ${BIN} AND c.ext_id = j.ext_id COLLATE ${BIN}`,
+        [json],
+      );
+      await this.db.run(
+        `INSERT INTO calendar_raw(source, ext_id, title, currency, country, ts, all_day, impact, forecast, previous, actual, unit, scale, period, fetched_at)
+         SELECT source, ext_id, title, currency, country, ts, all_day, impact, forecast, previous, actual, unit, scale, period, fetched_at
+         FROM OPENJSON(?) WITH (source nvarchar(16), ext_id nvarchar(200), title nvarchar(max), currency nvarchar(max), country nvarchar(max), ts bigint, all_day int,
+           impact nvarchar(max), forecast nvarchar(max), previous nvarchar(max), actual nvarchar(max), unit nvarchar(max), scale nvarchar(max), period nvarchar(max), fetched_at bigint)`,
+        [json],
+      );
     });
   }
 
   /** Downloads ForexFactory if allowed (≤ 1/h, not blocked). Returns the number of stored events or null when skipped. */
   async refreshForexFactory(now = Date.now(), fetcher: () => Promise<RawEvent[]> = fetchForexFactory): Promise<number | null> {
-    const st = this.ffState();
+    const st = await this.ffState();
     if (now < st.blockedUntil || now - st.lastOk < FF_MIN_INTERVAL_MS) return null;
     let events: RawEvent[];
     try {
       events = await fetcher();
     } catch (err) {
       if (err instanceof RateLimitedError) {
-        writeJobData(this.db, FF_JOB, { ...st, blockedUntil: now + FF_BLOCK_MS });
+        await writeJobData(this.db, FF_JOB, { ...st, blockedUntil: now + FF_BLOCK_MS });
         this.log.warn(`ForexFactory rate limited, pausing until ${new Date(now + FF_BLOCK_MS).toISOString()}`);
       }
       throw err;
     }
     if (events.length === 0) {
-      writeJobData(this.db, FF_JOB, { ...st, lastOk: now });
+      await writeJobData(this.db, FF_JOB, { ...st, lastOk: now });
       return 0;
     }
     const minTs = Math.min(...events.map((e) => e.ts));
     const range = ffWeekRange(minTs);
-    this.replace('ff', range, events, now);
+    await this.replace('ff', range, events, now);
     const weeks = [...st.weeks.filter((w) => w.start !== range.start), range].sort((a, b) => a.start - b.start).slice(-MAX_FF_WEEKS);
-    writeJobData(this.db, FF_JOB, { lastOk: now, blockedUntil: 0, weeks });
+    await writeJobData(this.db, FF_JOB, { lastOk: now, blockedUntil: 0, weeks });
     return events.length;
   }
 
@@ -187,15 +218,15 @@ export class CalendarService {
     const events = await fetcher(from, to);
     // Three weeks without a single event means a broken answer, not an empty calendar: keep what we have.
     if (events.length === 0) return 0;
-    this.replace('tv', { start: from, end: to }, events, now);
+    await this.replace('tv', { start: from, end: to }, events, now);
     return events.length;
   }
 
   /** High/Medium events of the last 15 minutes still waiting for an actual value (drive the "burst" refreshes). */
-  awaitingActual(now = Date.now()): number {
-    const r = this.db.get<{ n: number }>(
-      `SELECT count(*) AS n FROM calendar_raw WHERE source = 'tv' AND actual IS NULL AND forecast IS NOT NULL
-       AND impact IN ('High', 'Medium') AND ts <= ? AND ts >= ?`,
+  async awaitingActual(now = Date.now()): Promise<number> {
+    const r = await this.db.get<{ n: number }>(
+      `SELECT count(*) AS n FROM calendar_raw WHERE source = N'tv' AND actual IS NULL AND forecast IS NOT NULL
+       AND impact IN (N'High', N'Medium') AND ts <= ? AND ts >= ?`,
       [now, now - 15 * 60_000],
     );
     return r?.n ?? 0;
@@ -209,7 +240,7 @@ export class CalendarService {
     const wanted = new Set(symbols);
     const today = dayBounds(dayKey(now, NY), NY).start;
     if (wanted.size === 0) {
-      this.db.run("DELETE FROM calendar_raw WHERE source = 'earn' AND ts >= ?", [today]);
+      await this.db.run("DELETE FROM calendar_raw WHERE source = N'earn' AND ts >= ?", [today]);
       return 0;
     }
     let stored = 0;
@@ -223,35 +254,42 @@ export class CalendarService {
         continue;
       }
       const events = rows.filter((r) => wanted.has(r.symbol)).map((r) => earningsEvent(day, r));
-      this.replace('earn', dayBounds(day, NY), events, now);
+      await this.replace('earn', dayBounds(day, NY), events, now);
       stored += events.length;
     }
     // Days not looked at any more (e.g. after a long pause) keep their events; symbols removed from the watchlist do not.
-    const placeholders = [...wanted].map(() => '?').join(',');
-    this.db.run(`DELETE FROM calendar_raw WHERE source = 'earn' AND ts >= ? AND substr(ext_id, 1, instr(ext_id, ':') - 1) NOT IN (${placeholders})`, [today, ...wanted]);
+    // The symbol is what precedes ':' in the id ('' without one, as SQLite's substr gave; LEFT refuses a negative length).
+    await this.db.run(
+      `DELETE FROM calendar_raw WHERE source = N'earn' AND ts >= ?
+         AND LEFT(ext_id, CASE WHEN CHARINDEX(':', ext_id) > 0 THEN CHARINDEX(':', ext_id) - 1 ELSE 0 END) NOT IN (SELECT value COLLATE ${BIN} FROM OPENJSON(?))`,
+      [today, JSON.stringify([...wanted])],
+    );
     if (errors.length === EARN_DAYS) throw new Error(`Nasdaq earnings: ${errors[0]}`);
     if (errors.length) this.log.warn(`earnings: ${errors.length} days failed (${errors[0]})`);
     return stored;
   }
 
   /** Next High-impact event start time after `now` (for burst scheduling). */
-  nextImportant(now = Date.now()): number | null {
-    const r = this.db.get<{ ts: number | null }>(
-      "SELECT min(ts) AS ts FROM calendar_raw WHERE source IN ('ff', 'tv') AND impact IN ('High', 'Medium') AND all_day = 0 AND ts > ?",
+  async nextImportant(now = Date.now()): Promise<number | null> {
+    const r = await this.db.get<{ ts: number | null }>(
+      "SELECT min(ts) AS ts FROM calendar_raw WHERE source IN (N'ff', N'tv') AND impact IN (N'High', N'Medium') AND all_day = 0 AND ts > ?",
       [now],
     );
     return r?.ts ?? null;
   }
 
-  query(q: CalendarQuery): CalendarEvent[] {
-    const rows = this.db.all<RawRow>('SELECT * FROM calendar_raw WHERE ts >= ? AND ts < ?', [q.from - DAY, q.to + DAY]).map(toRaw);
+  async query(q: CalendarQuery): Promise<CalendarEvent[]> {
+    const rows = (await this.db.all<RawRow>('SELECT * FROM calendar_raw WHERE ts >= ? AND ts < ? ORDER BY ts, source, ext_id', [q.from - DAY, q.to + DAY])).map(toRaw);
     const merged = mergeCalendar({
       ff: rows.filter((r) => r.source === 'ff'),
       tv: rows.filter((r) => r.source === 'tv'),
-      ffCoverage: this.ffState().weeks,
+      ffCoverage: (await this.ffState()).weeks,
     });
     const stocks = new Map(
-      this.db.all<{ coin: string; name: string | null }>("SELECT coin, name FROM watchlist WHERE kind = 'stock' AND user_id = ?", [q.userId]).map((w) => [w.coin, w.name]),
+      (await this.db.all<{ coin: string; name: string | null }>("SELECT coin, name FROM watchlist WHERE kind = N'stock' AND user_id = ? ORDER BY position, coin", [q.userId])).map((w) => [
+        w.coin,
+        w.name,
+      ]),
     );
     const earnings =
       q.earnings === false
@@ -279,12 +317,12 @@ export class CalendarService {
                 note: `${who} își publică rezultatele ${quarter ? `trimestrului încheiat în ${quarterRo(quarter)} ` : ''}${EARN_WHEN[when] ?? EARN_WHEN.unknown}. Prognoza este EPS-ul estimat de analiști, iar Anterior este EPS-ul din același trimestru de anul trecut (Nasdaq).`,
               };
             });
-    const custom = this.db
-      .all<{ id: number; title: string; ts: number; all_day: number; impact: CalImpact; currency: string; note: string }>(
-        'SELECT id, title, ts, all_day, impact, currency, note FROM calendar_custom WHERE user_id = ? AND ts >= ? AND ts < ?',
+    const custom = (
+      await this.db.all<{ id: number; title: string; ts: number; all_day: number; impact: CalImpact; currency: string; note: string }>(
+        'SELECT id, title, ts, all_day, impact, currency, note FROM calendar_custom WHERE user_id = ? AND ts >= ? AND ts < ? ORDER BY ts, id',
         [q.userId, q.from, q.to],
       )
-      .map(
+    ).map(
         (c): CalendarEvent => ({
           id: `custom:${c.id}`,
           source: 'custom',
@@ -312,32 +350,37 @@ export class CalendarService {
       .sort((a, b) => a.ts - b.ts || a.title.localeCompare(b.title));
   }
 
-  addCustom(userId: number, input: unknown): number {
+  async addCustom(userId: number, input: unknown): Promise<number> {
     const r = customEventSchema.safeParse(input);
     if (!r.success) throw new ValidationError(`Eveniment invalid: ${formatIssues(r.error.issues)}`, r.error.issues);
     const e = r.data;
-    if ((this.db.get<{ n: number }>('SELECT count(*) AS n FROM calendar_custom WHERE user_id = ?', [userId])?.n ?? 0) >= MAX_CUSTOM_EVENTS) {
-      throw new ValidationError(`Poți avea cel mult ${MAX_CUSTOM_EVENTS} evenimente proprii; șterge din cele vechi.`);
-    }
-    return this.db.run('INSERT INTO calendar_custom(user_id, title, ts, all_day, impact, currency, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [
-      userId,
-      e.title,
-      e.ts,
-      e.allDay ? 1 : 0,
-      e.impact,
-      e.currency,
-      e.note,
-      Date.now(),
-    ]).lastInsertRowid;
+    // Counted and added in one transaction: two saves at once never pass the limit.
+    return this.db.tx(async () => {
+      if (((await this.db.get<{ n: number }>('SELECT count(*) AS n FROM calendar_custom WHERE user_id = ?', [userId]))?.n ?? 0) >= MAX_CUSTOM_EVENTS) {
+        throw new ValidationError(`Poți avea cel mult ${MAX_CUSTOM_EVENTS} evenimente proprii; șterge din cele vechi.`);
+      }
+      return (
+        await this.db.run('INSERT INTO calendar_custom(user_id, title, ts, all_day, impact, currency, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [
+          userId,
+          e.title,
+          e.ts,
+          e.allDay ? 1 : 0,
+          e.impact,
+          e.currency,
+          e.note,
+          Date.now(),
+        ])
+      ).lastInsertRowid;
+    });
   }
 
   /** Only the owner's own event (anybody else's id is "not found"). */
-  deleteCustom(userId: number, id: number): boolean {
-    return this.db.run('DELETE FROM calendar_custom WHERE id = ? AND user_id = ?', [id, userId]).changes > 0;
+  async deleteCustom(userId: number, id: number): Promise<boolean> {
+    return (await this.db.run('DELETE FROM calendar_custom WHERE id = ? AND user_id = ?', [id, userId])).changes > 0;
   }
 
-  lastUpdate(): { ff: number | null; tv: number | null; earn: number | null } {
-    const r = this.db.all<{ source: string; t: number | null }>('SELECT source, max(fetched_at) AS t FROM calendar_raw GROUP BY source');
+  async lastUpdate(): Promise<{ ff: number | null; tv: number | null; earn: number | null }> {
+    const r = await this.db.all<{ source: string; t: number | null }>('SELECT source, max(fetched_at) AS t FROM calendar_raw GROUP BY source');
     const at = (s: string) => r.find((x) => x.source === s)?.t ?? null;
     return { ff: at('ff'), tv: at('tv'), earn: at('earn') };
   }

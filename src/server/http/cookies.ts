@@ -23,7 +23,7 @@ export interface CookieOptions {
 /** HttpOnly, SameSite=Strict, Secure on HTTPS. `value: null` deletes it. */
 export function setCookie(req: FastifyRequest, reply: FastifyReply, name: string, value: string | null, opts: CookieOptions = {}): void {
   const parts = [`${name}=${value ?? ''}`, `Path=${opts.path ?? '/'}`, 'HttpOnly', 'SameSite=Strict'];
-  if (req.protocol === 'https') parts.push('Secure');
+  if (req.viaHttps) parts.push('Secure');
   if (value === null) parts.push('Max-Age=0');
   else if (opts.maxAgeMs !== undefined) parts.push(`Max-Age=${Math.floor(opts.maxAgeMs / 1000)}`);
   const prev = reply.getHeader('set-cookie');

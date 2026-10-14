@@ -2,13 +2,14 @@
 import { z } from 'zod';
 import { addDays, dayBounds, dayKey } from '../../shared/time.ts';
 import type { Db } from '../db/database.ts';
+import { BIN, CI } from '../db/schema.ts';
 
 export const newsQuerySchema = z.object({
   range: z.enum(['24h', 'today', 'yesterday', '7d']).default('24h'),
   coins: z
     .string()
     .optional()
-    .transform((s) => (s ? s.split(',').map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z0-9][A-Z0-9.-]{0,14}$/.test(c)) : [])),
+    .transform((s) => (s ? s.split(',').map((c) => c.trim().toUpperCase()).filter((c) => /^\^?[A-Z0-9][A-Z0-9.-]{0,14}$/.test(c)) : [])),
   favorites: z
     .enum(['0', '1', 'true', 'false'])
     .optional()
@@ -102,20 +103,21 @@ export function rangeBounds(range: NewsQuery['range'], tz: string, now: number):
   }
 }
 
-const escapeLike = (s: string) => s.replace(/[\\%_]/g, (m) => `\\${m}`);
+// T-SQL's LIKE also reads `[` as the start of a character class (TD-AZURE §4).
+const escapeLike = (s: string) => s.replace(/[\\%_[]/g, (m) => `\\${m}`);
 
 /** `userId`: whose favourites the "favourites only" filter uses (FD-USERS §2); the news themselves are common. */
-export function queryNews(db: Db, q: NewsQuery, tz: string, userId: number, now = Date.now()): NewsPage {
+export async function queryNews(db: Db, q: NewsQuery, tz: string, userId: number, now = Date.now()): Promise<NewsPage> {
   const { from, to } = rangeBounds(q.range, tz, now);
-  const favorites = db.all<{ coin: string }>('SELECT coin FROM watchlist WHERE user_id = ? ORDER BY position, coin', [userId]).map((r) => r.coin);
+  const favorites = (await db.all<{ coin: string }>('SELECT coin FROM watchlist WHERE user_id = ? ORDER BY position, coin', [userId])).map((r) => r.coin);
   let coins = q.coins;
   if (q.favorites) coins = coins.length ? coins.filter((c) => favorites.includes(c)) : favorites;
   const where: string[] = ['s.enabled = 1', 'n.published_at >= ?', 'n.published_at < ?'];
   const params: (string | number)[] = [from, to];
   if (q.favorites && coins.length === 0) return { items: [], nextCursor: null, range: { from, to }, favorites };
   if (coins.length) {
-    where.push(`n.id IN (SELECT news_id FROM news_coins WHERE coin IN (${coins.map(() => '?').join(',')}))`);
-    params.push(...coins);
+    where.push(`n.id IN (SELECT news_id FROM news_coins WHERE coin IN (SELECT value COLLATE ${BIN} FROM OPENJSON(?)))`);
+    params.push(JSON.stringify(coins));
   }
   if (q.category) {
     where.push('n.category = ?');
@@ -131,7 +133,8 @@ export function queryNews(db: Db, q: NewsQuery, tz: string, userId: number, now 
     params.push(q.sentiment);
   }
   if (q.q) {
-    where.push("(n.title LIKE ? ESCAPE '\\' OR n.summary LIKE ? ESCAPE '\\')");
+    // Case-insensitive, as SQLite's LIKE was (the columns compare exactly otherwise).
+    where.push(`(n.title COLLATE ${CI} LIKE ? ESCAPE '\\' OR n.summary COLLATE ${CI} LIKE ? ESCAPE '\\')`);
     const like = `%${escapeLike(q.q)}%`;
     params.push(like, like);
   }
@@ -140,15 +143,14 @@ export function queryNews(db: Db, q: NewsQuery, tz: string, userId: number, now 
     where.push('(n.published_at < ? OR (n.published_at = ? AND n.id < ?))');
     params.push(Number(t), Number(t), id);
   }
-  const rows = db.all<Row>(
-    `SELECT n.id, n.title, n.summary, n.url, n.source_id, s.name AS source_name, n.category, n.published_at, n.fetched_at, n.relevance, n.impact, n.sentiment_impact, n.flags,
+  const rows = await db.all<Row>(
+    `SELECT TOP (?) n.id, n.title, n.summary, n.url, n.source_id, s.name AS source_name, n.category, n.published_at, n.fetched_at, n.relevance, n.impact, n.sentiment_impact, n.flags,
             n.sentiment, n.sentiment_label, n.sentiment_engine, n.sentiment_meta, n.cluster_id,
-            (SELECT group_concat(coin) FROM news_coins c WHERE c.news_id = n.id) AS coins
+            (SELECT STRING_AGG(coin, ',') FROM news_coins c WHERE c.news_id = n.id) AS coins
      FROM news n JOIN sources s ON s.id = n.source_id
      WHERE ${where.join(' AND ')}
-     ORDER BY n.published_at DESC, n.id DESC
-     LIMIT ?`,
-    [...params, q.limit + 1],
+     ORDER BY n.published_at DESC, n.id DESC`,
+    [q.limit + 1, ...params],
   );
   const hasMore = rows.length > q.limit;
   const page = rows.slice(0, q.limit);
@@ -157,12 +159,12 @@ export function queryNews(db: Db, q: NewsQuery, tz: string, userId: number, now 
   const clusterIds = [...new Set(page.map((r) => r.cluster_id))];
   const members = new Map<string, NewsItemDto['related']>();
   if (clusterIds.length) {
-    const all = db.all<{ id: string; title: string; url: string | null; source_name: string; published_at: number; cluster_id: string }>(
+    const all = await db.all<{ id: string; title: string; url: string | null; source_name: string; published_at: number; cluster_id: string }>(
       `SELECT n.id, n.title, n.url, s.name AS source_name, n.published_at, n.cluster_id
        FROM news n JOIN sources s ON s.id = n.source_id
-       WHERE s.enabled = 1 AND n.cluster_id IN (${clusterIds.map(() => '?').join(',')})
-       ORDER BY n.published_at DESC`,
-      clusterIds,
+       WHERE s.enabled = 1 AND n.cluster_id IN (SELECT value COLLATE ${BIN} FROM OPENJSON(?))
+       ORDER BY n.published_at DESC, n.id DESC`,
+      [JSON.stringify(clusterIds)],
     );
     for (const m of all) {
       const list = members.get(m.cluster_id) ?? [];

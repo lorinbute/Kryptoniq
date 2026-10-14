@@ -229,3 +229,104 @@ Status legend: [ ] todo · [~] in progress · [x] done
 - [x] FD și TD: Partea I (aplicația de azi, cu numerotarea v1 păstrată, ca trimiterile din cod să rămână valide, plus subiectele noi) și Partea a II-a (istoricul deciziilor, cu ce a fost înlocuit); README, ghidul, research, PROGRESS, portul indicatorului și jurnalul de review cu numele Sentiq
 - [x] Fiecare afirmație din Partea I verificată în cod (config, securitate, migrații, job-uri, rute, setări, surse, piață, brokeri, connector)
 
+## Baza de date în Azure SQL; pregătit pentru Azure App Service (14 oct 2026)
+- [x] Cererea: găzduire pe Azure; „rescrierea este 100% de făcut […] vom folosi o bază de date SQL de la Microsoft”; fără mașină virtuală Linux administrată de mână → Azure SQL Database + App Service pe Linux administrat de Microsoft; FD-AZURE / TD-AZURE
+- [x] Baza `sentiq` pe serverul `serento-sql` (creată de utilizator), utilizatorul `sentiq_app` doar pe ea (`db_owner`), conexiunea în `data/database.env` (`chmod 600`, gitignored)
+- [x] Stratul de date rescris (`mssql`): parametri, `BIGINT`, scrieri serializate cu `sp_getapplock`, tranzacții cu `AsyncLocalStorage`, reîncercări, erori de pornire în română; schema T-SQL (migrarea 1 = cele 8 SQLite); tot codul care atinge baza devenit asincron, secvențele citire → scriere în tranzacții; scrieri în loturi cu `OPENJSON`
+- [x] Joburile pe o singură instanță (`job_lease`); modul Azure (IP, HTTPS, sonda, HSTS, `PORT`, `/home/data`); Stare sistem cu baza și instanța joburilor
+- [x] Import din SQLite (`scripts/sentiq.sh import-sqlite`), `db-check`, ghidul de publicare `docs/deploy-azure.md`
+- [x] Teste: 370+ pe Azure SQL, în scheme `t_…` create și șterse de setup-ul global
+- [x] Review rounds (docs/review-log.md)
+- [x] Mutarea datelor de pe Mac în Azure SQL și repornirea aplicației (14 oct, 01:13–01:15, după ce o comandă a mea a oprit aplicația; backup `data/backups/kryptoniq-before-azure-2026-10-14.db`)
+- [x] Publicarea pe App Service (14 oct): aplicația `sentiq` (Austria East, B1), creată de utilizator; build-ul prin `scripts/azure-build.sh` (`CUSTOM_BUILD_COMMAND`); firewall-ul `serento-sql` cu toate cele 13 IP-uri de ieșire (adăugate de utilizator); rulează la `https://sentiq-e9f4hfa0ababh0ax.austriaeast-01.azurewebsites.net` din 08:15 UTC, pe aceeași bază cu Mac-ul (joburile le ține instanța care are `job_lease`)
+- [x] Reparat la publicare: erorile de login la pornire (firewall, parolă) erau raportate ca „serverul nu răspunde” (review-log, rundele 9–11)
+- [x] Domeniul: utilizatorul a legat **`sentiq.money`** (cu certificat) și a pus `SENTIQ_PUBLIC_URL=https://sentiq.money`; `sentiq.app` nu mai e folosit
+- [ ] Passkey-urile refăcute pe sentiq.money (fiecare utilizator, în Securitate)
+
+## Connectorul Claude pornit; setările adminului separate; feed-urile automate; Azi (14 oct 2026)
+- [x] Cercetare: cerințele actuale ale Claude pentru connectori (claude.com/docs/connectors: 401 cu `resource_metadata`, CIMD cu `none`, callback-uri, refresh rotit, limite de timp, abonamentele), documentele CIMD reale ale Claude și Claude Code; cauza „Nasdaq: BSOL” (copiile SQLite: BSOL în favorite pe 13 oct, apoi scos; feed-ul ținut până la expirarea știrilor); cauza plăcilor lungi de pe Azi (rândul cu favoritele pe ecrane late)
+- [x] FD-ONLINE, FD-ADMINSET, FD-AUTOFEED, FD-TODAYGRID + TD-urile lor
+- [x] Connectorul pornit pe App Service (`SENTIQ_MCP=1`, 11:29 UTC); verificat din exterior: metadatele, 401, autorizarea cu documentul real al Claude până la pagina de consimțământ
+- [x] Adresa publică în bază (`public_instance`): linkurile de activare făcute pe Mac duc la sentiq.money; panoul connectorului și pe Mac; textele „doar pe Mac” refăcute
+- [x] Setări: filele „Ale mele” și „Admin” (doar admin; `/settings/admin`, ⌘K „Setări admin”); detaliile Resend nu mai ajung la utilizatori
+- [x] Feed-ul automat al unei acțiuni se șterge (cu știrile lui) când acțiunea nu mai e în favoritele nimănui; BSOL pleacă la prima pornire
+- [x] Azi: sentimentul în stânga, evenimentul și știrile live în dreapta pe toată înălțimea lui (de la 768 px); „Ce mișcă piața” și „Ultimele 30 de zile” deasupra favoritelor; favoritele pe toată lățimea
+- [x] Teste: 391 pe Azure SQL; verificat în Chrome pe o schemă de test (cu știrile și calendarul reale din ultimele 36 h): admin / utilizator, filele, ancorele, căutarea, Securitate, login pe IP, bannerul offline, Azi la 1600 / 1440 / 1280 / 1024 / 800 / 390 px
+- [x] Review rounds (docs/review-log.md, rundele 12–16; ultima fără probleme)
+- [x] Publicat pe Azure (deploy `e246b51e`, 12:27 UTC; BSOL șters la pornire) și aplicația de pe Mac repornită pe codul nou (15:27 ora României)
+- [x] Incident la publicare: primul build a fost întrerupt de mutarea aplicației pe alt worker; fără `oryx-manifest.toml`, site-ul a fost căzut 12:11–12:27 UTC. Reparat prin ștergerea lacătului rămas și o publicare nouă; pașii sunt în `deploy-azure.md` §5
+
+## Prețurile crypto de la exchange-ul fiecăruia; „Grafice și scanner” scos din setările clientului (14 oct 2026)
+- [x] Cercetare: ce dă fiecare dintre cele 7 exchange-uri conectabile (ccxt + verificare live pe datele publice, cu favoritele adminului): KuCoin, Binance, Bybit, OKX, Bitget dau tot (Bybit / OKX / Bitget fără 8h); Kraken (6 din 10 perechi lipsă, doar 720 de lumânări) și Coinbase (7 din 10 lipsă, fără 4h și 1w) nu pot fi surse
+- [x] FD-MARKETSRC + TD-MARKETSRC
+- [x] Implementare: `market/source.ts` (exchange-ul conectat → cel ales → cel implicit; perechea / timeframe-ul lipsă → cel implicit), Bitget ca sursă nouă, `marketData` global (exchange implicit + istoric) mutat din setările adminului, `/api/market/source`, lumânările, căutarea, scanner-ul și `get_chart` pe sursa utilizatorului; interfața: fără „Grafice și scanner”, alegerea dintre conturi, Date de piață la Admin, comutatorul semnalelor pe Azi, timeframe-urile lipsă dezactivate pe grafic
+- [x] Teste noi (`market/source.test.ts`); verificat în Chrome pe o schemă de test (OKX + Bybit: alegerea, 8h dezactivat cu nota „OKX nu are 8h; graficul arată 6h”, comutatorul pe Azi, Admin → Date de piață, 1440 și 390 px)
+- [x] Review rounds (rundele 17–19; ultima fără probleme)
+- [x] Publicat pe Azure și pe Mac (împreună cu cardurile din Tranzacții)
+
+## Tranzacții: soldul futures și rezultatele pozițiilor închise; textul de la Favorite (14 oct 2026)
+- [x] Cercetare: istoricul pozițiilor închise în ccxt (KuCoin clasic / UTA, Bybit, OKX, Bitget; Binance fără), limitele KuCoin (7 zile pe cerere, 3 luni păstrate, `pnl` net de comisioane și funding), soldul futures (`account-overview`)
+- [x] Întrebări puse utilizatorului: perioada (a ales selectorul Azi · 7z · 30z · 90z) și ce e o tranzacție (o poziție futures închisă)
+- [x] FD-TRADESTATS + TD-TRADESTATS
+- [x] Implementare: `exchange/trade-stats.ts` (ferestre de 7 zile cu înjumătățire, paginile OKX, numărarea), `AccountsService.tradeStats` (cache 5 min) și `futuresAvailable`, `/api/portfolio/:id/stats`; pagina Tranzacții cu 7 carduri, perioada ținută minte, „Reîmprospătează” lângă „Adaugă un cont”; textul de la Favorite pe toată lățimea
+- [x] Teste noi (`trade-stats.test.ts`, portofoliul din `server.test.ts`); verificat în citire pe contul KuCoin real (clasic: soldul futures se citește; 1 / 3 / 3 / 3 poziții închise pe Azi / 7z / 30z / 90z, 90z în ~2 s) și în Chrome pe o schemă de test (1440, 390)
+- [x] Review rounds (rundele 20–22; ultima fără probleme)
+- [x] Publicat pe Azure (deploy `4cc0acb2`, 14:24 UTC) și pe Mac (17:16 ora României), împreună cu sursa prețurilor; `marketData` mutat din setările adminului (KuCoin, 1500)
+- [x] Incident la publicare: build-ul întrerupt din nou (memoria B1 cu aplicația pornită), site-ul căzut 14:16–14:24 UTC; reparat ca la prânz; cauza și varianta de încercat în `deploy-azure.md` §5
+
+## Connectorul și pentru ChatGPT și Gemini (14 oct 2026)
+- [x] Cercetare: OAuth-ul ChatGPT (CIMD `chatgpt.com/oauth/client.json`, `private_key_jwt` + `none`, întoarcere `connector_platform_oauth_redirect` cu `iss`, DCR alternativ), aplicația Gemini (Custom apps, DCR, întoarcere `oauth-redirect.googleusercontent.com/r/…`, doar unele conturi) și Gemini CLI (loopback); documentele citite de pe Azure (200)
+- [x] FD-MCPMULTI + TD-MCPMULTI
+- [x] Implementare: gazdele implicite, CIMD cu `none` acceptat, DCR cu metodă cu secret → public, `client_id` din antetul Basic / `client_assertion`, textele (consimțământ cu numele aplicației, „Asistenți AI (connector)” cu pașii)
+- [x] Teste: ChatGPT (documentul real, Basic), un document doar cu semnătură refuzat, Gemini prin DCR (`client_secret_basic`, `client_assertion`)
+- [x] Review rounds (rundele 23, 24 și 28; ultima fără probleme)
+- [x] Publicat pe Azure (deploy `608d7489`, 15:21 UTC, cu aplicația oprită în timpul build-ului) și pe Mac (18:22 ora României); verificat: `authorize` cu documentele reale ChatGPT și Claude ajunge la consimțământ
+
+## Lacătul de scriere blocat după publicare (reparație, 14 oct 2026)
+- [x] Incident: 14:25–14:35 UTC nicio scriere (o sesiune a containerului vechi cu tranzacția deschisă, reînnoirile lease-ului alipite ei); rezolvat manual cu `KILL` după verificarea sesiunii (tranzacție de 598 s)
+- [x] FD-DBHEAL + TD-DBHEAL: lease-ul și joburile `detached`, autovindecarea (sesiune Sentiq blocată > 5 min → `KILL`, în jurnal), oprirea limitată la 15 s, publicarea cu aplicația oprită
+- [x] Teste (`db/heal.test.ts`)
+- [x] Publicat împreună cu MCPMULTI; procedura nouă a mers (pauză planificată de ~11 minute, build neîntrerupt); `az webapp start` se dă când deploy-ul arată `status 4`
+
+## Săgețile de trend, înălțimea câmpurilor, perioada din Tranzacții (14 oct 2026)
+- [x] FD-UIPOLISH + TD-UIPOLISH
+- [x] Implementare: săgeți verzi / roșii în locul cuvintelor Uptrend / Downtrend pe fișele de pe Azi; câmpurile și dropdown-urile la înălțimea butoanelor (38 px, 44 pe ecrane tactile) peste tot; favoritele centrate pe verticală, căutarea la înălțimea comutatorului; perioada din Tranzacții lângă butoane; codul pentru Gemini CLI se rupe pe rânduri
+- [x] Verificat în Chrome (1440, 1024, 390, și cu ecran tactil emulat)
+- [x] Review rounds (rundele 25–27; ultima fără probleme)
+- [x] Publicat pe Azure și pe Mac (împreună cu MCPMULTI și DBHEAL)
+
+
+## Indici în favorite: SPX, NDX, COMP, DJI, RUT, VIX, SOX (14 oct 2026)
+- [x] Cercetare: Nasdaq dă doar indicii proprii (NDX, COMP, SOX, `assetclass=index`, 10 ani de istoric); Cboe dă SPX, VIX, RUT și DJX (= Dow / 100) cu 15 min întârziere și istoric lung (SPX din 1975, cu deschideri 0 până în 1996; RUT din 2020); Yahoo (429), Stooq (cere JavaScript) și Twelve Data gratuit (fără indici) nu merg; pagina „Use of Content” a Cboe cere acordul lor pentru date
+- [x] FD-INDICES + TD-INDICES
+- [x] Implementare: `shared/indices.ts` (catalogul, id-ul `^SPX`), `market/indices.ts` (Cboe, Nasdaq `index`, istoricul comun 5 min), rutarea în `StockData`, favoritele (`kind = 'index'`, fără migrare), lumânările / cotațiile / graficul mic, scanner-ul, aliasurile în știri, connectorul (`get_chart ^SPX`), Rezumatul; interfața: „Indici” în Setări (lista de 7 sub câmp), fișele de pe Azi, banda, Grafice (`/charts/i/SPX`, doar 1d / 1w, întârzierea), ⌘K, Știri
+- [x] Reparat pe drum: răspunsurile la adăugări rapide în Setări puteau sosi în altă ordine și ascundeau din listă favorite salvate
+- [x] Teste noi (`shared/indices.test.ts`, `market/indices.test.ts`, API, scanner, știri, MCP); verificat în Chrome pe o schemă de test cu date reale de la Cboe și Nasdaq (toți 7 indici: preț, variație, semnal; graficul SPX; filtrul de știri SPX; 1440 și 390 px)
+- [x] Review rounds (rundele 29–31; ultima fără probleme); Cboe și Nasdaq verificate și de pe Azure
+- [x] Publicat pe Azure (deploy `6330eb3b`, aplicația oprită 16:11–16:16 UTC, build neîntrerupt) și pe Mac (19:16 ora României); fără migrare de schemă
+
+## Centrarea favoritelor, dropdown-urile în Safari, connectorul în Setări și consumul cheii Claude (14 oct 2026, seara)
+- [x] Cauza centrării (pictogramele și simbolul pe linia de bază a textului, ~3 px mai sus) → FD-ROWCENTER / TD-ROWCENTER
+- [x] Dropdown-urile: Safari ignora înălțimea (22 px) → desenate de Sentiq, 38 / 44 px în orice browser; Știri și Grafice aliniate (FD-SELECTSAFARI / TD-SELECTSAFARI); audit automat în WebKit și Chrome pe toate paginile
+- [x] Întrebare pusă utilizatorului (connectorul nu poate înlocui cheia): a ales „Păstrez totul pe cheie”
+- [x] FD-AICLARITY / TD-AICLARITY: connectorul mutat în Setări → Ale mele (mereu vizibil, cu ce face și ce nu face), Securitate cu trimitere, ⌘K; în Admin „La ce folosește Sentiq cheia Claude” cu consumul zilei (titluri, apeluri, tokeni, modele), înregistrat în bază (`sentiment/usage.ts`); subsolul Rezumatului
+- [x] Planul App Service trecut pe B2 (de utilizator); `deploy-azure.md`: publicarea fără oprirea aplicației
+- [x] Review rounds (runda 32, fără probleme)
+- [x] Publicat pe Azure (deploy `d6965246`, prima publicare pe B2, fără oprire: site-ul a răspuns tot timpul) și pe Mac (20:02 ora României); fără migrare de schemă
+
+
+## Connectorul MCP scos (14 oct 2026, seara)
+- [x] Întrebări puse utilizatorului: chat în Sentiq („Nu”, „nu faci nimic”); connectorul: „Îl opresc”, apoi „scoate mcp-ul”
+- [x] `SENTIQ_MCP` scos din App Service; backup al tabelelor connectorului
+- [x] FD-MCPREMOVE + TD-MCPREMOVE
+- [x] Implementare: codul, pagina de consimțământ, panoul, dependențele și tabelele (migrarea 2) scoase; adresele vechi răspund 404
+- [x] Teste (adresa publică mutată în `public-instance.test.ts`, linkurile de activare, adresele vechi); review (runda 33, fără probleme)
+- [x] Publicat: întâi pe Mac (20:46 ora României; migrarea 2 aplicată, tabelele connectorului șterse), apoi pe Azure (deploy `3c6e980b`, 17:48 UTC, fără oprire); `/mcp` și `/.well-known/…` răspund 404
+
+## Limitele Twelve Data din planul cheii; indicii pe intraday (14 oct 2026, seara)
+- [x] Cercetare: `/api_usage` (specificația OpenAPI Twelve Data); surse pentru indici intraday (CNBC, Massive / Polygon, Twelve Data, FMP, EODHD, Yahoo, Stooq)
+- [x] FD-TDPLAN / TD-TDPLAN: bugetul pe planul citit (la salvarea cheii, la pornire, la 6 ore, „Recitește planul”), în bază pentru ambele instanțe; Admin și Stare sistem
+- [x] FD-INDEXINTRA / TD-INDEXINTRA: indicii de la CNBC (cotații în timp real, zilnic din 2010, 1m – 4h pe ~100 de zile), Nasdaq / Cboe ca rezervă; scanner-ul pe timeframe-ul ales
+- [x] Teste noi (`cnbc.test.ts`, planul, intraday); verificat în WebKit cu date reale
+- [x] Review rounds (rundele 34–35; ultima fără probleme)
+- [x] Publicat pe Azure (deploy `19c474cd`, 18:26 UTC, fără oprire) și pe Mac (21:26 ora României); planul cheii reale citit la pornire: Basic (8 / minut, 800 / zi), până la upgrade

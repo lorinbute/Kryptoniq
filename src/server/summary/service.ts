@@ -5,6 +5,7 @@ import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
 import type { Db } from '../db/database.ts';
 import type { Logger } from '../log.ts';
+import type { ClaudeUsage } from '../sentiment/usage.ts';
 import { describeError } from '../sentiment/claude.ts';
 import type { SettingsService } from '../settings.ts';
 import type { DayContext, SummaryChart } from './context.ts';
@@ -72,6 +73,8 @@ export interface SummaryDeps {
   log: Logger;
   build: (userId: number, now: number) => DayContext | Promise<DayContext>;
   clientFactory?: (apiKey: string) => MessagesClient;
+  /** What the summaries spend on the key (FD-AICLARITY). */
+  usage?: ClaudeUsage;
 }
 
 interface Row {
@@ -91,13 +94,13 @@ export class SummaryService {
     this.deps = deps;
   }
 
-  hasKey(): boolean {
-    return this.deps.settings.getClaudeKey() !== null;
+  async hasKey(): Promise<boolean> {
+    return (await this.deps.settings.getClaudeKey()) !== null;
   }
 
   /** The user's latest summary of `day`, or null. */
-  latest(userId: number, day: string): StoredSummary | null {
-    const r = this.deps.db.get<Row>('SELECT day, tz, created_at, model, content, charts FROM day_summaries WHERE user_id = ? AND day = ?', [userId, day]);
+  async latest(userId: number, day: string): Promise<StoredSummary | null> {
+    const r = await this.deps.db.get<Row>('SELECT day, tz, created_at, model, content, charts FROM day_summaries WHERE user_id = ? AND day = ?', [userId, day]);
     if (!r) return null;
     try {
       return { day: r.day, tz: r.tz, createdAt: r.created_at, model: r.model, content: JSON.parse(r.content) as SummaryContent, charts: JSON.parse(r.charts) as SummaryChart[] };
@@ -107,8 +110,8 @@ export class SummaryService {
   }
 
   /** When the user may ask for a new summary (the latest one of the day + the cooldown), or null. */
-  retryAt(userId: number, day: string, now = Date.now()): number | null {
-    const last = this.latest(userId, day);
+  async retryAt(userId: number, day: string, now = Date.now()): Promise<number | null> {
+    const last = await this.latest(userId, day);
     const at = last ? last.createdAt + SUMMARY_COOLDOWN_MS : 0;
     return at > now ? at : null;
   }
@@ -117,11 +120,14 @@ export class SummaryService {
   generate(userId: number, day: string, now = Date.now()): Promise<StoredSummary> {
     const running = this.inflight.get(userId);
     if (running) return running;
-    const key = this.deps.settings.getClaudeKey();
-    if (!key) return Promise.reject(new SummaryUnavailableError('Rezumatul folosește Claude: cheia se pune în Setări → Motorul de sentiment.'));
-    const retryAt = this.retryAt(userId, day, now);
-    if (retryAt) return Promise.reject(new SummaryCooldownError(retryAt));
-    const p = this.write(userId, key, now).finally(() => this.inflight.delete(userId));
+    // Registered before the first await: a second request meanwhile gets this same one.
+    const p = (async () => {
+      const key = await this.deps.settings.getClaudeKey();
+      if (!key) throw new SummaryUnavailableError('Rezumatul folosește Claude: cheia se pune în Setări → Admin → Motorul de sentiment.');
+      const retryAt = await this.retryAt(userId, day, now);
+      if (retryAt) throw new SummaryCooldownError(retryAt);
+      return this.write(userId, key, now);
+    })().finally(() => this.inflight.delete(userId));
     this.inflight.set(userId, p);
     return p;
   }
@@ -150,6 +156,8 @@ export class SummaryService {
       this.deps.log.warn(`summary: Claude failed (${describeError(err)})`);
       throw new SummaryFailedError(`Rezumatul nu s-a putut genera: ${describeError(err)}.`);
     }
+    // Billed whatever the answer (a refusal or a cut-off one too): counted before it is read (FD-AICLARITY).
+    if (message.usage) await this.deps.usage?.record('summary', { input: message.usage.input_tokens, output: message.usage.output_tokens });
     if (message.stop_reason === 'refusal') throw new SummaryFailedError('Claude a refuzat să facă rezumatul. Încearcă din nou.');
     const parsed = message.parsed_output as SummaryContent | null | undefined;
     if (!parsed) throw new SummaryFailedError(message.stop_reason === 'max_tokens' ? 'Rezumatul a ieșit prea lung și s-a oprit. Încearcă din nou.' : 'Răspunsul lui Claude nu a putut fi citit. Încearcă din nou.');
@@ -160,10 +168,10 @@ export class SummaryService {
     const content = { ...tidied, charts: chosen };
     const charts = chosen.map((c) => ({ ...(ctx.charts[c.id] as SummaryChart), caption: c.caption }));
     const stored: StoredSummary = { day: ctx.day, tz: ctx.tz, createdAt: Date.now(), model: SUMMARY_MODEL, content, charts };
-    this.deps.db.run(
-      `INSERT INTO day_summaries(user_id, day, tz, created_at, model, content, charts) VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(user_id, day) DO UPDATE SET tz = excluded.tz, created_at = excluded.created_at, model = excluded.model, content = excluded.content, charts = excluded.charts`,
-      [userId, stored.day, stored.tz, stored.createdAt, stored.model, JSON.stringify(stored.content), JSON.stringify(stored.charts)],
+    await this.deps.db.run(
+      `UPDATE day_summaries SET tz = @tz, created_at = @at, model = @model, content = @content, charts = @charts WHERE user_id = @u AND day = @day;
+       IF @@ROWCOUNT = 0 INSERT INTO day_summaries(user_id, day, tz, created_at, model, content, charts) VALUES (@u, @day, @tz, @at, @model, @content, @charts)`,
+      { u: userId, day: stored.day, tz: stored.tz, at: stored.createdAt, model: stored.model, content: JSON.stringify(stored.content), charts: JSON.stringify(stored.charts) },
     );
     // The tokens say what it cost (research §12).
     const usage = message.usage ? `, ${message.usage.input_tokens} in / ${message.usage.output_tokens} out tokens` : '';

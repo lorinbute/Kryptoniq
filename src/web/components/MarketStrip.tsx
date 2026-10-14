@@ -8,9 +8,10 @@ import { clsx } from 'clsx';
 import type { CandlesResult, MarketContext, MarketStatus, StockQuoteRow, WatchItem } from '../../shared/api-types.ts';
 import { api, qs } from '../api.ts';
 import { fmtCountdown, fmtPct, fmtPrice, fmtUsd } from '../format.ts';
-import { useNextHighImpact, useNow, useSettings, useWatchlist } from '../hooks.ts';
+import { useMarketSource, useNextHighImpact, useNow, useWatchlist } from '../hooks.ts';
 import { sparkChange, sparkPath } from '../spark.ts';
 import { chartPathOf } from '../chart/paths.ts';
+import { INDEX_DELAY_NOTE, plainSymbol } from '../../shared/indices.ts';
 import { CoinLogo, EventIcon } from './icons.tsx';
 import { Activity, ChartPie, Gauge, Landmark } from 'lucide-react';
 
@@ -62,8 +63,8 @@ function StockTicker({ w, q, closes }: { w: WatchItem; q: StockQuoteRow | undefi
   return (
     <Link to={chartPathOf(w)} className={TICKER_LINK} title={w.name ?? undefined}>
       <CoinLogo coin={w.coin} size={16} badge square />
-      <span className="font-semibold">{w.coin}</span>
-      <span className={clsx('num', q?.error && 'text-faint')} title={q?.error ? `Prețul nu s-a putut încărca: ${q.error}` : undefined}>
+      <span className="font-semibold">{plainSymbol(w.coin)}</span>
+      <span className={clsx('num', q?.error && 'text-faint')} title={q?.error ? `Prețul nu s-a putut încărca: ${q.error}` : w.kind === 'index' && q?.delayed ? INDEX_DELAY_NOTE : undefined}>
         {q?.last != null ? fmtPrice(q.last, precision) : q ? '—' : '…'}
       </span>
       {change !== null && <span className={clsx('num', change >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(change)}</span>}
@@ -75,13 +76,14 @@ function StockTicker({ w, q, closes }: { w: WatchItem; q: StockQuoteRow | undefi
 
 /** Hourly closes of the last 48 h for each favourite coin (shared with the coin tiles on the Today page). */
 export function useSparks(symbols: string[]) {
-  const settings = useSettings();
-  const exchange = settings.data?.market.exchange ?? 'kucoin';
+  // The server picks the exchange per pair (FD-MARKETSRC); the key follows the user's, so a new account refetches.
+  const source = useMarketSource();
+  const exchange = source.data?.userExchange ?? '';
   return useQueries({
     queries: symbols.map((symbol) => ({
       queryKey: ['spark', exchange, symbol],
-      queryFn: () => api.get<CandlesResult>(`/api/market/candles${qs({ exchange, symbol, tf: '1h', limit: 50 })}`),
-      enabled: settings.isSuccess,
+      queryFn: () => api.get<CandlesResult>(`/api/market/candles${qs({ symbol, tf: '1h', limit: 50 })}`),
+      enabled: !source.isPending,
       staleTime: 30_000,
       refetchInterval: 60_000,
       select: (r: CandlesResult) => ({ closes: r.candles.slice(-48).map((c) => c.c), precision: r.pricePrecision }),
@@ -143,8 +145,9 @@ export function MarketStrip() {
   const now = useNow(1000);
   const watchlist = useWatchlist();
   const all = watchlist.data ?? [];
-  const coins = all.filter((w) => w.kind !== 'stock');
-  const stocks = all.filter((w) => w.kind === 'stock');
+  // Shares and indices (FD-INDICES) are shown alike; everything else is a coin.
+  const coins = all.filter((w) => w.kind === 'crypto');
+  const stocks = all.filter((w) => w.kind !== 'crypto');
   const sparks = useSparks(coins.map((w) => `${w.coin}/${w.quote}`));
   const stockSymbols = stocks.map((w) => w.coin);
   const quotes = useStockQuotes(stockSymbols);
@@ -176,9 +179,9 @@ export function MarketStrip() {
   };
   return (
     <Ticker label="Piața acum">
-      {/* In the order of the watchlist, coins and stocks mixed. */}
+      {/* In the order of the watchlist, coins, stocks and indices mixed. */}
       {all.map((w) =>
-        w.kind === 'stock' ? (
+        w.kind !== 'crypto' ? (
           <StockTicker key={`stock:${w.coin}`} w={w} q={quotes.data?.get(w.coin)} closes={stockSparks[stockSymbols.indexOf(w.coin)]?.data} />
         ) : (
           coinItem(w, coins.indexOf(w))

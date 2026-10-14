@@ -307,10 +307,10 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
           {q.isError && <p className="py-6 text-bear">{errorMessage(q.error)}</p>}
           {noKey && (
             <div className="flex flex-col items-start gap-3 py-8 text-[14px]">
-              <p>Rezumatul îl scrie Claude, cu cheia API Anthropic din Setări → Motorul de sentiment.</p>
+              <p>Rezumatul îl scrie Claude, cu cheia API Anthropic din Setări → Admin → Motorul de sentiment.</p>
               {admin ? (
-                <Link to="/settings" className="btn btn-primary" onClick={onClose}>
-                  Pune cheia în Setări
+                <Link to="/settings/admin#sentiment" className="btn btn-primary" onClick={onClose}>
+                  Pune cheia în Setări admin
                 </Link>
               ) : (
                 <p className="text-muted">Cheia o pune adminul aplicației.</p>
@@ -338,8 +338,8 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
         </div>
 
         <footer className="border-t border-line px-5 py-2.5 text-[11.5px] text-faint">
-          Scris de Claude din datele Sentiq de azi (sentiment, știri, calendar, indicatori economici, contextul pieței, favoritele tale); cifrele graficelor sunt ale aplicației. Nu
-          este un sfat de investiții.
+          Scris de Claude din datele Sentiq de azi (sentiment, știri, calendar, indicatori economici, contextul pieței, favoritele tale), cu cheia Claude a lui Sentiq{s ? ` (${s.model})` : ''};
+          cifrele graficelor sunt ale aplicației. Nu este un sfat de investiții.
         </footer>
       </div>
     </div>

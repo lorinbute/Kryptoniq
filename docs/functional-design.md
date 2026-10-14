@@ -8,14 +8,14 @@
 
 # Partea I — Sentiq azi
 
-> Numerotarea §0–§9 e cea din v1 (codul și secțiunile mai vechi trimit la ea); subiectele apărute după v1 sunt §10–§13.
+> Numerotarea §0–§9 e cea din v1 (codul și secțiunile mai vechi trimit la ea); subiectele apărute după v1 sunt §10–§14.
 
 ## 0. Scop și principii
 
 Sentiq (de la *sentiment* + *IQ*) este un **asistent de day-trading** pentru crypto și acțiunile americane. Adună într-un singur loc ce se întâmplă în piață (știri crypto, acțiuni, macro, geopolitică), calculează **sentimentul zilei**, arată **calendarul economic** (cu rezultatele companiilor), **indicatorii economici pe țări**, **grafice cu indicatorii Slingshot System și LMA** și **portofoliile** de la exchange-uri crypto și brokeri. Opțional, Claude scrie **rezumatul zilei**.
 
 Principii:
-1. **Rulează pe Mac-ul utilizatorului** și se deschide de pe orice dispozitiv din rețeaua de acasă. Fiecare persoană are **contul ei** (parolă, 2FA, passkey); conturile se dau doar la cerere, aprobate de admin. Găzduirea online e pregătită (connectorul Claude, adresa publică), dar nu e pornită.
+1. **Datele stau în Azure SQL Database** (FD-AZURE). Aplicația rulează online pe Azure App Service, la **https://sentiq.money** (pași în [deploy-azure.md](deploy-azure.md)), și pe Mac, pe aceeași bază. Fiecare persoană are **contul ei** (parolă, 2FA, passkey); conturile se dau doar la cerere, aprobate de admin.
 2. **Informează, nu tranzacționează.** Aplicația nu plasează și nu anulează ordine. Cheile de exchange / broker trebuie să fie doar de citire.
 3. **Transparentă.** Fiecare cifră (sentimentul zilei, scorul unei știri, culoarea unui indicator) poate fi „deschisă” ca să vezi de unde vine.
 4. **Robustă.** O sursă căzută nu strică restul. Ultimele date bune rămân vizibile, cu ora lor.
@@ -28,12 +28,13 @@ Principii:
 
 ### 0.2 Pornire
 - `npm start`, `scripts/sentiq.sh start` sau dublu-click pe `Sentiq.app` (FD-LAUNCH) → `http://localhost:4317`, plus adresa Mac-ului în rețeaua locală.
-- La prima pornire: se creează baza de date, sursele implicite și favoritele implicite (BTC, ETH, SOL), se descarcă modelul de sentiment (~170 MB, o singură dată; până atunci, doar regulile de domeniu, marcat în UI). Contul de admin există din start; parola lui se pune la prima deschidere **de pe Mac**.
+- Conexiunea la bază: `data/database.env` (sau setările App Service), FD-AZURE §1. Fără ea Sentiq nu pornește și spune ce lipsește; `scripts/sentiq.sh db-check` verifică legătura.
+- La prima pornire pe o bază nouă: se creează tabelele, sursele implicite și favoritele implicite (BTC, ETH, SOL), se descarcă modelul de sentiment (~170 MB, o singură dată; până atunci, doar regulile de domeniu, marcat în UI). Contul de admin există din start; parola lui se pune la prima deschidere **de pe Mac**. Datele de dinainte (fișierul SQLite) se mută o singură dată cu `scripts/sentiq.sh import-sqlite` (FD-AZURE §3).
 - După o oprire, la repornire se recuperează știrile publicate între timp (cât sunt încă în feed-uri), se închid zilele rămase deschise și se actualizează calendarul.
-- Datele de dinainte de redenumire rămân (`data/kryptoniq.db`, `data/master.key`), iar variabilele `KRYPTONIQ_*` merg mai departe. Vechiul `Kryptoniq.app` și `scripts/kryptoniq.sh` nu mai există în proiect.
+- Cheia master de dinainte de redenumire rămâne (`data/master.key`, pe Azure `SENTIQ_MASTER_KEY`), iar variabilele `KRYPTONIQ_*` merg mai departe. Fișierul `data/kryptoniq.db` rămâne doar ca sursă a importului. Vechiul `Kryptoniq.app` și `scripts/kryptoniq.sh` nu mai există în proiect.
 
 ## 1. Navigare și layout (FD-REDESIGN, FD-ICONS, FD-THEME2)
-- **Bara de sus:** logo-ul, meniul (**Azi · Știri · Calendar · Economie · Grafice · Tranzacții · Setări**, plus **Stare sistem** pentru admin), „Rezumat” (doar pe Azi), căutarea **⌘K**, ceasurile (local și New York) cu starea serverului, comutatorul de temă și meniul contului (Securitate, Utilizatori pentru admin, Ieși din cont). Pe telefon meniul derulează orizontal, iar comutatorul de temă e în meniul contului.
+- **Bara de sus:** logo-ul, meniul (**Azi · Știri · Calendar · Economie · Grafice · Tranzacții · Setări**, plus **Stare sistem** pentru admin), „Rezumat” (doar pe Azi), căutarea **⌘K**, ceasurile (local și New York) cu starea serverului, comutatorul de temă și meniul contului (Securitate, Utilizatori pentru admin, Ieși din cont). Setări are, pentru admin, două file: „Ale mele” și „Admin” (FD-ADMINSET). Pe telefon meniul derulează orizontal, iar comutatorul de temă e în meniul contului.
 - **Banda pieței** (sub bară, pe orice pagină, derulează singură și se oprește sub cursor): favoritele (monede: preț, variația pe 24 h, grafic pe 48 h; acțiuni: preț, variația zilei, grafic pe 60 de zile), evenimentul major următor cu numărătoare, Fear & Greed crypto, capitalizarea pieței și dominanța BTC, starea bursei americane, S&P 500, Nasdaq 100, VIX și Fear & Greed pentru acțiuni.
 - **⌘K / Ctrl K:** pagini, monede (favorite sau orice pereche), acțiuni, „Caută în știri”; fără diacritice obligatorii.
 - **Teme:** întunecată (implicită, accent auriu) și luminoasă „Navy” (bară și bandă bleumarin, plăci albe, accent turcoaz). Alegerea se ține în browser, se aplică înainte de primul desen și se sincronizează între taburi. Pe ambele teme: graficul pe suprafața lui, rânduri alternate în tabele și liste, hover evident (doar unde există cursor).
@@ -42,7 +43,7 @@ Principii:
 ## 2. Știri (FD-NEWS)
 
 ### 2.1 Ce face
-- Colectează știri din surse RSS gratuite, în 4 categorii: **Crypto**, **Acțiuni**, **Macro / Piețe**, **Geopolitică** (31 de surse implicite, research §1 și §8). Pentru fiecare acțiune favorită se adaugă automat feed-ul ei de la Nasdaq; feed-ul pleacă după ce acțiunea iese din favorite și știrile ei s-au învechit.
+- Colectează știri din surse RSS gratuite, în 4 categorii: **Crypto**, **Acțiuni**, **Macro / Piețe**, **Geopolitică** (31 de surse implicite, research §1 și §8). Pentru fiecare acțiune din favoritele cuiva se adaugă automat feed-ul ei de la Nasdaq; feed-ul se șterge (cu știrile venite doar prin el) imediat ce acțiunea nu mai e în favoritele nimănui (FD-AUTOFEED).
 - Fiecare știre are: titlu, sursă, oră, rezumat (text simplu), link, categorie, **monedele și acțiunile detectate**, **sentiment** (−1…+1, Pozitiv / Neutru / Negativ), relevanță și importanță.
 - Lista e în ordine cronologică inversă, se reîmprospătează la ~1 minut; știrile noi sunt marcate „nou”; știrile din altă zi arată și data. „De ce acest scor?” arată motorul, scorul modelului, regulile aplicate și importanța cu care știrea intră în sentimentul zilei.
 
@@ -57,6 +58,7 @@ Principii:
 ### 2.4 Detectarea monedelor și a acțiunilor
 - Monede: după nume („Bitcoin”), simbol (`BTC`, `$SOL`) și aliasurile din favorite. Protecție la ambiguități: simbolurile se potrivesc doar cu MAJUSCULE sau cu `$`; simbolurile scurte și cuvintele comune (`ONE`, `GAS`, `NEAR` scris „near”, `CEO`, `ETF`, `SEC`, `USD`, `AI`…) nu sunt monede; numele mai lungi au prioritate („Bitcoin Cash” ≠ „Bitcoin”).
 - Acțiuni favorite: după simbol și numele companiei (alias editabil, ex. „Apple”, „iPhone”).
+- Indici favoriți: după aliasuri („S&P 500”, „Dow Jones”, „Russell 2000”…), editabile (FD-INDICES).
 
 ### 2.5 Cazuri limită
 | Situație | Comportament |
@@ -147,7 +149,10 @@ Se mai văd: **încrederea** (scăzută / medie / ridicată), sub-indicii **Cryp
 ## 5. Grafice (FD-CHART, FD-CHARTUX, FD-CHARTFAV, FD-PNL)
 
 ### 5.1 Ce face
-- Lumânări pentru **perechi crypto** (exchange-ul de date, implicit KuCoin; `/charts/BTC/USDT`) și **acțiuni americane** (`/charts/s/AAPL`): crypto 1m – 1w; acțiunile zilnic și săptămânal fără cheie (Nasdaq), 1m – 4h cu cheia Twelve Data a adminului (Twelve Data nu are 3m, 6h, 8h, 12h: se folosește timeframe-ul cel mai apropiat).
+- Lumânări pentru **perechi crypto** (`/charts/BTC/USDT`), **acțiuni americane** (`/charts/s/AAPL`) și **indici americani** (`/charts/i/SPX`, FD-INDICES).
+  - Crypto: de la exchange-ul conectat al utilizatorului (KuCoin, Binance, Bybit, OKX, Bitget; cu mai multe, cel ales), altfel de la cel implicit al adminului; o pereche pe care exchange-ul lui n-o are vine de la cel implicit (FD-MARKETSRC). 1m – 1w; un timeframe pe care exchange-ul nu-l are (8h pe Bybit / OKX / Bitget) e dezactivat, iar graficul arată cel mai apropiat.
+  - Acțiuni: zilnic și săptămânal fără cheie (Nasdaq), 1m – 4h cu cheia Twelve Data a adminului (Twelve Data nu are 3m, 6h, 8h, 12h: se folosește timeframe-ul cel mai apropiat).
+  - Indici: 1m – 4h (fără 6h / 8h / 12h; istoric de ~100 de zile) și 1d / 1w (din 2010), de la CNBC, în timp real; dacă CNBC nu răspunde, zilnicul și cotațiile vin de la Nasdaq / Cboe (FD-INDEXINTRA).
 - Se actualizează automat; fără grilă și fără liniile cursorului (prețul și ora pe axe); graficul stă pe placa lui, nu pe culoarea paginii.
 - **Slingshot System Long 3.3** (indicatorul utilizatorului), portat 1:1 din Pine: norul EMA 38/62, semnalele **LONG** (verzi cât sunt valide sau au atins TP, roșii când au fost invalidate sau au atins SL), previzualizarea LONG, **TAKE PROFIT**, liniile TP/SL ATR cu tabelul lor, **Market Structure** (și pe un timeframe superior), lista **alertelor** și istoricul **semnalelor** (intrare, SL, TP, rezultat).
 - **[DI] Logarithmic Moving Average (LMA)** în panoul de jos (linia de semnal, pragurile, starea BULLISH / BEARISH / NEUTRAL); „Color Price Bars” colorează lumânările după LMA.
@@ -158,7 +163,7 @@ Se mai văd: **încrederea** (scăzută / medie / ridicată), sub-indicii **Cryp
 
 ### 5.2 Diferențe intenționate față de TradingView
 - Prețurile din etichete / tabel au **precizia pieței** (ex. `0.00001234`), nu `#.##`.
-- Istoricul e cel descărcat (implicit 1500 de lumânări, până la 5000): primele semnale din istoric pot diferi de TradingView; cele recente coincid la aceleași date.
+- Istoricul e cel descărcat (implicit 1500 de lumânări, până la 5000, ales de admin): primele semnale din istoric pot diferi de TradingView; cele recente coincid la aceleași date.
 - Lumânarea în formare e inclusă: semnalele de pe ea sunt „neconfirmat” până la închidere.
 
 ### 5.3 Cazuri limită
@@ -175,14 +180,16 @@ Se mai văd: **încrederea** (scăzută / medie / ridicată), sub-indicii **Cryp
 | Schimbi setările indicatorului | recalculare instantanee, fără re-descărcare |
 
 ### 5.4 Scanner (pe Azi)
-Pentru fiecare favorit, pe timeframe-ul scanner-ului (implicit 1h): trend, ultimul semnal LONG (vârsta, starea), TP/SL active, ultima ruptură de structură. Se recalculează la 5 minute.
+Pentru fiecare favorit, pe timeframe-ul ales pe Azi, deasupra favoritelor („Semnale Slingshot pe” 15m · 1h · 4h · 1d; implicit 1h), de la același exchange ca graficul: trend, ultimul semnal LONG (vârsta, starea), TP/SL active, ultima ruptură de structură. Se recalculează la 5 minute.
 
 ## 6. Tranzacții / portofoliu (FD-TRADE, FD-SENTIQ, FD-NOAPI)
 
 ### 6.1 Ce face
 - „Adaugă un cont” (pagina Tranzacții sau Setări) deschide un asistent: alegi platforma după logo (filtru Crypto / Acțiuni, căutare), urmezi pașii pentru o cheie doar de citire (cu linkul spre pagina furnizorului), completezi exact câmpurile cerute; contul se salvează doar dacă testul conexiunii reușește.
 - Platforme (doar cele cu API): **KuCoin, Binance, Bybit, OKX, Kraken, Coinbase, Bitget** (crypto) și **Trading 212, eToro, Interactive Brokers, Alpaca** (acțiuni).
-- Pe fiecare cont, cu logo-ul lui: poziții (futures / cu levier), dețineri cu preț mediu și PnL, numerar (la brokeri), ordine deschise, tranzacțiile recente (7 zile). Reîmprospătare la 30 s cât pagina e deschisă + buton manual.
+- Pe fiecare cont, cu logo-ul lui: poziții (futures / cu levier), dețineri cu preț mediu și PnL, numerar (la brokeri), ordine deschise, tranzacțiile recente (7 zile). Reîmprospătare la 30 s cât pagina e deschisă + butonul „Reîmprospătează” din bara paginii, lângă „Adaugă un cont”.
+- **Cardurile unui cont crypto** (FD-TRADESTATS): Disponibil în futures · Valoare în contul spot · PnL nerealizat (futures) · Tranzacții profitabile · Tranzacții cu pierdere · Rata de succes · Câștig net. Ultimele patru numără pozițiile futures închise în perioada aleasă în bara paginii (Azi · 7z · 30z · 90z), după rezultatul lor net; KuCoin, Bybit, OKX, Bitget (Binance nu dă istoricul prin API).
+- La brokeri: Valoare dețineri · Numerar disponibil · PnL nerealizat (poziții).
 
 ### 6.2 Securitate
 - Cheile se salvează **criptat**; după salvare se vede doar un indiciu (`abcd…wxyz`).
@@ -201,12 +208,19 @@ Pentru fiecare favorit, pe timeframe-ul scanner-ului (implicit 1h): trend, ultim
 | Interactive Brokers | raport Flex: datele de la închiderea zilei precedente; tokenul expiră |
 | Niciun cont | pagina explică pașii |
 
-## 7. Setări (FD-SET)
-- **Favorite** (ale fiecăruia): monede (căutare în piețele exchange-ului) și acțiuni (căutare după simbol sau nume); reordonare prin tragere, săgeți sau Alt + ↑ / ↓; aliasuri pentru știri.
-- **Conturi** (exchange-uri și brokeri), prin asistent.
-- **Date de piață și scanner** (ale fiecăruia): exchange-ul pentru grafice (KuCoin, Binance, Bybit, OKX), timeframe-ul graficelor (ultimul ales), numărul de lumânări (1500 / 3000 / 5000), timeframe-ul scanner-ului; cheia Twelve Data (admin).
-- **General:** fusul orar (al fiecăruia); retenția știrilor (admin, implicit 90 de zile).
-- **Doar admin:** sursele de știri (activare, pondere 0,5–1,5, feed propriu cu test; cele implicite doar se dezactivează), motorul de sentiment (local / Claude, cheia, modelul, „Rescorează ultimele 48 h”, „Recalculează istoricul”), emailul (cheia Resend, expeditorul).
+## 7. Setări (FD-SET, FD-ADMINSET)
+**Ale mele** (`/settings`, oricine, doar pentru contul lui):
+- **Favorite**: monede (căutare pe exchange-ul utilizatorului și pe cel implicit), acțiuni (căutare după simbol sau nume) și indici (din lista de 7: SPX, NDX, COMP, DJI, RUT, VIX, SOX); reordonare prin tragere, săgeți sau Alt + ↑ / ↓; aliasuri pentru știri.
+- **Conturi** (exchange-uri și brokeri), prin asistent. Cu două sau mai multe exchange-uri dintre KuCoin, Binance, Bybit, OKX, Bitget: „Prețurile crypto vin de la:” (FD-MARKETSRC).
+- **General**: fusul orar.
+
+**Admin** (`/settings/admin`, doar adminul; fila nu apare pentru ceilalți; se aplică tuturor):
+- **Surse de știri**: activare, pondere 0,5–1,5, feed propriu cu test; cele implicite doar se dezactivează; cele automate țin de favoritele acțiunilor (FD-AUTOFEED).
+- **Motorul de sentiment**: local / Claude, modelul, cheia Anthropic (folosită și de Rezumat), „La ce folosește Sentiq cheia Claude” cu consumul zilei (FD-AICLARITY), „Rescorează ultimele 48 h”, „Recalculează istoricul”.
+- **Date de piață**: exchange-ul implicit pentru prețurile crypto, istoricul încărcat pe grafice (1500 / 3000 / 5000 de lumânări), cheia Twelve Data și consumul zilei.
+- **Păstrarea știrilor** (implicit 90 de zile).
+- **Email (Resend)**: cheia, expeditorul.
+
 - Setările indicatorilor sunt în pagina Grafice („Indicatori”).
 - Validare: valorile în afara intervalelor sunt respinse cu mesaj clar; nimic nu se salvează parțial.
 
@@ -220,22 +234,22 @@ Pentru fiecare favorit, pe timeframe-ul scanner-ului (implicit 1h): trend, ultim
 - Notificări desktop / sonore (alerte de indicator, reminder înainte de CPI).
 - Evenimente crypto automate (unlock-uri, upgrade-uri): doar ca evenimente personale.
 - Backtesting.
-- Găzduirea online (adresă publică, HTTPS, passkey pe domeniu) și, odată cu ea, connectorul Claude pornit.
+- Indici din afara SUA și futures pe indici (fără o sursă gratuită, FD-INDICES §2).
 
 ## 10. Conturi, roluri și acces (FD-USERS, FD-INVITE)
 - **Roluri:** un **admin** (proprietarul, cu toate datele de dinainte de conturi) și **utilizatori**.
-- **Ale fiecăruia:** favoritele, setările graficelor, ale calendarului și ale scanner-ului, fusul orar, conturile de exchange / broker, evenimentele personale, rezumatul zilei, conexiunile Claude. **Comune:** știrile, sentimentul zilei, calendarul economic, indicatorii economici, datele de piață.
-- **Doar adminul:** sursele de știri, motorul de sentiment și cheia Claude, cheia Twelve Data, emailul (Resend), retenția, *Stare sistem* și *Utilizatori*.
+- **Ale fiecăruia:** favoritele, setările graficelor, ale calendarului și timeframe-ul semnalelor, alegerea exchange-ului de prețuri (dintre cele conectate), fusul orar, conturile de exchange / broker, evenimentele personale, rezumatul zilei, conexiunile Claude. **Comune:** știrile, sentimentul zilei, calendarul economic, indicatorii economici, datele de piață.
+- **Doar adminul:** sursele de știri, motorul de sentiment și cheia Claude, cheia Twelve Data, emailul (Resend), retenția (toate în Setări → Admin), *Stare sistem* și *Utilizatori*.
 - **Cont nou doar la cerere:** „Cere un cont” (nume și email) → adminul primește email și vede un punct pe inițiala lui → *Utilizatori* → Aprobă (sau Respinge) → persoana primește linkul de activare (7 zile), își alege parola → login. O cerere fără răspuns dispare după 30 de zile.
-- **Login:** email + parolă (minimum 12 caractere, literă mare, literă mică, cifră), apoi codul TOTP (5 minute) sau un cod de recuperare dacă 2FA e pornit; sau **passkey** (doar la `http://localhost:4317`, pe Mac). 3 încercări greșite de pe același dispozitiv → pauză 15 minute. Sesiunea ține 30 de zile de la ultima folosire.
+- **Login:** email + parolă (minimum 12 caractere, literă mare, literă mică, cifră), apoi codul TOTP (5 minute) sau un cod de recuperare dacă 2FA e pornit; sau **passkey** (merge pe adresa pe care a fost creat: https://sentiq.money sau `http://localhost:4317` pe Mac; niciodată pe o adresă IP). 3 încercări greșite de pe același dispozitiv → pauză 15 minute. Sesiunea ține 30 de zile de la ultima folosire.
 - **Parola uitată:** link valabil o oră; parola nouă închide toate sesiunile.
-- **Securitate** (meniul contului): nume, parolă, 2FA (cod QR + 10 coduri de recuperare), passkey-uri, „Ieși de pe toate dispozitivele”, conexiunile Claude (când connectorul e pornit).
+- **Securitate** (meniul contului): nume, parolă, 2FA (cod QR + 10 coduri de recuperare), passkey-uri, „Ieși de pe toate dispozitivele”.
 - **Utilizatori** (admin): cereri de cont, link nou de activare, dezactivare / reactivare, oprirea 2FA, ștergerea contului (cu datele lui).
-- **Acces din rețea:** serverul ascultă pe toate interfețele, dar răspunde doar la numele și adresele Mac-ului (plus `SENTIQ_ALLOWED_HOSTS`); `SENTIQ_BIND=127.0.0.1` îl ține doar pe Mac.
-- Emailurile (cerere nouă, activare, parolă uitată) pleacă prin **Resend**; cu expeditorul de test ajung doar la admin, care copiază linkul de activare din pagina de aprobare.
+- **Acces din rețea:** serverul ascultă pe toate interfețele, dar răspunde doar la numele și adresele Mac-ului (plus `SENTIQ_ALLOWED_HOSTS`); `SENTIQ_BIND=127.0.0.1` îl ține doar pe Mac. Pe Azure răspunde la adresa `*.azurewebsites.net` și la adresa publică (FD-AZURE §1).
+- Emailurile (cerere nouă, activare, parolă uitată) pleacă prin **Resend**; cu expeditorul de test ajung doar la admin, care copiază linkul de activare din pagina de aprobare. Linkurile folosesc adresa publică (https://sentiq.money), și când adminul aprobă de pe Mac (FD-ONLINE §2).
 
 ## 11. Azi (dashboard)
-Un ecran (la 1440 × 900), cu plăci: sentimentul zilei (indicele, spectrul, variația față de acum o oră, ziua pe ore, sub-indicii Crypto / Acțiuni / Macro / Geopolitică), evenimentul major următor (cu evenimentele zilei), știrile live, favoritele (preț, variație, grafic, trend, ultimul semnal Slingshot, TP/SL active), „Ce mișcă piața” (știrile care contează cel mai mult) și ultimele 30 de zile. Pe ecrane mici plăcile se așază una sub alta.
+Plăci, în ordine: sentimentul zilei (indicele, spectrul, variația față de acum o oră, ziua pe ore, sub-indicii Crypto / Acțiuni / Macro / Geopolitică), evenimentul major următor (cu evenimentele zilei), știrile live, „Ce mișcă piața” (știrile care contează cel mai mult) și ultimele 30 de zile, apoi **favoritele** pe toată lățimea: monede, acțiuni și indici (preț, variație, grafic, trend, ultimul semnal Slingshot, TP/SL active). De la 768 px, sentimentul stă în coloana din stânga, iar evenimentul următor și știrile live, unul sub altul, în dreapta, pe toată înălțimea lui. La 1440 × 900 plăcile de sus încap pe un ecran. Sub 768 px plăcile se așază una sub alta; „Ce mișcă piața” și „Ultimele 30 de zile” sunt mereu deasupra favoritelor (FD-TODAYGRID).
 
 **Rezumat** (FD-SUMMARY): Claude rezumă ziua de până acum într-o fereastră mare: verdictul (zi bună / mixtă / slabă de trading, cu încrederea), secțiuni scurte, Oportunități, Riscuri, Ce urmează în 24 h și până la 4 grafice cu cifrele aplicației. Se face singur la prima deschidere din zi; „Actualizează” cel mult o dată la 2 minute. Folosește cheia Claude a adminului; Claude primește doar datele zilei, niciodată chei, conturi sau portofolii. Nu e sfat de investiții.
 
@@ -246,9 +260,16 @@ Un ecran (la 1440 × 900), cu plăci: sentimentul zilei (indicele, spectrul, var
 - Cipurile țărilor sunt **filtre** (păstrate în adresa paginii), plus căutare și „Doar importante”.
 - Datele vin din calendarul TradingView: istoricul (~400 de zile) se încarcă o dată, apoi valorile noi apar la câteva minute după publicare.
 
-## 13. Claude cu abonamentul fiecăruia (FD-MCP) — gata, oprit
-- Sentiq e și un **connector MCP** pentru Claude: fiecare utilizator își conectează propriul abonament Claude (OAuth, cu login-ul Sentiq și o pagină de consimțământ) și Claude citește, doar pentru el și doar în citire, ziua de azi, sentimentul, știrile, calendarul, indicatorii, contextul pieței, favoritele și graficul oricărei monede / acțiuni cu analiza Slingshot. Nu vede niciodată chei, conturi, portofolii sau datele altora.
-- E **oprit** până la găzduirea online: pornește doar cu `SENTIQ_PUBLIC_URL=https://…` și `SENTIQ_MCP=1`.
+## 13. Claude în Sentiq: doar pe cheia API (FD-MCPREMOVE)
+- Claude lucrează în Sentiq doar prin cheia API a adminului: sentimentul știrilor (cu motorul Claude) și Rezumatul de pe Azi; consumul zilei e în Admin (FD-AICLARITY). Abonamentele Claude nu pot fi folosite de Sentiq (termenii Anthropic).
+- Connectorul MCP (FD-MCP, FD-MCPMULTI), prin care aplicațiile Claude / ChatGPT / Gemini citeau datele din Sentiq, a fost scos pe 14 oct 2026, la cererea utilizatorului: direcția lui (de la aplicația AI spre Sentiq) nu era ce voia.
+
+## 14. Baza de date și găzduirea (FD-AZURE)
+- **Azure SQL Database** (`sentiq`, pe serverul `serento-sql`), cu un utilizator care vede doar baza Sentiq. Backup-ul îl face Azure.
+- Mai multe procese pot folosi aceeași bază (Mac-ul și Azure): scrierile se fac una după alta, iar **joburile de fundal le rulează una singură**; Stare sistem arată care. O sesiune Sentiq care ține lacătul de scriere de peste 5 minute e închisă singură (FD-DBHEAL).
+- Dacă baza nu răspunde, paginile spun „Baza de date nu răspunde acum. Reîncearcă în câteva secunde.” și aplicația revine singură.
+- **Stare sistem:** serverul și baza, nivelul, spațiul ocupat din maxim (avertisment peste 80%).
+- Testele automate rulează în aceeași bază, în scheme separate, șterse la final.
 
 ---
 
@@ -261,6 +282,7 @@ Fiecare secțiune de mai jos a fost scrisă înaintea schimbării ei și descrie
 - FD-USERS §4 (înregistrare liberă și confirmarea emailului) → FD-INVITE (conturi doar la cerere, aprobate de admin).
 - FD-THEME §1 (placa neagră a logo-ului Revolut) → FD-NOAPI.
 - FD-SENTIQ §1 (scurtătura `scripts/kryptoniq.sh` și vechiul `Kryptoniq.app`) → scoase din proiect; rămân `Sentiq.app` și `scripts/sentiq.sh`.
+- Baza de date SQLite (`data/kryptoniq.db`, backup-urile `VACUUM INTO`, „rulează pe Mac” din principiul 1) → FD-AZURE (Azure SQL Database; fișierul rămâne doar pentru import).
 
 ## FD-SS33 — Slingshot System 3.3: urmărirea TP/SL nu se mai pierde (12 oct 2026)
 
@@ -1477,3 +1499,740 @@ Cererea utilizatorului: „elimină exchange-urile / brokerii care nu au API. Ce
 ### 3. Conflicte
 - **FD-SENTIQ §2** (cardurile „fără API”): înlocuit de această secțiune.
 - **FD-THEME §1** (placa neagră pentru logo-ul Revolut): nu mai e nevoie; logo-ul dispare.
+
+## FD-AZURE — Baza de date în Azure SQL; pregătit pentru Azure App Service (13 oct 2026)
+
+Cererea utilizatorului (după ce a respins o mașină virtuală Linux): „rescrierea este 100% de făcut. Știam de la bun început că vom rescrie pentru SQL, deci vom folosi o bază de date SQL de la Microsoft. […] o mașină virtuală Linux necesită o tonă de configurare, mai ales pe partea de security […] Linux este exclus, decât dacă este patchuit și făcut, pusă securitatea de către cineva care se pricepe.” A ales: **Azure SQL Database** (o creează el) + **Azure App Service pe Linux administrat de Microsoft** (patch-uri făcute de Microsoft, fără SSH deschis spre internet); rescrierea direct pe `main`, fără commit înainte; testele automate **în aceeași bază, separat** de datele reale.
+
+### 1. Ce se schimbă
+- **Datele stau în Azure SQL Database**, nu în fișierul `data/kryptoniq.db`. Paginile, funcțiile și datele rămân aceleași; nimic nu se schimbă la vedere, în afară de pagina Stare sistem (§5).
+- **Conexiunea** se scrie într-un fișier local, `data/database.env` (nu ajunge în git, doar contul utilizatorului îl poate citi), sau, pe Azure, ca „Application settings” cu aceleași nume:
+  - `SENTIQ_DB_SERVER`, `SENTIQ_DB_NAME`, `SENTIQ_DB_USER`, `SENTIQ_DB_PASSWORD`, **sau**
+  - `SENTIQ_DB_CONNECTION` = connection string-ul ADO.NET din portal (cu parola pusă în locul lui `{your_password}`).
+  Valorile se scriu fără ghilimele; tot ce urmează după `=` e valoarea. Setările din mediu au prioritate față de fișier.
+- **Utilizatorul bazei** recomandat e unul doar pentru baza Sentiq (`CREATE USER … WITH PASSWORD` + `db_owner` pe baza Sentiq), nu adminul serverului: dacă serverul găzduiește și alte baze (Serento), Sentiq nu le poate vedea.
+- **Mutarea datelor existente** se face o singură dată, cu `scripts/sentiq.sh import-sqlite`: utilizatorii (parole, 2FA, passkey-uri, sesiuni), conturile și cheile criptate, favoritele, setările, sursele și știrile, calendarul, pagina Economie, rezumatele, connectorul. Fișierul SQLite rămâne pe disc ca rezervă și nu mai e folosit.
+- **Cheia master** (`data/master.key`) rămâne aceeași: pe Mac e fișierul, pe Azure se pune ca setarea `SENTIQ_MASTER_KEY` (base64, recomandat dintr-un Azure Key Vault). Fără aceeași cheie, cheile de exchange / broker și cele ale aplicației nu mai pot fi citite.
+- **Backup**: îl face Azure SQL (Basic: restaurare la orice moment din ultimele 7 zile). Copiile `VACUUM INTO` din `data/backups/` nu se mai fac; cele vechi rămân.
+- **Pe Azure App Service** (publicarea propriu-zisă e pasul următor, cu pașii din [deploy-azure.md](deploy-azure.md)):
+  - HTTPS-ul îl face Azure; aplicația recunoaște că e în spatele lui și citește corect IP-ul vizitatorului și faptul că legătura e HTTPS (cookie `Secure`, limitele de încercări pe IP-ul real, passkey).
+  - răspunde pe adresa `<nume>.azurewebsites.net` și pe adresa publică (`SENTIQ_PUBLIC_URL`, domeniul ales);
+  - datele locale (modelul de sentiment, jurnalele) stau în `/home/data`, care supraviețuiește actualizărilor;
+  - connectorul Claude rămâne **oprit** până când utilizatorul spune altfel (FD-MCP).
+- **Joburile de fundal** (știri, calendar, sentiment, piață, scanner, mentenanță) rulează **o singură dată**, chiar dacă pornesc două copii ale aplicației pe aceeași bază (Mac + Azure, sau două instanțe în timpul unei actualizări): una le rulează, cealaltă doar servește paginile. Dacă cea care le rula se oprește, cealaltă le preia în cel mult ~2 minute. Semnalele scanner-ului (Slingshot pe favorite) se țin în memoria fiecărei instanțe: pe cea care nu rulează joburile, scanarea pornește când o pagină le cere (cel mult o dată pe minut), deci apar la următoarea reîmprospătare.
+- **Testele automate** rulează în baza Sentiq, fiecare în scheme proprii (`t_…`), cu utilizatori de test care nu au acces la tabelele reale; la final schemele și utilizatorii se șterg. Resturile unei rulări întrerupte (mai vechi de 3 ore) se șterg la rularea următoare. Fără acces la bază, doar testele care au nevoie de ea eșuează, cu motivul.
+
+### 2. Pornirea și erorile de conexiune
+| Situație | Comportament |
+|---|---|
+| `data/database.env` lipsește sau e incomplet (și nu sunt setări în mediu) | Sentiq nu pornește; `sentiq.sh start` și jurnalul spun „Baza de date nu e configurată: completează data/database.env (server, bază, utilizator, parolă sau connection string).” |
+| Utilizator / parolă greșite | „Baza de date a refuzat utilizatorul X: verifică utilizatorul și parola din data/database.env (pe Azure, setările SENTIQ_DB_* ale aplicației).” |
+| IP-ul nu e permis în firewall-ul serverului | „Serverul Azure SQL nu acceptă conexiuni de la IP-ul A.B.C.D: adaugă-l în Networking → Firewall rules.” |
+| Baza nu există / utilizatorul nu are acces la ea | „Baza X nu există pe server sau utilizatorul nu are acces la ea.” |
+| Serverul nu răspunde (adresă greșită, rețea) | „Serverul de baze de date nu răspunde (S): verifică adresa și conexiunea la internet.”, urmat de „Detaliu:” cu mesajul driverului (adresă, port, timeout), fără parolă |
+| Baza cade sau e indisponibilă temporar în timpul rulării (mentenanță Azure) | citirile se reîncearcă de câteva ori; dacă tot nu merge, pagina arată „Baza de date nu răspunde acum. Reîncearcă în câteva secunde.” (503); joburile reîncearcă la rularea următoare; aplicația revine singură, fără repornire |
+| Prea multe scrieri simultane (o scriere așteaptă peste 30 s) | 503 cu același mesaj; nu se pierde nimic din ce s-a salvat deja |
+| Baza se apropie de limita de spațiu (Basic: 2 GB) | Stare sistem arată ocuparea; peste 80% o marchează ca avertisment |
+| Parola nu apare niciodată | nici în jurnal, nici în mesajele de eroare, nici în Stare sistem |
+| Lipsește cheia master (pe Azure fără `SENTIQ_MASTER_KEY`, pe alt calculator fără `data/master.key`), iar baza are deja chei criptate | Sentiq nu pornește: „Cheia master lipsește …, dar baza are deja chei criptate cu ea: pune aceeași cheie, altfel nu mai pot fi citite.” O cheie nouă se face doar pe o bază fără nimic criptat |
+
+### 3. Mutarea datelor (`sentiq.sh import-sqlite`)
+| Situație | Comportament |
+|---|---|
+| Aplicația veche încă rulează pe Mac | refuză: „Oprește întâi Sentiq (scripts/sentiq.sh stop): ce se salvează după copie s-ar pierde.” |
+| Sentiq rulează deja pe Azure pe aceeași bază (un `--replace` târziu) | importul nu poate vedea asta de pe Mac: App Service se oprește întâi din portal (*Stop*), apoi se pornește la loc |
+| Baza Azure e goală (doar adminul inițial, fără parolă) | copiază totul într-o singură tranzacție, apoi compară numărul de rânduri din fiecare tabel și verifică faptul că cheia master deschide cheile salvate |
+| Baza Azure are deja date | refuză: „Baza are deja date (N utilizatori, M știri). Ca s-o înlocuiești cu datele de pe Mac: import-sqlite --replace.” |
+| `--replace` | șterge tot din baza Azure și copiază din nou, tot într-o tranzacție |
+| Eroare la jumătate (rețea, spațiu) | nu rămâne nimic pe jumătate: tranzacția se anulează, baza rămâne cum era |
+| Fișierul SQLite e de la o versiune mai veche | întâi i se aplică migrările SQLite vechi (pe o copie), apoi se mută |
+| Fișierul SQLite e de la o versiune necunoscută (mai nouă) | refuză, cu versiunea găsită |
+| Cheia master de pe Mac nu deschide cheile salvate | mutarea se face (cheile rămân criptate), dar avertizează: „Cheia master nu deschide cheile salvate: folosește același data/master.key cu care au fost salvate.” |
+| Cheia master lipsește pe calculatorul care face mutarea | mutarea se face, dar avertizează că Sentiq nu pornește fără cheia cu care au fost salvate cheile (nu face una nouă) |
+| Sesiunile | se mută: pe Mac rămâi logat. Pe adresa publică (alt domeniu) fiecare se loghează din nou |
+| Passkey-urile | se mută, dar merg doar pe domeniul pe care au fost create (`localhost`); pe adresa publică fiecare își adaugă un passkey nou (Securitate). Parola și 2FA merg peste tot |
+
+### 4. Contul de admin și siguranța
+- Prima parolă a adminului (pe o bază nouă) și refacerea ei după `sentiq.sh admin-reset` se fac în continuare **doar de pe Mac**, la `http://localhost:4317`, cu Mac-ul legat la aceeași bază. Pe Azure nu există „Mac-ul pe care rulează Sentiq”, deci acolo pagina de primă parolă nu apare niciodată.
+- `sentiq.sh admin-email` și `admin-reset` lucrează pe baza din `data/database.env`.
+- În spatele Azure, aplicația trimite și `Strict-Transport-Security` (browserul folosește doar HTTPS pe domeniul ei).
+
+### 5. Stare sistem (admin)
+- „Baza de date”: Azure SQL, serverul și numele bazei, nivelul (de ex. Basic), spațiul ocupat din maxim (avertisment peste 80%).
+- „Joburi”: pe ce instanță rulează (numele mașinii); dacă instanța curentă nu le rulează, o spune.
+
+### 6. Cazuri limită de date
+| Situație | Comportament |
+|---|---|
+| Emailuri care diferă doar prin litere mari / mici | tratate ca același email (ca înainte) |
+| Orice alt text (simboluri, ID-uri, coduri, chei) | comparat exact, literă cu literă (ca înainte) |
+| URL-uri foarte lungi (știri, feed-uri) | se salvează întregi; duplicatele se recunosc la fel ca înainte |
+| Două cereri simultane care modifică același lucru (de ex. două taburi care salvează setări, aprobarea aceleiași cereri de cont de două ori, același cod 2FA trimis de două ori) | se execută una după alta; a doua vede rezultatul primei (cererea deja aprobată, codul deja folosit) |
+| Pagina e deschisă când Sentiq trece pe noua bază | după repornire, pagina se reîncarcă normal (FD-STALE); sesiunea rămâne |
+
+### 7. Conflicte cu ce exista
+- **TD §3** (SQLite, `PRAGMA`, backup prin `VACUUM INTO`) → înlocuit: Azure SQL, schema versionată în tabelul `schema_version`, backup-ul Azure.
+- **FD-USERS §9 / TD §2.11** (prima parolă doar de pe Mac): rămâne; pe Azure pagina nu apare niciodată (§4).
+- **FD-LAUNCH** (pornirea pe Mac): `sentiq.sh` rămâne, dar cere `data/database.env` și are două comenzi noi: `import-sqlite` și `db-check` (verifică conexiunea fără a afișa parola).
+- **Testele** (TD §14): rulează pe baza din `data/database.env`, deci cer conexiune la internet și baza pornită.
+- **Aplicația pornită acum pe Mac** rulează codul vechi (SQLite) până la repornire. Repornirea se face doar după ce baza e configurată și datele sunt mutate (§3), altfel aplicația nu pornește. *(Făcut pe 14 oct 2026: backup `data/backups/kryptoniq-before-azure-2026-10-14.db`, `import-sqlite`, pornirea pe codul nou; vezi jurnalul de review.)*
+
+## FD-ONLINE — Connectorul Claude pornit pe sentiq.money; adresa publică știută și de Mac (14 oct 2026)
+
+Cererea utilizatorului: „ok, totul funcționează. hai cu mcp-ul.” Înainte, utilizatorul a legat domeniul **sentiq.money** de App Service (cu certificat) și a pus `SENTIQ_PUBLIC_URL=https://sentiq.money`; `sentiq.app` nu mai e folosit.
+
+### 1. Connectorul pornit
+- Pe App Service: `SENTIQ_MCP=1` (14 oct 2026, 11:29 UTC). Jurnalul spune „Claude connector on: https://sentiq.money/mcp”.
+- Verificat din exterior:
+  - documentele de descoperire (`/.well-known/oauth-protected-resource/mcp`, `/.well-known/oauth-authorization-server`);
+  - `/mcp` fără token răspunde 401 cu `resource_metadata` și `scope`;
+  - autorizarea cu documentul real al Claude (`https://claude.ai/oauth/mcp-oauth-client-metadata`) ajunge la pagina de consimțământ. Cererea e ținută doar în memorie, deci nu se scrie nimic în bază.
+- **Cum îl adaugă fiecare:**
+  1. În Claude: Customize → Connectors → **Add custom connector**.
+  2. Nume „Sentiq”, URL `https://sentiq.money/mcp`. Clientul OAuth rămâne cel implicit, „Use Claude's published identity”.
+  3. **Add**, apoi **Connect**: se deschide sentiq.money.
+  4. Intri cu contul Sentiq (parolă + 2FA, sau passkey făcut pe sentiq.money) și apeși **Permite**.
+- Merge în claude.ai, în aplicația Desktop și pe mobil (connectorul ține de contul Claude).
+  - Pe abonamentul **Free** se poate adăuga un singur connector propriu; pe Pro și Max, oricâți.
+  - În Claude Code: `claude mcp add --transport http sentiq https://sentiq.money/mcp`, apoi `/mcp` pentru login.
+- Neschimbat față de FD-MCP: Claude doar citește, doar datele celui care s-a conectat. Nu vede chei, conturi de exchange sau portofolii.
+
+### 2. Adresa publică, știută și de Mac
+Mac-ul nu are `SENTIQ_PUBLIC_URL`. Fără o schimbare:
+- linkurile de activare făcute de pe Mac ar duce la `http://localhost:4317`, deci nu ar merge pentru prieteni;
+- Securitate pe Mac nu ar arăta connectorul.
+
+Ce se schimbă:
+- Instanța care are `SENTIQ_PUBLIC_URL` (Azure) scrie la pornire în bază adresa publică și dacă e pornit connectorul.
+- O instanță de pe App Service fără `SENTIQ_PUBLIC_URL` șterge această înregistrare la pornire. O instanță locală (Mac) fără ea nu schimbă nimic.
+- Mac-ul folosește adresa din bază pentru:
+  - **linkurile** de activare (din emailuri și din pagina Utilizatori) și cel din emailul adminului despre o cerere nouă: `https://sentiq.money/…`. Merg pentru oricine, chiar dacă adminul aprobă de pe Mac, iar avertismentul „merge doar pe acest Mac” dispare singur. Linkul de parolă uitată duce, ca înainte, la adresa de pe care a fost cerut;
+  - **Securitate → „Claude (connector)”**: aceeași adresă de copiat în Claude, conexiunile tale și „Deconectează”. Conectarea propriu-zisă se face din Claude, către sentiq.money.
+- Mac-ul nu devine connector. Rutele `/mcp` și `/oauth/*` există doar pe instanța publică.
+- O adresă publică pusă direct pe o instanță (`SENTIQ_PUBLIC_URL`) are prioritate față de cea din bază.
+
+### 3. Texte rămase din vremea „doar pe Mac”
+| Unde | Acum |
+|---|---|
+| Conturi (Setări) și asistentul de cont | „Cheile se salvează criptat în baza Sentiq și nu mai sunt afișate.” Confirmarea ștergerii: „Cheile lui se șterg din Sentiq.” |
+| Motorul de sentiment (Setări admin) | „Local: model AI pe serverul Sentiq, plus reguli de piață. Gratuit.” |
+| Email (Setări admin) | ce pleacă prin Resend: cererile de cont, linkurile de activare și de parolă nouă; fără cheie, linkurile sunt în jurnalul serverului. Cu expeditorul de test: „… până atunci, trimite-le tu linkul de activare din pagina Utilizatori.” (confirmarea manuală a adresei nu mai există din FD-INVITE) |
+| Passkey-uri (Securitate) | „… Merge doar pe adresa pe care l-ai creat: unul făcut pe adresa publică nu merge pe http://localhost și invers.” |
+| Login pe o adresă unde passkey-urile nu merg (o adresă IP din rețea) | „Passkey-urile nu merg pe o adresă IP. Deschide Sentiq la https://sentiq.money sau la http://localhost:4317 pe Mac-ul care îl rulează.” (adresa publică doar dacă e cunoscută) |
+| Bannerul „Serverul nu răspunde” | pe Mac (`localhost`), ca acum: deschide Sentiq.app sau `scripts/sentiq.sh start`. Pe orice altă adresă: „Serverul Sentiq nu răspunde. Datele afișate pot fi vechi; pagina revine singură când serverul răspunde.” |
+
+### 4. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Adresa publică se schimbă (alt domeniu) | Azure o scrie pe cea nouă la pornire, iar Mac-ul o vede în cel mult 30 de secunde. Connectorii adăugați în Claude pe vechea adresă trebuie adăugați din nou |
+| `SENTIQ_MCP` scos de pe Azure | panoul connectorului dispare și pe Azure, și pe Mac. Conexiunile rămân în bază, dar nu mai sunt folosite; pornit din nou, connectorul le acceptă cât timp n-au expirat |
+| `SENTIQ_PUBLIC_URL` scos de pe Azure | la pornire, Azure șterge adresa din bază; Mac-ul revine la linkuri `localhost`, cu avertismentul de pe Utilizatori |
+| Azure e oprit | linkurile făcute pe Mac duc tot la sentiq.money, care nu răspunde până pornește Azure |
+| Un passkey făcut pe `localhost`, folosit pe sentiq.money | nu merge (alt domeniu). Intri cu parola + 2FA, apoi adaugi un passkey nou pe sentiq.money (Securitate) |
+| Un prieten pe Free are deja un connector propriu | Claude nu-l lasă să adauge al doilea; îl scoate pe celălalt sau trece pe Pro |
+| „Ieși de pe toate dispozitivele”, parolă nouă, cont dezactivat | conexiunile Claude se închid, de pe oricare instanță (ca până acum) |
+| Mac și Azure pornesc în același timp | doar Azure scrie adresa; Mac-ul o citește |
+| Server de test cu `SENTIQ_PUBLIC_URL=http://localhost:…` | nu scrie nimic: o adresă `localhost` nu e publică. Un server de test cu o adresă https scrie doar în schema lui de test |
+
+### 5. Conflicte cu ce exista
+- **FD-MCP / Partea I §13** („gata, oprit”): acum e **pornit** pe sentiq.money. Utilizatorul a decis asta („hai cu mcp-ul”).
+- **FD-INVITE §2** (linkul de activare „merge doar pe acest Mac” când adminul aprobă de pe Mac): nu mai e cazul cât timp există adresa publică.
+- **FD-AZURE §3** („passkey-urile merg doar pe `localhost`; pe adresa publică fiecare își adaugă unul nou”): rămâne valabil; textele din aplicație spun asta acum (§3).
+- **Partea I §9** („publicarea efectivă … connectorul pornit”): făcut, deci scos din listă.
+
+## FD-ADMINSET — Setările adminului, separate (14 oct 2026)
+
+Cererea utilizatorului: „vreau să existe o secțiune dedicată setărilor de admin. setările de acum trebuie să fie strict ale utilizatorului iar setările de admin să apară doar pentru admin.”
+
+### 1. Ce se schimbă
+- Pagina **Setări** are două file:
+  - **Ale mele** (`/settings`);
+  - **Admin** (`/settings/admin`), doar pentru admin.
+- Ceilalți utilizatori nu văd bara cu file, ci direct setările lor.
+- **Ale mele** (oricine, doar pentru contul lui):
+  - **Favorite**;
+  - **Conturi** (exchange-uri și brokeri);
+  - **Grafice și scanner**: exchange-ul graficelor, timeframe-ul, lumânările, timeframe-ul scanner-ului, plus o notă despre sursa datelor pentru acțiuni (Nasdaq, Twelve Data dacă adminul a pus cheia);
+  - **General**: fusul orar.
+- **Admin** (doar adminul). Sus scrie „Aceste setări se aplică tuturor utilizatorilor.”:
+  - **Surse de știri**;
+  - **Motorul de sentiment**: motorul, modelul, cheia Anthropic (folosită și de Rezumat), „Rescorează ultimele 48 h”, „Recalculează istoricul”;
+  - **Date de piață**: cheia Twelve Data și consumul zilei;
+  - **Păstrarea știrilor** (zile);
+  - **Email (Resend)**.
+- Căutarea ⌘K are, pentru admin, și „Setări admin”.
+- Linkurile spre setările adminului duc acum la fila Admin:
+  - „Pune cheia în Setări admin” (Rezumat fără cheie) → `/settings/admin#sentiment`;
+  - „Adaugă cheia gratuită” (graficul unei acțiuni fără Twelve Data) → `/settings/admin#market-data`.
+- Pe server, drepturile rămân aceleași: un utilizator care trimite o setare globală primește 403.
+- În plus, detaliile emailului (cheia Resend setată, expeditorul, „doar la admin”) nu se mai trimit decât adminului. Sunt setări de admin.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Un utilizator deschide `/settings/admin` (link primit) | „Pagina nu există.”, ca la `/users` și `/health` |
+| Adminul folosește un link vechi `/settings#market` | rămâne pe „Ale mele”, la secțiunea Grafice și scanner (ancora `market` rămâne acolo) |
+| Setările nu se pot încărca | fiecare filă arată eroarea cu „Reîncearcă” |
+| Trecerea între file | schimbă adresa; Înapoi din browser revine la fila dinainte |
+| Telefon | filele încap pe un rând deasupra secțiunilor |
+| Ziua („fusul orar”) | rămâne a fiecăruia, în „Ale mele” |
+| Timeframe-urile acțiunilor fără cheie Twelve Data | nota din „Ale mele” spune că adminul poate pune cheia. Pentru admin, nota are linkul spre fila Admin |
+
+### 3. Conflicte cu ce exista
+- **FD-USERS §2** (ce e al fiecăruia, ce e al adminului): neschimbat ca reguli; se schimbă doar locul din pagină.
+- **FD-SENTIQ §4.3** (cheia Twelve Data în Setări → Date de piață): acum în Setări → Admin → Date de piață.
+- **FD-SET / Partea I §7**: rescris pe cele două file.
+
+## FD-AUTOFEED — Feed-ul automat al unei acțiuni dispare odată cu ea (14 oct 2026)
+
+Cererea utilizatorului: „sursele de știri văd că afișează nasdaq: bsol dar nu înțeleg de ce. este automată, dar nu am în portofoliu bsol. verifică de ce nu dispare din listă.” Apoi: „nu e vb de ce e activată, ci de ce există”.
+
+### 1. De ce exista
+- BSOL a fost în favorite pe 13 oct. Copia de siguranță de dinainte de conturi are feed-ul lui activ, iar cele de după îl au oprit.
+- După ce BSOL a fost scos, regula din FD-SENTIQ §4.4 a oprit feed-ul, dar l-a **păstrat** cât timp știrile lui erau în bază. Asta înseamnă până la 90 de zile (păstrarea știrilor), ca să nu se piardă știrile odată cu sursa.
+- Rândul a rămas deci în listă, deși BSOL nu mai e în favoritele nimănui.
+
+### 2. Regula nouă
+- Un feed automat există doar cât timp acțiunea e în favoritele **cuiva** (oricare utilizator).
+- Când acțiunea iese din ultimele favorite, feed-ul **se șterge imediat**, cu știrile venite doar prin el.
+- Acele știri erau oricum ascunse: o sursă oprită nu apare nicăieri și nu intră în sentiment.
+- Feed-urile rămase așa de dinainte (BSOL) se șterg la prima pornire după actualizare.
+- Eticheta „automată” spune acum: „Adăugată pentru o acțiune din favoritele cuiva. Dispare când acțiunea nu mai e în favoritele nimănui.”
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Acțiunea e încă în favoritele altui utilizator | feed-ul rămâne (sursele sunt comune) |
+| Adminul a oprit feed-ul, iar acțiunea e încă în favorite | rămâne oprit; se șterge când acțiunea iese din toate favoritele |
+| Acțiunea e adăugată din nou | feed-ul se creează din nou și se citește la următoarea rundă de știri (imediat pe instanța cu joburile, în cel mult un minut de pe cealaltă); revin știrile pe care feed-ul le mai are |
+| Aceeași poveste a venit și prin alte surse | grupul rămâne, cu celelalte surse |
+| O știre care a venit întâi prin feed-ul acțiunii (salvată o singură dată, la prima sursă) | dispare odată cu feed-ul; era deja ascunsă cât feed-ul era oprit, deci nu se schimbă nimic la vedere |
+| Zilele închise ale sentimentului | rămân cum au fost salvate. „Recalculează istoricul” le refăcea și înainte fără știrile unei surse oprite |
+| O sursă adăugată de mână cu aceeași adresă | nu e automată, deci rămâne |
+| Mac și Azure fac curățenia în același timp | se face o singură dată (tranzacție) |
+| Feed-ul e șters chiar în timp ce e citit (pe instanța cu joburile) | citirea se oprește cu un avertisment în jurnal; nu se salvează nimic |
+
+### 4. Conflicte cu ce exista
+- **FD-SENTIQ §4.4 / Partea I §2.1** („feed-ul pleacă după ce acțiunea iese din favorite și știrile ei s-au învechit”): înlocuit de §2.
+
+## FD-TODAYGRID — Azi: „Ce mișcă piața” și „Ultimele 30 de zile” deasupra favoritelor (14 oct 2026)
+
+Cererile utilizatorului:
+- „coloanele de ce mișcă piața și ultimele 30 de zile când e zoom-ul paginii mai mic, se listează împreună cu simbolurile. și se fac foarte lungi pe verticală. nu le mai afișa în rând cu simbolurile ci deasupra simbolurilor.”
+- apoi: „pe prima pagina vreau ca sentimentul zilei sa fie afisata in coloana din stanga si apoi in coloana din dreapta pe 2 randuri care acopera toata inaltimea sentimentului zilei sa fie urmatorul eveniment major si stiri live.”
+
+### 1. Cauza
+- Pe ecrane late (cel puțin 1280 px; pe un laptop, cu zoom sub 100%), al treilea rând punea alături Favoritele (jumătate), „Ce mișcă piața” (un sfert) și „Ultimele 30 de zile” (un sfert).
+- Un rând are înălțimea celei mai înalte plăci. Cu multe favorite, cele două plăci se întindeau pe toată înălțimea favoritelor.
+- Sub 1280 px, sentimentul zilei ocupa tot rândul, iar „Următorul eveniment major” și „Știri live” veneau dedesubt, alăturate. Așezarea cu sentimentul în stânga exista doar pe ecrane late.
+
+### 2. Ce se schimbă
+- De la 768 px în sus: **sentimentul zilei în coloana din stânga**; în dreapta, unul sub altul, „Următorul eveniment major” și „Știri live”, care împreună acoperă toată înălțimea sentimentului. Dacă ele sunt mai înalte decât sentimentul, placa sentimentului crește până la ele.
+- „Ce mișcă piața” și „Ultimele 30 de zile” stau, la orice lățime, **deasupra** favoritelor.
+
+| Lățime | Așezare |
+|---|---|
+| Lată (≥ 1280 px) | sentimentul (7/12) │ eveniment + știri (5/12); apoi „Ce mișcă piața” (7/12) │ „Ultimele 30 de zile” (5/12); apoi Favoritele pe toată lățimea (mai multe fișe pe rând) |
+| Medie (768–1279 px) | sentimentul │ eveniment + știri, pe jumătăți; apoi cele două plăci alăturate; apoi Favoritele pe toată lățimea. În placa sentimentului, cele patru categorii se așază 2 × 2 când placa e îngustă |
+| Îngustă (< 768 px) | una sub alta: sentimentul, evenimentul, știrile, „Ce mișcă piața”, „Ultimele 30 de zile”, Favoritele |
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| „Arată toate” la „Ce mișcă piața” | crește doar rândul celor două plăci. Graficul celor 30 de zile rămâne sus în placa lui, cu înălțimea lui. Favoritele coboară |
+| Nicio favorită | placa „Adaugă favorite” e pe toată lățimea, sub cele două |
+| Nimic notabil încă / istoricul abia începe | plăcile își arată mesajele, ca înainte |
+
+### 4. Conflicte cu ce exista
+- **Partea I §11**: ordinea plăcilor se schimbă. „Un ecran la 1440 × 900” rămâne valabil pentru plăcile de sus; favoritele sunt sub ele.
+- **TD-REDESIGN** („sub 1280 px … sentimentul pe tot rândul”): înlocuit; sentimentul are coloana lui de la 768 px.
+
+## FD-MARKETSRC — Prețurile crypto de la exchange-ul tău; „Grafice și scanner” scos din setările clientului (14 oct 2026)
+
+Cererile utilizatorului:
+- „de ce Grafice și scanner este opțiune? vreau să înțeleg. eu sunt client al acestei aplicații. nu mă interesează de unde vin datele.”
+- „Dacă un utilizator se conectează cu un exchange, este garantat că exchange-ul acela oferă informația despre datele pe care le folosim când afișăm graficul, că dacă da, atunci îl selectăm automat în funcție de ce exchange are conectat. Dacă are mai multe exchange-uri conectate, atunci trebuie să-l punem să aleagă.”
+- La propunerea de mai jos (cu cele 6 puncte): „da”.
+
+### 1. Ce am verificat (14 oct 2026, live, pe datele publice și pe cele 10 favorite crypto ale adminului)
+| Exchange | Favoritele în perechi /USDT | 1500 de lumânări de 1h | Timeframe-uri lipsă |
+|---|---|---|---|
+| KuCoin, Binance | toate | da | – |
+| Bybit, OKX, Bitget | toate | da | 8h |
+| Kraken | lipsesc 6 din 10 | **nu**, doar ultimele 720 | 3m, 2h, 6h, 8h, 12h |
+| Coinbase | lipsesc 7 din 10 | da | 3m, **4h**, 8h, 12h, **1w** |
+
+- Lumânările sunt date publice: cheia contului nu e folosită pentru ele.
+- Exchange-ul conectat arată doar unde tranzacționează omul, ca să-i arătăm prețurile de acolo (pe grafic apar și intrarea, TP-ul și SL-ul din contul lui).
+- Kraken și Coinbase nu pot fi surse pentru grafice: lucrează mai ales în USD, iar Kraken nu dă istoricul de care are nevoie Slingshot.
+- Bitget devine sursă nouă (dă tot ce trebuie).
+
+### 2. Ce se schimbă
+1. **Automat.** Prețurile crypto ale unui utilizator vin de la exchange-ul lui conectat, dacă e unul dintre KuCoin, Binance, Bybit, OKX, Bitget. Asta înseamnă graficele, banda de sus, fișele și semnalele de pe Azi, căutarea monedelor și connectorul Claude.
+2. **Mai multe exchange-uri conectate (dintre cele 5).** În Setări → Ale mele → Conturi apare „Prețurile crypto vin de la:”, cu exchange-urile lui, ca să aleagă. Până alege, se folosește primul adăugat. Cu un singur exchange (sau niciunul), alegerea nu apare.
+3. **Niciun exchange dintre cele 5** (niciun cont, doar Kraken / Coinbase, doar brokeri): se folosește **exchange-ul implicit**, ales de admin în Setări → Admin → Date de piață.
+4. **O favorită pe care exchange-ul lui n-o are:** prețul și graficul ei vin de la exchange-ul implicit, fără nimic de setat.
+5. **Un timeframe pe care exchange-ul nu-l are** (8h pe Bybit / OKX / Bitget): pe grafic butonul e dezactivat, cu explicația în titlu, ca la acțiuni. Dacă ultimul timeframe ales nu există acolo, graficul arată cel mai apropiat și spune asta.
+6. **Setări → Ale mele** nu mai are secțiunea „Grafice și scanner”:
+   - timeframe-ul graficului se alege doar pe pagina Grafice (era deja acolo);
+   - **timeframe-ul semnalelor Slingshot** devine un comutator pe Azi, deasupra favoritelor: 15m · 1h · 4h · 1d (toate cinci exchange-uri le au);
+   - **istoricul încărcat** (1500 / 3000 / 5000 de lumânări) și **exchange-ul implicit** trec la Setări → Admin → Date de piață, unul pentru toți;
+   - nota despre sursele acțiunilor rămâne doar la Admin.
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Utilizatorul adaugă sau șterge un cont | sursa se schimbă imediat (graficele, banda și fișele se reîncarcă); semnalele de pe Azi la următoarea scanare (cel mult un minut) |
+| Exchange-ul ales din mai multe e șters | se trece la primul rămas; cu niciunul, la cel implicit |
+| Contul are cheia expirată sau greșită | prețurile tot de acolo vin (sunt publice); doar portofoliul arată eroarea |
+| Exchange-ul conectat nu răspunde (pană) | graficul arată eroarea exchange-ului, ca până acum; nu se trece singur pe altul |
+| Favorita nu există nici pe exchange-ul implicit | eroarea de azi: „perechea nu e listată”, cu sugestii |
+| Căutarea monedelor (⌘K, Favorite) | caută pe exchange-ul utilizatorului și pe cel implicit; o pereche apare o singură dată |
+| Timeframe-ul semnalelor salvat înainte, altul decât 15m / 1h / 4h / 1d (ex. 30m) | rămâne cel ales și apare pe comutator lângă cele patru, până alege altul |
+| Timeframe-ul semnalelor lipsește pe exchange-ul lui (8h salvat, OKX) | semnalul monedei vine de la exchange-ul implicit |
+| Market Structure pe un timeframe pe care exchange-ul nu-l are | liniile se ascund, cu mesaj, ca la acțiuni |
+| Adminul schimbă exchange-ul implicit sau istoricul | se aplică tuturor celor care îl folosesc, la următoarea reîncărcare (cel mult 30 s pe cealaltă instanță) |
+| Setările de dinainte | exchange-ul și istoricul adminului devin cele implicite (azi: KuCoin, 1500); alegerile de exchange ale celorlalți se păstrează și contează doar dacă au mai multe exchange-uri conectate |
+| Acțiunile | neschimbate (Nasdaq / Twelve Data) |
+| Mac și Azure | fiecare instanță ține lista conturilor 30 s; o schimbare făcută pe cealaltă se vede după cel mult 30 s |
+
+### 4. Conflicte cu ce exista
+- **FD-SET / FD-ADMINSET** (secțiunea „Grafice și scanner” din „Ale mele”): scoasă; exchange-ul și istoricul la Admin.
+- **FD-CHARTUX §2** („Exchange-ul de date și numărul de lumânări: server, în Setări”): exchange-ul vine din contul conectat sau de la admin; numărul de lumânări de la admin.
+- **v1 / TD §8** (exchange-urile de date: KuCoin, Binance, Bybit, OKX): plus Bitget.
+
+## FD-TRADESTATS — Tranzacții: soldul futures, rezultatele pozițiilor închise; textul de la Favorite (14 oct 2026)
+
+Cererea utilizatorului:
+- „textul Monede și acțiuni care apar în bandă, … numele companiei se adaugă singur. din settings are line breaks și nu ar trebui.”
+- „în zona de tranzacții vreau 5 carduri noi pe lângă cel de valoare spot și pnl nerealizat”:
+  - „primul card să fie cel de sumă disponibilă în contul de futures trading”;
+  - „apoi pnl nerealizat”;
+  - „apoi număr tranzacții cu succes, adică profitabile”;
+  - „apoi număr de tranzacții fără succes, cu pierdere”;
+  - „și apoi încă un card cu rata de succes în procente”;
+  - „apoi încă un card cu valoare netă a câștigurilor”.
+- „nu știu ce reprezintă valoare spot. poate îmi explici.”
+- „butonul reîmprospătează îl pui pe același rând cu adaugă un cont ca să faci loc la cardurile noi.”
+- La întrebări a ales:
+  - perioada: un **selector Azi · 7z · 30z · 90z**;
+  - o „tranzacție” = **o poziție futures închisă**.
+
+### 1. Ce e „Valoare spot” (răspuns)
+- Suma, în dolari, a tot ce e în conturile spot ale exchange-ului (la KuCoin: Trading și Funding): monedele la prețul de acum, plus stablecoins.
+- Contul futures nu intră în ea.
+- Ca să fie clar, cardul se numește acum **„Valoare în contul spot”**. La trecerea cursorului, explică asta.
+
+### 2. Cardurile unui cont crypto, în ordine
+| # | Card | Ce arată |
+|---|---|---|
+| 1 | **Disponibil în futures** | suma liberă din contul futures, în USDT (la KuCoin `availableBalance`; la conturile unificate, USDT liber din contul unificat) |
+| 2 | **Valoare în contul spot** | ca până acum (§1) |
+| 3 | **PnL nerealizat (futures)** | ca până acum |
+| 4 | **Tranzacții profitabile** | pozițiile futures închise în perioadă cu rezultat net > 0 |
+| 5 | **Tranzacții cu pierdere** | pozițiile futures închise în perioadă cu rezultat net < 0 |
+| 6 | **Rata de succes** | profitabile ÷ (profitabile + cu pierdere) × 100, cu o zecimală |
+| 7 | **Câștig net** | suma rezultatelor nete ale pozițiilor închise în perioadă (verde peste 0, roșu sub 0) |
+
+- „Rezultat net” = cum îl dă exchange-ul pentru poziția închisă, după comisioane și funding (KuCoin: `pnl`).
+- **Perioada** (cardurile 4–7) se alege pe un comutator **Azi · 7z · 30z · 90z**, lângă carduri; implicit 30z. „Azi” începe la 00:00 în fusul tău orar. Alegerea se ține minte în browser.
+- **„Reîmprospătează”** stă acum în bara de sus, lângă „Adaugă un cont”. Reîncarcă portofoliul și statisticile contului ales.
+- Pe telefon, cardurile se așază câte două pe rând.
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Nicio poziție închisă în perioadă | 0 și 0; rata de succes „—”; câștigul net 0 $ |
+| Poziție închisă exact pe zero | nu intră nici la profitabile, nici la pierdere; intră în câștigul net (cu 0) |
+| Lichidare | e o poziție închisă cu pierdere |
+| O poziție închisă în mai multe bucăți | se numără cum o raportează exchange-ul (fiecare închidere raportată e o tranzacție) |
+| Futures decontat în monedă (ex. BTC) | rezultatul se transformă în dolari la prețul de acum; dacă prețul lipsește, intră doar la numărare și cardul spune „parțial” |
+| Exchange-ul dă istoricul doar pe bucăți de 7 zile (KuCoin, Bybit) | Sentiq cere perioada pe bucăți și le adună; KuCoin păstrează 3 luni |
+| Binance (API-ul nu dă istoricul pozițiilor închise), Kraken, Coinbase (fără futures în Sentiq) | cardurile 4–7 (și 1, la Kraken / Coinbase) arată „—”, iar la trecerea cursorului explică de ce |
+| Istoricul nu se poate citi (eroare, permisiune) | cardurile 4–7 arată „—”; sub ele apare eroarea; restul paginii merge |
+| Soldul futures nu se poate citi | cardul 1 arată „—”, cu eroarea la trecerea cursorului |
+| Brokeri (acțiuni) | neschimbat: Valoare dețineri, Numerar disponibil, PnL nerealizat |
+| Câte cereri | statisticile se citesc la deschiderea paginii și la schimbarea perioadei, apoi sunt ținute 5 minute (sau până la „Reîmprospătează”) |
+| Server mai vechi (Mac sau Azure încă nepublicat) | cardurile noi arată „—” |
+
+### 4. Textul de la Favorite (Setări → Ale mele)
+- Paragraful de sub „Favorite” avea o lățime maximă (75 de caractere), așa că se rupea pe 3–4 rânduri.
+- Acum ocupă toată lățimea panoului, ca restul textelor, și se rupe doar unde se termină rândul.
+
+### 5. Conflicte cu ce exista
+- **Partea I §6.1**: plus cardurile, perioada și locul butonului.
+- **FD-TRADE** (cardurile „Valoare spot” și „PnL nerealizat”): rămân, primul redenumit.
+
+## FD-MCPMULTI — Connectorul Sentiq și pentru ChatGPT și Gemini (14 oct 2026)
+
+Cererea utilizatorului: „după ce termini să implementezi mcp pentru chatgpt și pentru gemini.”
+
+### 1. Ce am verificat (14 oct 2026)
+**ChatGPT** (documentația OpenAI pentru autentificarea serverelor MCP):
+- OAuth cu PKCE S256 și parametrul `resource`, ca la Claude.
+- Clientul vine preferabil printr-un document publicat (CIMD), `https://chatgpt.com/oauth/client.json`:
+  - adresa de întoarcere e `https://chatgpt.com/connector_platform_oauth_redirect`, pentru că Sentiq trimite `iss` în fiecare răspuns de autorizare;
+  - documentul cere `private_key_jwt`, dar declară că acceptă și `none` (client public).
+- Alternativa e înregistrarea dinamică (DCR), cu întoarcere la `https://chatgpt.com/connector/oauth/{id}`.
+- Documentul se poate citi de pe Azure (200).
+- Pentru utilizator: Developer mode (Setări → Apps & Connectors → Advanced), apoi „Create”. Planurile diferă între surse: Plus / Pro, Business, Enterprise, Edu.
+
+**Gemini**:
+- Aplicația Gemini („Custom apps”: Setări → Connected apps → Custom apps → Add):
+  - înregistrare dinamică (DCR), cu întoarcere la `https://oauth-redirect.googleusercontent.com/r/…` (diferită pe utilizator și connector);
+  - din surse terțe: deocamdată doar pe Google AI Ultra și doar în engleză. Nu există pagină oficială Google.
+- Gemini CLI: `gemini mcp add --transport http sentiq https://sentiq.money/mcp`, apoi `/mcp auth sentiq`. DCR cu întoarcere pe calculatorul propriu (loopback), pe care Sentiq o acceptă deja.
+- Gemini Enterprise (pentru firme, client introdus de admin): nu e cazul aici.
+
+### 2. Ce se schimbă
+- **Aplicațiile acceptate:**
+  - Claude (claude.ai, claude.com, Claude Code);
+  - **ChatGPT** (chatgpt.com);
+  - **Gemini** (întoarcerea prin `oauth-redirect.googleusercontent.com`; Gemini CLI pe calculatorul propriu).
+  - Lista rămâne configurabilă (`SENTIQ_MCP_CLIENTS`).
+- **CIMD:** un document se acceptă și când cere altă metodă, dacă declară că acceptă și `none` (ChatGPT). Sentiq îl tratează ca client public, cu PKCE.
+- **DCR:** o aplicație care cere o metodă cu secret (`client_secret_basic` / `client_secret_post`) e înregistrată tot ca client public; răspunsul spune `none` (RFC 7591 lasă serverul să decidă). Codul de autorizare rămâne legat de PKCE.
+- **Schimbul codului:** dacă aplicația trimite `client_id` doar în antetul Basic sau în `client_assertion`, Sentiq îl ia de acolo. Siguranța vine din PKCE și din legarea codului de client și de adresa de întoarcere.
+- **Texte:**
+  - pagina de consimțământ: „Conectezi **ChatGPT** la Sentiq?”, cu numele aplicației din documentul / înregistrarea ei și hostul ei;
+  - în Securitate, panoul „**Asistenți AI (connector)**” are pașii pentru Claude, ChatGPT și Gemini;
+  - mesajele de eroare spun „aplicația AI”, nu „Claude”.
+- Uneltele sunt aceleași pentru toate aplicațiile: doar citire, doar datele celui conectat, niciodată chei, conturi sau portofolii.
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Planul ChatGPT nu are Developer mode (Free) | ChatGPT nu oferă adăugarea; Sentiq nu poate ocoli asta |
+| Aplicația Gemini nu are „Custom apps” pe contul tău | Gemini CLI merge (pe calculatorul tău); aplicația, când Google o deschide |
+| O aplicație se înregistrează cu un nume înșelător (de ex. „Claude”) printr-o adresă de întoarcere Google | pagina de consimțământ arată și hostul real al întoarcerii (`oauth-redirect.googleusercontent.com`); fără „Permite”, nu primește nimic |
+| Altă aplicație decât cele acceptate | refuzată, cu numele hostului |
+| Un document CIMD care cere doar `private_key_jwt` (fără `none`) | refuzat: Sentiq nu verifică semnături de client |
+| Mai multe aplicații conectate de același om (Claude și ChatGPT) | fiecare are conexiunea ei în Securitate, cu „Deconectează” |
+| „Ieși de pe toate dispozitivele”, parolă nouă, cont dezactivat | închid conexiunile tuturor aplicațiilor |
+| Gemini (aplicația) | verificat doar pe documentația publică (DCR, adresa Google); primul cont real e verificarea finală |
+
+### 4. Conflicte cu ce exista
+- **FD-MCP §2** („sunt acceptate doar aplicațiile Claude”): acum Claude, ChatGPT și Gemini.
+- **Termenii Anthropic** (FD-MCP): neschimbat. Pentru ChatGPT și Gemini, connectorul MCP adăugat de fiecare în aplicația lui e la fel calea oferită de ele; Sentiq nu folosește abonamentele nimănui.
+
+## FD-DBHEAL — Lacătul de scriere nu mai poate rămâne blocat (reparație, 14 oct 2026)
+
+### 1. Ce s-a întâmplat
+- La publicarea de la 14:16 UTC, Azure a mutat aplicația pe alt worker în timpul build-ului. Un container (`aef27428e9f3`, conectat la 14:16:51) a rămas viu cu **o tranzacție deschisă** de la ~14:25 UTC.
+- Reînnoirile lease-ului de joburi ale acelui container au intrat în tranzacția deschisă (o scriere făcută „din” contextul ei i se alătură), așa că lacătul de scriere a rămas luat aproape 10 minute.
+- Între ~14:25 și 14:35 UTC, nicio altă instanță n-a putut scrie (Mac-ul și noul container Azure: „Baza de date nu răspunde acum”); citirile au mers.
+- Rezolvat manual: sesiunea blocată (tranzacție de 598 s) a fost închisă (`KILL`); lacătul a circulat imediat.
+- Declanșatorul exact (cum a rămas tranzacția deschisă) nu se mai poate reconstitui. Tranzacțiile Sentiq durează secunde, deci una care ține lacătul minute întregi e oricum o eroare.
+
+### 2. Ce se schimbă
+1. **Lease-ul și joburile nu intră niciodată într-o tranzacție deschisă.** Reînnoirea lease-ului și fiecare rulare a unui job pornesc „curat”: o tranzacție rămasă deschisă undeva nu le mai poate prelungi.
+2. **Autovindecare.**
+   - Când o scriere nu primește lacătul în 30 de secunde, instanța verifică cine îl ține.
+   - Dacă e o sesiune Sentiq cu tranzacția deschisă de **peste 5 minute**, o închide (tranzacția ei se anulează) și scrie în jurnal ce rula (instanța, vârsta tranzacției, ultima instrucțiune).
+   - Scrierea încearcă apoi încă o dată.
+   - O singură verificare pe minut, pe instanță.
+3. **Oprirea unei instanțe** (o publicare, o mutare pe alt worker) durează cel mult 15 secunde: dacă ceva o ține pe loc (un flux deschis, o interogare agățată), procesul iese oricum. Nu mai rămâne un proces pe jumătate oprit care ține conexiuni.
+4. **Publicarea pe Azure** (deploy-azure.md §5): aplicația se oprește întâi (`az webapp stop`), apoi deploy, apoi pornire. Așa nu mai rulează două containere deodată, iar build-ul are memorie. (Din 14 oct seara, pe planul B2, nu mai e nevoie de oprire: build-ul încape lângă aplicația pornită; oprirea rămâne rezerva.)
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| O tranzacție legitimă lungă (importul SQLite, care se face cu aplicația oprită) | pragul de 5 minute e mult peste orice tranzacție normală; importul trebuie făcut, ca până acum, cu Sentiq oprit pe Mac și pe Azure |
+| Lacătul e ținut de altceva decât Sentiq | nu se închide nimic; scrierea dă „Baza de date nu răspunde acum”, ca până acum |
+| Utilizatorul bazei nu are dreptul de a închide sesiuni (schemele de test) | verificarea eșuează în liniște; comportamentul e cel de dinainte |
+| Două instanțe găsesc aceeași sesiune blocată | prima o închide; a doua nu mai găsește nimic |
+| Sesiunea se termină singură între verificare și închidere | se verifică din nou chiar înainte de `KILL` (aceeași sesiune, aceeași oră de login); altfel nu se închide nimic |
+
+### 4. Conflicte cu ce exista
+- **TD-AZURE §2** (lacătul de scriere, tranzacțiile rămase după un timeout): se adaugă autovindecarea și pornirea „curată” a lease-ului și a joburilor.
+
+## FD-UIPOLISH — Săgețile de trend pe Azi; perioada din Tranzacții în bara de sus (14 oct 2026)
+
+Cererile utilizatorului:
+- „pe pagina azi, unde afișezi cardurile de simboluri înlocuiește uptrend și downtrend cu săgeți verzi și roșii pentru că se suprapune textul cu numele simbolului”;
+- „în setări, pe rândurile cu simboluri. centrează conținutul vertical.”;
+- „… câmpul de căutare să fie la aceeași înălțime cu comutatorul din stânga.” (cererea de indici din același mesaj are secțiunea ei, FD-INDICES);
+- „oriunde ai text field lângă un buton fă-l de aceeași înălțime. mai sunt situații de genul ăsta prin settings - admin. la date de piață, la păstrarea știrilor, la email (resend)” și „valabil și pentru dropdowns lângă butoane”;
+- „în tranzacții, rândul tranzacții închise în ce caută acolo? e foarte prost amplasat. pune pe același rând cu butoanele de reîmprospătează și adaugă un cont”.
+
+### Ce se schimbă
+- **Azi, fișele favoritelor** (monede și acțiuni): în locul cuvintelor „Uptrend” / „Downtrend” apare o săgeată în sus, verde, sau o săgeată în jos, roșie.
+  - La trecerea cursorului, și pentru cititoarele de ecran, spune „Uptrend (Slingshot)” / „Downtrend (Slingshot)”.
+  - Numele simbolului își păstrează locul; dacă tot nu încape, se taie cu „…”, fără să se suprapună.
+- **Peste tot:** câmpurile de text și dropdown-urile au aceeași înălțime minimă ca butoanele (38 px; pe ecranele tactile 44 px), deci un câmp lângă un buton are înălțimea lui (Setări admin: Date de piață, Păstrarea știrilor, Email, Motorul de sentiment, Surse; Securitate; Tranzacții). Excepție: în Știri, dropdown-ul „Sursă” și căutarea rămân la înălțimea cipurilor de lângă ele.
+- **Grafice → Indicatori:** previzualizarea unei linii (culoarea și stilul) are înălțimea dropdown-ului de stil de lângă ea.
+- **Setări → Favorite, adăugarea:** câmpul de căutare are mereu înălțimea comutatorului Crypto / Acțiuni (și pe ecranele tactile, unde comutatorul e mai înalt).
+- **Setări → Favorite:** conținutul fiecărui rând (mânerul, săgețile, simbolul, tipul, perechea, aliasurile, ștergerea) e centrat pe verticală; câmpul de aliasuri, mai înalt, nu mai lasă textul de alături sus.
+- **Tranzacții:** comutatorul „Tranzacții închise în Azi · 7z · 30z · 90z” stă în bara de sus, lângă „Reîmprospătează” și „Adaugă un cont” (doar la conturile crypto).
+  - Sub carduri rămân doar eroarea istoricului (dacă e) și „actualizat acum …”, mici, la dreapta.
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Scanner-ul încă n-a calculat trendul | nicio săgeată (ca înainte, niciun cuvânt) |
+| Cont de broker | bara de sus fără comutatorul perioadei |
+| Telefon | bara de sus se rupe pe trei rânduri: titlul și conturile, perioada, apoi butoanele |
+
+## FD-INDICES — Indici bursieri în favorite (14 oct 2026)
+
+Cererea utilizatorului: „în zona de jos a rândurilor, unde pot adăuga crypto și acțiuni, vreau să adaugi și indici precum spx”.
+
+### 1. Ce se schimbă
+- **Setări → Favorite, rândul de adăugare:** comutatorul devine **Crypto · Acțiuni · Indici**.
+  - Cu „Indici”, sub câmp apare direct lista indicilor disponibili; scrisul o filtrează după simbol sau nume („spx”, „s&p”, „dow”, „nasdaq”).
+  - Un indice deja în favorite apare în listă cu „în favorite” și nu se mai poate alege.
+- **Indicii disponibili** (toți americani):
+
+| Simbol | Indice |
+|---|---|
+| SPX | S&P 500 |
+| NDX | Nasdaq-100 |
+| COMP | Nasdaq Composite |
+| DJI | Dow Jones Industrial Average |
+| RUT | Russell 2000 |
+| VIX | VIX (volatilitatea S&P 500) |
+| SOX | PHLX Semiconductor |
+
+- **Un indice în favorite se poartă ca o acțiune:**
+  - pe Azi: fișa cu prețul, variația zilei, graficul pe 60 de zile, săgeata de trend și ultimul semnal Slingshot;
+  - în banda de prețuri de sus;
+  - în Grafice: favoritele de deasupra, căutarea de lângă ele („Pereche, acțiune sau indice”, cu grupul „Indici”), adresa `/charts/i/SPX`;
+  - în ⌘K: favoritele și grupul „Indici”;
+  - în Știri: cipul lui filtrează știrile care îl pomenesc;
+  - la Claude (connector): `get_watchlist` și `get_chart` (simbolul `^SPX`); în Rezumat, la favorite.
+- **Cum se afișează:**
+  - simbolul simplu („SPX”), cu o insignă proprie (un grafic, nu inițiale), ca să nu se confunde cu o monedă sau o acțiune;
+  - în tabelul favoritelor: tipul „Indice”, iar la „Pereche / bursă”: „indice SUA”.
+- **Timeframe-uri:** doar **1d** și **1w**. Celelalte butoane din Grafice sunt dezactivate, cu explicația „Indicii au doar 1d și 1w”.
+  - Pe Azi, cu semnalele pe 15m / 1h / 4h, fișa unui indice arată Slingshot pe 1d, cu nota existentă („Slingshot pe 1d (sursa nu are 1h)”).
+- **Întârziere:** cotațiile pot avea până la 15 minute întârziere. Se spune la trecerea cursorului peste preț, pe fișă și în Grafice.
+- **Aliasuri pentru știri**, implicite, editabile ca la acțiuni:
+
+| Indice | Aliasuri implicite |
+|---|---|
+| SPX | S&P 500, S&P500, SPX |
+| NDX | Nasdaq-100, Nasdaq 100, NDX |
+| COMP | Nasdaq Composite |
+| DJI | Dow Jones, DJIA |
+| RUT | Russell 2000 |
+| VIX | VIX, volatility index |
+| SOX | Philadelphia Semiconductor, PHLX Semiconductor |
+
+  - Doar „Dow” nu e alias: ar prinde și compania Dow Inc.
+  - Doar „COMP” nu e alias: e și simbolul monedei Compound.
+
+### 2. Sursele (pentru transparență; utilizatorul nu alege nimic)
+- **Nasdaq** (același API gratuit ca la acțiuni) pentru NDX, COMP și SOX.
+- **Cboe** (cotațiile publice, cu 15 minute întârziere) pentru SPX, VIX, RUT și Dow Jones.
+  - Dow Jones e calculat din DJX, indicele Cboe care valorează exact o sutime din el, deci e rotunjit la un punct.
+- **Nu există o sursă gratuită** pentru indicii din afara SUA (DAX, FTSE 100, Nikkei 225, Euro Stoxx 50), pentru futures (ES, NQ) sau pentru intraday la indici. Încercate:
+  - Twelve Data are indici doar pe planurile plătite (de la ~29 $ / lună);
+  - Yahoo refuză cererile automate (429);
+  - Stooq cere JavaScript în browser.
+- **De știut:** pagina „Use of Content” a Cboe spune că datele de pe site-urile Cboe se folosesc cu acordul lor. Sentiq le citește pentru câțiva utilizatori, fără să le redistribuie, la fel ca datele Nasdaq pentru acțiuni.
+  - Dacă utilizatorul nu vrea asta, SPX, VIX, RUT și Dow Jones se scot din listă. Alternativa pentru ele sunt ETF-urile echivalente, care se pot adăuga deja la „Acțiuni”: SPY, VXX, IWM, DIA.
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Indicele e deja în favorite | „SPX este deja în favorite (ca indice)” |
+| Mai mulți indici aleși repede, unul după altul | toți se adaugă; lista arată, după ultimul, ce e salvat (înainte, un răspuns sosit mai târziu putea ascunde din listă adăugările mai noi, deși erau salvate) |
+| Moneda SPX (SPX6900) și indicele SPX, amândouă în favorite | merg amândouă: sunt simboluri diferite pentru Sentiq; insigna și tipul le deosebesc |
+| Un titlu spune „SPX” și utilizatorul are amândouă | știrea e legată de indice (aliasul indicelui are prioritate față de simbolul monedei) |
+| Limita de 50 de favorite | indicii intră în ea |
+| Sursa indicelui nu răspunde | pe fișă „—”; graficul arată eroarea, sau ultimele lumânări cu vârsta lor (ca la acțiuni) |
+| Piața e închisă (noaptea, weekend, sărbătoare) | ultima închidere, „închis”, fără avertismentul „Date vechi” |
+| Înainte de deschidere | fără lumânarea zilei până la primul preț al ședinței |
+| Zile vechi fără preț de deschidere (SPX înainte de 1996) | sărite; graficul are oricum doar ultimele 1500–5000 de zile |
+| Russell 2000 | istoric doar din noiembrie 2020 (cât publică Cboe): graficul are mai puține lumânări |
+| Timeframe sub 1d cerut direct (adresă veche, Claude) | graficul arată 1d; Claude primește nota „Timeframe … is not available for indices; showing 1d.” |
+| Un indice cerut prin API care nu e în listă | refuzat cu „Indice necunoscut” |
+| Versiunea veche de pe Azure, până la publicare | ar trata indicele ca pe o monedă necunoscută: Mac-ul și Azure se publică împreună |
+| O pagină Sentiq rămasă deschisă de dinainte de publicare | până la reîncărcare, arată indicele ca pe o monedă fără preț; după reîncărcare, corect |
+| Cboe refuză cererile (de pildă blocat de Cloudflare) | ca la sursa căzută: „—” și eroarea „Cboe: HTTP 403”, nu „indice necunoscut” |
+
+### 4. Conflicte cu ce exista
+- **FD-SENTIQ §4 (acțiunile):** indicii folosesc aceleași fișe și același scanner; acțiunile nu se schimbă.
+- **FD-AUTOFEED:** indicii nu primesc un feed propriu (Nasdaq are feeduri doar pe acțiuni); știrile despre ei vin din toate sursele, prin aliasuri.
+- **Calendarul (rezultatele trimestriale):** doar pentru acțiuni, ca înainte.
+- **FD-MARKETSRC:** nu se aplică (indicii nu vin de la exchange-uri crypto).
+
+## FD-ROWCENTER — Rândurile favoritelor, centrate exact (14 oct 2026)
+
+Cererea utilizatorului (cu o captură din Setări → Favorite): „conținutul nu e centrat perfect. e vreun padding, margin pe undeva”.
+
+### Cauza
+- Rândul era centrat pe verticală (FD-UIPOLISH), dar mânerul, săgețile, logo-ul cu simbolul și coșul erau elemente din linia de text: stăteau pe linia de bază a textului, iar sub ea rămânea spațiul pentru literele cu „coadă” (p, g, y).
+- Măsurat în Chrome: ele erau cu ~3 px mai sus decât mijlocul rândului; câmpul de aliasuri și textul („Crypto”, „BTC/USDT”) erau la mijloc.
+- Nu era un padding sau un margin.
+
+### Ce se schimbă
+- În fiecare rând, mânerul cu săgețile, logo-ul cu simbolul și numele, și coșul sunt centrate pe mijlocul rândului, ca textul și câmpul de aliasuri.
+- Măsurat după: toate la 0 px față de mijlocul rândului, la 1440 și la 390 px.
+- Textul simplu („Crypto”) și textul din câmpul de aliasuri au același mijloc. Diferența de sub un pixel pe care o raportează browserul vine din metricile fontului, nu din așezare.
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Rândul tras cu mouse-ul | la fel (doar așezarea din celule s-a schimbat; mânerul de tragere e același) |
+| Numele lung al unei acțiuni | se taie cu „…”, ca înainte |
+| Telefon (390 px) | aceleași măsurători, 0 px |
+
+## FD-SELECTSAFARI — Dropdown-urile la înălțimea butoanelor și în Safari (14 oct 2026)
+
+Cererea utilizatorului (cu o captură din Admin → Surse, unde „Categorie” era mai scund decât câmpurile și butoanele): „ți-am zis și de dropdowns. cauți butoane, verifici elementele de lângă ele și reglezi situația dacă e nevoie”.
+
+### Cauza
+- Safari desenează dropdown-ul cu aspectul lui și ignoră înălțimea minimă și padding-ul: în Safari toate dropdown-urile aveau 22 px, oricât cerea Sentiq.
+- FD-UIPOLISH fusese verificat doar în Chrome, care respectă înălțimea.
+
+### Ce se schimbă
+- **Toate dropdown-urile** sunt desenate de Sentiq: aceeași cutie ca un câmp, cu săgeata în culoarea temei. Au 38 px (44 pe ecrane tactile) în orice browser, deci și „Categorie” de lângă „Testează” / „Adaugă sursa”.
+  - Lista care se deschide rămâne cea a sistemului (tastatura, căutarea după literă și cititoarele de ecran merg ca înainte).
+- **Știri:** dropdown-ul „Sursă” și căutarea au acum 38 px, ca comutatorul „24 h · Azi · Ieri · 7 zile” de pe același rând. Asta înlocuiește excepția din FD-UIPOLISH.
+  - Filtrele fără chenar („Toate”, „Crypto”…) rămân cum sunt: au înălțimea butoanelor din comutator.
+- **Grafice:** căutarea „Pereche, acțiune sau indice” stă în rândul favoritelor, deci are înălțimea lor (30 px; 36 pe ecrane tactile), nu a unui buton.
+- **Verificat automat:** pe fiecare pagină, fiecare buton și ce are lângă el, pe același rând, comparate ca înălțime și ca mijloc.
+  - Paginile: Azi, Știri, Calendar (și formularul de eveniment), Economie, Grafice (și panoul Indicatori), Tranzacții, Setări, Admin, Securitate, Stare sistem, Utilizatori.
+  - Motoarele: WebKit (al lui Safari) și Chrome, la 1440 px și la 390 px cu ecran tactil.
+  - Rămân doar filtrele fără chenar din Știri (intenționat) și suprapuneri false (butoanele panoului Indicatori, peste câmpurile de sub el).
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Text lung într-un dropdown îngust | se taie înaintea săgeții (are 32 px rezervați) |
+| Dropdown dezactivat | aceeași cutie, cursorul „interzis”, ca înainte |
+| Tema luminoasă | săgeata ia culoarea temei |
+
+## FD-AICLARITY — Connectorul în Setări; la ce folosește Sentiq cheia Claude (14 oct 2026)
+
+Cererile utilizatorului:
+- „și unde sunt setările de mcp? nu văd nimic nicăieri”;
+- „ce caută în securitate? trebuie să fie în setări”;
+- „nu este clar nicăieri că odată ce am folosit mcp-ul, modelul ales de mine e folosit pentru analiză. unde scrie, unde văd la ce e folosit? … în setările de admin văd în continuare că se folosește cheia api de la anthropic. păi mcp-ul nu avea drept scop să elimine folosirea acelei chei? și dacă mcp-ul e conectat de ce încă mai văd opțiunea cu claude opus 5 și cheia api?”
+
+Răspunsul, pe scurt: connectorul și cheia fac lucruri diferite.
+- **Connectorul** lucrează doar când îl întrebi pe Claude (sau ChatGPT, Gemini) în aplicația lui: acela răspunde cu modelul și abonamentul tău și citește datele din Sentiq.
+- **Cheia** e a lui Sentiq: cu ea, Sentiq lucrează singur, fără să-l întrebe cineva. Calculează sentimentul fiecărei știri și face Rezumatul de pe Azi.
+- Sentiq nu poate folosi abonamentul cuiva: termenii Anthropic interzic asta. De aceea connectorul nu poate înlocui cheia.
+- Întrebat ce să facă Sentiq, utilizatorul a ales **„Păstrez totul pe cheie”**: sentimentul cu Claude și Rezumatul rămân. Doar se spune clar, în aplicație, la ce e folosită cheia și cât.
+
+### 1. Ce se schimbă
+- **Setări → Ale mele → „Asistenți AI (connector)”**, mutat din Securitate. Apare mereu, nu doar când connectorul e pornit:
+  - ce face: „Conectezi Claude, ChatGPT sau Gemini la Sentiq. Când îi întrebi ceva în aplicația lor, citesc datele tale din Sentiq (ziua, știrile și sentimentul, calendarul, indicatorii, favoritele, graficele cu Slingshot) și răspund cu modelul ales de tine acolo, pe abonamentul tău.”;
+  - ce nu face: „Connectorul nu folosește cheia Claude a lui Sentiq și nu schimbă ce calculează Sentiq singur (sentimentul știrilor, Rezumatul).”;
+  - adresa, pașii pentru fiecare aplicație și conexiunile tale (cu „Deconectează”), ca înainte;
+  - connector oprit: „Connectorul nu e pornit pe această instalare” (adminului: cum se pornește).
+- **Securitate:** fără panou; „Ieși peste tot” spune în continuare că deconectează și asistenții AI, cu trimitere la Setări → Asistenți AI.
+- **Setări → Admin → Motorul de sentiment:** un bloc nou, „La ce folosește Sentiq cheia Claude”, cu consumul de azi (ziua UTC, ca la Twelve Data):
+  - **Sentimentul știrilor** (doar cu motorul Claude): titluri trimise, apeluri, tokeni de intrare / ieșire, modelul;
+  - **Rezumatul de pe Azi:** rezumate făcute, tokeni, modelul (`claude-opus-5-5`);
+  - „Connectorul (Setări → Asistenți AI) nu folosește această cheie: acolo lucrează abonamentul fiecăruia.”;
+  - prețul în dolari îl arată consola Anthropic (Sentiq arată tokenii, nu inventează un preț).
+  - Textul de la motorul Claude nu mai spune „câțiva cenți pe zi”: costul depinde de model și de numărul de știri. Spune „se plătește la Anthropic, după tokenii de mai jos”.
+- **Fereastra Rezumat**, în subsol: „Scris de Sentiq cu cheia Claude a adminului (claude-opus-5-5). Poți cere un rezumat și lui Claude, cu abonamentul tău, prin connector: promptul «Rezumatul zilei».”
+- **⌘K:** „Asistenți AI (connector)” deschide panoul din Setări.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Motorul e Local | sentimentul nu consumă nimic; blocul spune „Motorul e Local: sentimentul nu folosește cheia” |
+| Fără cheie | blocul spune ce s-ar folosi; Rezumatul cere cheia, ca înainte |
+| Un apel la Anthropic eșuat | se numără doar ce a răspuns Anthropic (tokenii vin din răspuns); titlurile scorate apoi local nu se numără |
+| Mac-ul și Azure | consumul e ținut în bază, deci adună ambele instanțe |
+| Utilizator obișnuit | nu vede consumul și nici cheia (ca înainte), dar vede connectorul în Setări |
+| Ziua nouă (UTC) | contoarele încep de la zero |
+
+## FD-MCPREMOVE — Connectorul (MCP) scos din Sentiq (14 oct 2026)
+
+Cererile utilizatorului:
+- „dacă e vorba că direcția este de la claude la sentiq, mcp-ul este useless. eu vreau să integrez claude în sentiq nu invers”;
+- la întrebarea dacă păstrez connectorul: „Îl opresc”; apoi „atunci scoate mcp-ul. nu avem ce face cu el”.
+
+Context: connectorul lăsa Claude / ChatGPT / Gemini să citească datele din Sentiq, dar întrebările se puneau doar în aplicațiile lor. Utilizatorul voia Claude în Sentiq. Asta se poate doar pe cheia API, iar chat-ul pe cheie l-a refuzat („Nu”, „nu faci nimic”). Prin urmare, connectorul nu mai are rost.
+
+### 1. Ce se schimbă
+- **Connectorul dispare cu totul**: adresa `/mcp`, autorizarea OAuth (`/.well-known/…`, `/oauth/…`), pagina de consimțământ, înregistrarea aplicațiilor, uneltele și prompturile.
+- **Setări → „Asistenți AI (connector)”** dispare; la fel ⌘K → „Asistenți AI”, trimiterea din Securitate („Ieși peste tot” nu mai pomenește asistenții AI) și cele două mențiuni (subsolul Rezumatului, blocul din Admin).
+- **Baza de date:** tabelele connectorului (`mcp_clients`, `mcp_grants`, `mcp_codes`, `mcp_tokens`) se șterg, printr-o migrare nouă (2). Înainte, conținutul lor se salvează într-un fișier în `data/backups/`. La backup era o conexiune (Claude, făcută de utilizator la 16:34 UTC), pe care utilizatorul a șters-o din Claude.
+- **Configurația:** `SENTIQ_MCP` și `SENTIQ_MCP_CLIENTS` nu mai înseamnă nimic. `SENTIQ_MCP` a fost scos de pe App Service, la cererea utilizatorului, înainte de publicare. `SENTIQ_PUBLIC_URL` rămâne, fiindcă de el depind linkurile de activare (FD-ONLINE).
+- **Rămân pe cheia API** (FD-AICLARITY): sentimentul cu Claude, Rezumatul și blocul „La ce folosește Sentiq cheia Claude”.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Cineva (sau Claude, dintr-o conexiune veche) cere `https://sentiq.money/mcp`, `/oauth/…` sau `/.well-known/…` | adresele nu mai există: „404 nu există” (nu pagina aplicației); nu se mai dă niciun token |
+| Connectorul adăugat cândva în Claude | rămâne în lista lui Claude, dar nu mai merge; se șterge din Claude (Customize → Connectors) |
+| Conexiunea făcută de utilizator pe 14 oct, 16:34 UTC | utilizatorul a șters-o deja din Claude; rândurile ei sunt în backup |
+| Mac-ul sau Azure rămas pe versiunea veche | schema 2 e mai nouă: versiunea veche refuză să pornească („actualizează Sentiq”); se publică împreună |
+| `public_instance` scris de versiunea veche (cu `mcp`) | câmpul în plus e ignorat |
+| Importul unei baze SQLite vechi | tabelele connectorului se sar |
+
+## FD-TDPLAN — Limitele Twelve Data citite din planul cheii (14 oct 2026)
+
+Cererea utilizatorului: „mă interesează planul grow cu 55 api + 8ws. e de ajuns pt mine? practic nu mai vreau limite pe minut și zilnice.”; apoi „modifică să citească limitele”.
+
+### Situația
+- Sentiq presupunea mereu planul gratuit (8 cereri pe minut, 800 pe zi) și nu cerea niciodată mai mult. Cu un plan plătit s-ar fi limitat singur în continuare.
+- Twelve Data spune limitele cheii la `/api_usage`, la un credit pe întrebare:
+  - limita pe minut (`plan_limit`);
+  - limita zilnică (`plan_daily_limit`), doar pe planurile care au una (Basic); Grow, Pro și Enterprise nu au limită zilnică;
+  - numele planului (`plan_category`).
+
+### Ce se schimbă
+- Sentiq citește planul cheii:
+  - la salvarea cheii (după verificare);
+  - la pornire;
+  - apoi la 6 ore;
+  - la cerere, cu butonul „Recitește planul” din Admin → Date de piață (după un upgrade, ca să nu aștepți).
+- Bugetul local folosește limitele citite: de exemplu 55 pe minut și fără limită zilnică pe Grow. Planul citit se ține în bază, deci Mac-ul și Azure folosesc aceleași limite.
+- **Admin → Date de piață** arată: „Planul Twelve Data: Grow: 55 de cereri pe minut, fără limită zilnică (citit acum 2 min)” și consumul. „Stare sistem” arată „fără limită zilnică” în loc de „x / 800”.
+- Textul despre cheie spune că planul gratuit are 8 pe minut și 800 pe zi, iar un plan plătit se recunoaște singur.
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Planul n-a fost citit încă (cheie veche, `/api_usage` n-a răspuns) | limitele planului gratuit (8 / 800), ca înainte; Admin spune „Basic (presupus)” |
+| `/api_usage` nu răspunde la o recitire | rămâne ultimul plan citit |
+| Cheia se schimbă sau se șterge | planul vechi se uită; cu o cheie nouă se citește din nou |
+| Upgrade făcut pe site-ul Twelve Data | se vede la următoarea citire (cel mult 6 ore) sau imediat cu „Recitește planul” |
+| Downgrade | la fel; limitele mai mici se aplică de la citire |
+| Twelve Data refuză totuși o cerere (429, cheia folosită și în altă parte) | ca înainte: nicio cerere până la minutul următor, ultimele lumânări cu motivul |
+
+## FD-INDEXINTRA — Indicii pe timeframe-uri intraday (14 oct 2026)
+
+Cererea utilizatorului: „caută pe net soluții pentru indecși. măcar pt 1h.”
+
+### Cercetarea
+| Sursă | Ce dă | De ce da / nu |
+|---|---|---|
+| **CNBC** (API-ul graficelor de pe cnbc.com, neoficial, fără cheie) | toți cei 7 indici: cotații **în timp real**, zilnic din 2010, intraday 1m / 5m / 30m / 1h pe ~100 de zile (din 7 iulie 2026) | ales; răspunde și de pe Azure; zilnicul e identic cu Cboe (verificat pe SPX, 12 oct); Dow-ul e cel adevărat, nu DJX × 100 |
+| Massive (fostul Polygon), Indices Starter / Advanced | minute, 15 min întârziere / timp real | oficial, dar 49 $ / 99 $ pe lună; acoperirea DJI nesigură |
+| Twelve Data | — | catalogul nu are SPX, NDX, DJI, VIX ca indici (nici pe Grow) |
+| Financial Modeling Prep, EODHD | intraday pe indici | doar pe planuri plătite |
+| Yahoo / Stooq | — | refuză cererile automate (429 / JavaScript) |
+| Cboe, Nasdaq (sursele de acum) | zilnic; intraday doar ziua curentă | rămân rezervă pentru zilnic și cotații |
+
+- CNBC e neoficial, ca Nasdaq și Cboe: termenii site-urilor nu permit, în general, folosirea automată. Alternativa oficială e Massive.
+
+### Ce se schimbă
+- **Timeframe-uri pentru indici:** 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w.
+  - 3m se face din 1m, 15m din 5m, 2h și 4h din 1h.
+  - 6h, 8h și 12h nu există: o ședință are 6 ore și jumătate.
+- **Istoric intraday:** cât dă CNBC, cam 100 de zile, adică ~500 de lumânări pe 1h și ~140 pe 4h. Pe 1m, 3m și 5m se încarcă doar ultimele zile, cât cere numărul de lumânări ales în Admin.
+- **Doar ședința regulată** (9:30–16:00, ora New York). Barele de după închidere, plate, se sar.
+  - Prima bară de 1h e cea de la 9:30 (CNBC o numește 9:00), iar ultima, de la 15:00, se închide la 16:00.
+- **Cotațiile** vin de la CNBC, în timp real, deci nota „până la 15 minute întârziere” dispare. Rămâne doar când cotația vine din rezervă (Cboe) sau când CNBC nu o marchează ca fiind în timp real.
+- **Zilnicul** vine tot de la CNBC; cu CNBC căzut, de la sursele de acum (Nasdaq pentru NDX / COMP / SOX, Cboe pentru celelalte).
+- **Pe Azi**, cu semnalele pe 15m / 1h / 4h, fișa unui indice arată acum Slingshot chiar pe timeframe-ul ales, nu pe 1d.
+- **În Grafice**, butoanele 6h / 8h / 12h sunt dezactivate pentru indici, cu „Indicii nu au 6h”.
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| CNBC nu răspunde | cotația și zilnicul din rezervă (cu nota de întârziere); intraday: ultimele lumânări cu motivul, sau eroarea „Datele intraday ale indicilor nu sunt disponibile acum” |
+| Istoric intraday mai scurt decât cere Slingshot | avertismentul existent: „Istoric insuficient …” |
+| Ședință scurtă (de ex. 13:00 înainte de sărbători) | barele care există; nimic inventat |
+| Weekend, sărbătoare, noapte | ultima ședință; fără „Date vechi” (piața e închisă) |
+| Bara curentă (ședința în desfășurare) | apare, deschisă, și se actualizează la minut |
+| Timeframe salvat 6h / 8h / 12h | graficul arată cel mai apropiat (4h sau 1d), cu nota „Indicii nu au …” |

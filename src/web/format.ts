@@ -133,5 +133,7 @@ export const toneText: Record<Tone, string> = { bull: 'text-bull', bear: 'text-b
 export function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  // The database's maximum size (FD-AZURE §5): 2 GB, 250 GB.
+  return `${Number((n / 1024 ** 3).toFixed(1))} GB`;
 }

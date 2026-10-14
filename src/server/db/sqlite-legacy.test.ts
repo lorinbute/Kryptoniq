@@ -3,8 +3,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { Db } from './database.ts';
-import { MIGRATIONS } from './migrations.ts';
+import { LegacySqliteDb as Db } from './sqlite-legacy.ts';
+import { MIGRATIONS } from './sqlite-migrations.ts';
+
+// The SQLite migrations, kept for the import of an older file into Azure SQL (TD-AZURE §9).
 
 let dir = '';
 afterEach(() => {
@@ -45,7 +47,7 @@ describe('migration 2 (FD-SENTIQ)', () => {
 });
 
 describe('migration 3 (FD-USERS)', () => {
-  it("makes everything that exists the admin's, and the admin an account without email or password", async () => {
+  it("makes everything that exists the admin's, and the admin an account without email or password", () => {
     dir = mkdtempSync(path.join(tmpdir(), 'sq-mig3-'));
     const file = path.join(dir, 'v2.db');
     const raw = new DatabaseSync(file);
@@ -71,16 +73,8 @@ describe('migration 3 (FD-USERS)', () => {
     expect(db.get('SELECT user_id FROM calendar_custom')).toEqual({ user_id: 1 });
     expect(db.get('SELECT avg_price FROM cost_basis')).toEqual({ avg_price: 50000 });
     expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
-
-    // The personal settings follow the admin; the shared ones stay where they were.
-    const { SettingsService } = await import('../settings.ts');
-    const { SecretBox } = await import('../secrets/crypto.ts');
-    const settings = new SettingsService(db, new SecretBox(Buffer.alloc(32, 2)));
-    settings.migrateLegacyToAdmin(1);
-    expect(settings.forUser(1)).toMatchObject({ timezone: 'Asia/Tokyo', retentionDays: 60, charts: { symbol: 'SOL/USDT' } });
-    // A second user starts from the defaults for their own keys, and shares the admin's retention.
+    // (The personal settings moving to the admin: schema.test.ts, on Azure SQL.)
     const ana = db.run("INSERT INTO users(email, name, role, created_at) VALUES ('ana@example.com', 'Ana', 'user', 1)").lastInsertRowid;
-    expect(settings.forUser(ana)).toMatchObject({ retentionDays: 60, charts: { symbol: '' } });
     // An account that goes takes its own rows with it.
     db.run("INSERT INTO watchlist(user_id, coin, quote, position, aliases, added_at) VALUES (?, 'ETH', 'USDT', 0, '[]', 1)", [ana]);
     db.run('DELETE FROM users WHERE id = ?', [ana]);

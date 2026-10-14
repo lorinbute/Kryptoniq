@@ -1,11 +1,11 @@
-// The signed-in user's own security (FD-USERS §7): name, password, two-factor with recovery codes, passkeys,
-// signing out everywhere, and the Claude connector's connections (FD-MCP §5).
+// The signed-in user's own security (FD-USERS §7): name, password, two-factor with recovery codes, passkeys and signing
+// out everywhere.
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { browserSupportsWebAuthn, startRegistration } from '@simplewebauthn/browser';
-import { Copy, Download, Fingerprint, KeyRound, LogOut, Pencil, Plug, ShieldCheck, Trash2, UserRound } from 'lucide-react';
-import type { AccountInfo, McpConnection, McpStatus, PasskeySummary, PublicUser, TwoFactorView } from '../../shared/api-types.ts';
+import { Copy, Download, Fingerprint, KeyRound, LogOut, Pencil, ShieldCheck, Trash2, UserRound } from 'lucide-react';
+import type { AccountInfo, PasskeySummary, PublicUser, TwoFactorView } from '../../shared/api-types.ts';
 import { api, errorMessage } from '../api.ts';
 import { AUTH_KEY, landAfterSignOut, useAuthChange } from '../auth.ts';
 import { fmtAgo, fmtDateTime } from '../format.ts';
@@ -429,7 +429,7 @@ function PasskeysSection({ list, here }: { list: PasskeySummary[]; here: boolean
     <Panel title="Passkey-uri" icon={Fingerprint} flush={list.length > 0}>
       <div className="flex flex-col gap-3 pb-3 text-[13.5px]">
         <p className="max-w-[75ch] text-muted">
-          Un passkey te lasă să intri cu Touch ID, Face ID sau PIN-ul dispozitivului, fără parolă și fără cod. Merge doar când Sentiq e deschis la http://localhost (pe Mac-ul care îl rulează).
+          Un passkey te lasă să intri cu Touch ID, Face ID sau PIN-ul dispozitivului, fără parolă și fără cod. Merge doar pe adresa pe care l-ai creat: unul făcut pe adresa publică nu merge pe http://localhost și invers.
         </p>
       </div>
       {list.length > 0 && (
@@ -487,8 +487,6 @@ function PasskeysSection({ list, here }: { list: PasskeySummary[]; here: boolean
 
 function SessionsSection() {
   const change = useAuthChange();
-  // The connector's connections end too (FD-MCP §5); worth saying only when there is a connector.
-  const mcp = useQuery({ queryKey: MCP_KEY, queryFn: () => api.get<McpStatus>('/api/mcp/status'), retry: false });
   const out = useMutation({
     mutationFn: () => api.post('/api/account/logout-all'),
     onSuccess: () => {
@@ -500,96 +498,13 @@ function SessionsSection() {
     <Panel title="Sesiuni" icon={LogOut}>
       <div className="flex flex-wrap items-center gap-3 text-[13.5px]">
         <p className="max-w-[70ch] text-muted">
-          Ai uitat contul deschis pe alt calculator sau telefon? Ieși peste tot, inclusiv de aici{mcp.data?.enabled ? ', și deconectezi Claude' : ''}.
+          Ai uitat contul deschis pe alt calculator sau telefon? Ieși peste tot, inclusiv de aici.
         </p>
         <button className="btn btn-danger" onClick={() => out.mutate()} disabled={out.isPending}>
           Ieși de pe toate dispozitivele
         </button>
       </div>
       {out.error && <Msg tone="error">{errorMessage(out.error)}</Msg>}
-    </Panel>
-  );
-}
-
-const MCP_KEY = ['mcp-status'] as const;
-
-function McpRow({ c, tz }: { c: McpConnection; tz: string }) {
-  const qc = useQueryClient();
-  const remove = useMutation({
-    mutationFn: () => api.del(`/api/mcp/connections/${c.id}`),
-    onSettled: () => void qc.invalidateQueries({ queryKey: MCP_KEY }),
-  });
-  return (
-    <tr>
-      <td>
-        <span className="font-medium">{c.clientName}</span> <span className="text-muted">· {c.clientHost}</span>
-        {c.redirectHost !== c.clientHost && <div className="text-[12.5px] text-faint">se întoarce la {c.redirectHost}</div>}
-        {remove.error && <div className="text-[12.5px] text-bear">{errorMessage(remove.error)}</div>}
-      </td>
-      <td className="num text-muted">{fmtDateTime(c.createdAt, tz)}</td>
-      <td className="text-muted">{c.lastUsedAt ? fmtAgo(c.lastUsedAt) : 'niciodată'}</td>
-      <td className="text-right whitespace-nowrap">
-        <button
-          className="btn btn-danger"
-          disabled={remove.isPending}
-          onClick={() => {
-            if (window.confirm(`Deconectezi ${c.clientName} (${c.clientHost})? Claude îți va cere să te conectezi din nou.`)) remove.mutate();
-          }}
-        >
-          Deconectează
-        </button>
-      </td>
-    </tr>
-  );
-}
-
-/** FD-MCP §5: only while the connector is on (it needs the public address); nothing otherwise. */
-function McpSection() {
-  const tz = useTz();
-  const status = useQuery({ queryKey: MCP_KEY, queryFn: () => api.get<McpStatus>('/api/mcp/status'), retry: false });
-  const [copied, setCopied] = useState<boolean | null>(null);
-  const s = status.data;
-  if (!s?.enabled) return null;
-  return (
-    <Panel title="Claude (connector)" icon={Plug} flush={s.connections.length > 0}>
-      <div className="flex flex-col gap-3 pb-3 text-[13.5px]">
-        <p className="max-w-[75ch] text-muted">
-          Folosește-ți abonamentul Claude cu datele tale din Sentiq: în Claude, la Customize → Connectors → <span className="text-text">Add custom connector</span>, pune adresa de mai jos
-          și intră cu contul tău Sentiq. Apoi întreabă Claude, de exemplu, „e o zi bună de trading?”. Claude doar citește; nu vede cheile, conturile sau portofoliile.
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <code className="num rounded-[8px] border border-line-strong bg-panel-2 px-2.5 py-1.5 text-[13px] break-all whitespace-normal">{s.url}</code>
-          <button className="btn" onClick={() => void copyText(s.url).then(setCopied)}>
-            <Copy size={14} aria-hidden />
-            Copiază
-          </button>
-          {copied !== null && (
-            <span className={copied ? 'text-bull' : 'text-bear'} role="status">
-              {copied ? 'Copiată.' : 'Nu s-a putut copia: selecteaz-o și copiaz-o de mână.'}
-            </span>
-          )}
-        </div>
-        {s.connections.length === 0 && <p className="text-faint">Niciun Claude conectat încă.</p>}
-      </div>
-      {s.connections.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Aplicația</th>
-              <th>Conectată</th>
-              <th>Folosită</th>
-              <th className="relative text-right">
-                <span className="sr-only">Acțiuni</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {s.connections.map((c) => (
-              <McpRow key={c.id} c={c} tz={tz} />
-            ))}
-          </tbody>
-        </table>
-      )}
     </Panel>
   );
 }
@@ -616,7 +531,6 @@ export default function SecurityPage() {
       <PasswordSection email={a.user.email} />
       <TwoFactorSection tf={a.twoFactor} />
       <PasskeysSection list={a.passkeys} here={a.passkeysHere} />
-      <McpSection />
       <SessionsSection />
     </div>
   );

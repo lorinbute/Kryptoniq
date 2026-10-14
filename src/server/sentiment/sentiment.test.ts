@@ -220,6 +220,20 @@ describe('ClaudeEngine circuit breaker', () => {
     expect(engine.status().lastError).toMatchObject({ permanent: true });
   });
 
+  it('tells what each answered call cost: headlines and tokens (FD-AICLARITY)', async () => {
+    const { ClaudeEngine } = await import('./claude.ts');
+    const { silentLogger } = await import('../log.ts');
+    const client = { beta: { messages: { parse: async () => ({ stop_reason: 'end_turn', usage: { input_tokens: 640, output_tokens: 120 }, parsed_output: { results: [{ n: 1, score: 0.5, impact: 1 }] } }) } } };
+    const local = new LocalEngine({ status: () => ({ state: 'failed', progress: null, error: null, model: 'x' }), warmUp: () => {}, score: async () => null, onReady: () => {} });
+    const seen: unknown[] = [];
+    const engine = new ClaudeEngine({ apiKey: 'k', model: 'claude-opus-5-5', log: silentLogger, client: client as never, onUsage: (u) => seen.push(u) }, local);
+    await engine.score([
+      { id: 'a', title: 'Fed cuts rates', summary: '' },
+      { id: 'b', title: 'Exchange hacked', summary: '' },
+    ]);
+    expect(seen).toEqual([{ items: 2, input: 640, output: 120 }]);
+  });
+
   it('uses Claude scores when available and fills missing ones locally', async () => {
     const { ClaudeEngine } = await import('./claude.ts');
     const { silentLogger } = await import('../log.ts');

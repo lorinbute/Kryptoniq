@@ -124,8 +124,10 @@ export class CoinDetector {
   /**
    * `stocks`: watchlist stocks → their aliases (company names). These are proper nouns, matched in their own
    * case, in capitals or in Title Case, never in lower case ("Apple" but not "apple pie").
+   * `indices`: watchlist indices (FD-INDICES) by id ("^SPX") → their aliases ("S&P 500", "SPX"), matched the same way.
+   * Added last, so an index's alias wins over a coin's name or alias ("SPX" is also SPX6900's ticker).
    */
-  constructor(entries: CoinEntry[], userAliases: Record<string, string[]> = {}, stocks: Record<string, string[]> = {}) {
+  constructor(entries: CoinEntry[], userAliases: Record<string, string[]> = {}, stocks: Record<string, string[]> = {}, indices: Record<string, string[]> = {}) {
     const names = new Map<string, NameDef>(); // lower-case name → definition
     const symbols = new Set<string>();
     const add = (symbol: string, raw: string, force = false, company = false) => {
@@ -151,6 +153,7 @@ export class CoinDetector {
       for (const a of aliases) add(s, a.replace(/^=/, ''), true);
     }
     for (const [sym, aliases] of Object.entries(stocks)) for (const a of aliases) add(sym.toUpperCase(), a.replace(/^=/, ''), true, true);
+    for (const [id, aliases] of Object.entries(indices)) for (const a of aliases) add(id, a.replace(/^=/, ''), true, true);
     this.stockSymbols = new Set(Object.keys(stocks).map((s) => s.toUpperCase()));
     this.symbols = symbols;
     const bounded = (alt: string) => `(?<![\\p{L}\\p{N}])(?:${alt})(?![\\p{L}\\p{N}])`;

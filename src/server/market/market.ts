@@ -1,6 +1,6 @@
 // Public market data through ccxt: markets, symbol search and cached OHLCV (TD §8).
 import ccxt, { type Exchange, type MarketInterface } from 'ccxt';
-import { tfSeconds, type Timeframe } from '../../shared/time.ts';
+import { TIMEFRAMES, tfSeconds, type Timeframe } from '../../shared/time.ts';
 import type { Candle } from '../../shared/indicator/slingshot.ts';
 import { MARKET_EXCHANGES } from '../../shared/settings.ts';
 import { isRateLimitError, withRetry } from '../exchange/retry.ts';
@@ -141,6 +141,18 @@ export class MarketData {
     }
     await p;
     return ex;
+  }
+
+  /** Whether the exchange lists this pair, active and spot (FD-MARKETSRC §2: otherwise the default exchange is asked). */
+  async lists(id: string, symbol: string): Promise<boolean> {
+    const m = (await this.loadMarkets(id)).markets?.[symbol];
+    return Boolean(m && m.spot !== false && m.active !== false);
+  }
+
+  /** The app's timeframes this exchange offers (ccxt knows them without a request). */
+  timeframes(id: string): Timeframe[] {
+    const ex = this.exchange(id);
+    return TIMEFRAMES.filter((t) => Boolean(ex.timeframes && t in ex.timeframes));
   }
 
   async searchSymbols(id: string, q: string, limit = 50): Promise<SymbolInfo[]> {

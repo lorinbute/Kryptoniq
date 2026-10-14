@@ -88,16 +88,15 @@ export function parseCnn(raw: unknown): { fearGreed: StockFearGreed; indices: In
   };
 }
 
-function put(db: Db, key: string, value: unknown, now: number): void {
-  db.run('INSERT INTO market_cache(key, value, fetched_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, fetched_at = excluded.fetched_at', [
-    key,
-    JSON.stringify(value),
-    now,
-  ]);
+/** `market_cache` upsert (named parameters @k, @v, @t). */
+export const PUT_CACHE = 'UPDATE market_cache SET value = @v, fetched_at = @t WHERE [key] = @k; IF @@ROWCOUNT = 0 INSERT INTO market_cache([key], value, fetched_at) VALUES (@k, @v, @t)';
+
+async function put(db: Db, key: string, value: unknown, now: number): Promise<void> {
+  await db.run(PUT_CACHE, { k: key, v: JSON.stringify(value), t: now });
 }
 
-function read<T>(db: Db, key: string): { value: T; fetchedAt: number } | null {
-  const row = db.get<{ value: string; fetched_at: number }>('SELECT value, fetched_at FROM market_cache WHERE key = ?', [key]);
+async function read<T>(db: Db, key: string): Promise<{ value: T; fetchedAt: number } | null> {
+  const row = await db.get<{ value: string; fetched_at: number }>('SELECT value, fetched_at FROM market_cache WHERE [key] = ?', [key]);
   if (!row) return null;
   try {
     return { value: JSON.parse(row.value) as T, fetchedAt: row.fetched_at };
@@ -113,15 +112,15 @@ function read<T>(db: Db, key: string): { value: T; fetchedAt: number } | null {
 export async function refreshStockContext(db: Db, stocks: StockData, now = Date.now(), fetchCnn: () => Promise<unknown> = () => fetchJson(CNN_URL, { headers: CNN_HEADERS, timeoutMs: 15_000 })): Promise<string[]> {
   const errors: string[] = [];
   const status = await stocks.confirmedStatus();
-  if (status) put(db, STOCK_MARKET_KEY, status, now);
+  if (status) await put(db, STOCK_MARKET_KEY, status, now);
   else errors.push('nasdaq market-info: indisponibil');
-  const last = read<unknown>(db, STOCK_INDICES_KEY);
+  const last = await read<unknown>(db, STOCK_INDICES_KEY);
   const trading = status !== null && status.state !== 'closed';
   if (last && !trading && now - last.fetchedAt < 60 * 60_000) return errors;
   const indices: IndexQuote[] = [];
   try {
     const cnn = parseCnn(await fetchCnn());
-    put(db, STOCK_FNG_KEY, cnn.fearGreed, now);
+    await put(db, STOCK_FNG_KEY, cnn.fearGreed, now);
     indices.push(...cnn.indices);
   } catch (err) {
     errors.push(`cnn fear&greed: ${(err as Error).message}`);
@@ -134,9 +133,9 @@ export async function refreshStockContext(db: Db, stocks: StockData, now = Date.
   }
   if (indices.length) {
     // A source that failed keeps its last value.
-    const prev = read<IndexQuote[]>(db, STOCK_INDICES_KEY)?.value ?? [];
+    const prev = (await read<IndexQuote[]>(db, STOCK_INDICES_KEY))?.value ?? [];
     const merged = (['SPX', 'NDX', 'VIX'] as const).map((id) => indices.find((i) => i.id === id) ?? prev.find((i) => i.id === id)).filter((x): x is IndexQuote => Boolean(x));
-    put(db, STOCK_INDICES_KEY, merged, now);
+    await put(db, STOCK_INDICES_KEY, merged, now);
   }
   return errors;
 }
@@ -147,10 +146,10 @@ export interface StockContext {
   market: (MarketStatus & { storedAt: number }) | null;
 }
 
-export function readStockContext(db: Db): StockContext {
-  const fg = read<StockFearGreed>(db, STOCK_FNG_KEY);
-  const ix = read<IndexQuote[]>(db, STOCK_INDICES_KEY);
-  const m = read<MarketStatus>(db, STOCK_MARKET_KEY);
+export async function readStockContext(db: Db): Promise<StockContext> {
+  const fg = await read<StockFearGreed>(db, STOCK_FNG_KEY);
+  const ix = await read<IndexQuote[]>(db, STOCK_INDICES_KEY);
+  const m = await read<MarketStatus>(db, STOCK_MARKET_KEY);
   return {
     fearGreed: fg ? { ...fg.value, fetchedAt: fg.fetchedAt } : null,
     indices: ix && Array.isArray(ix.value) ? { items: ix.value, fetchedAt: ix.fetchedAt } : null,

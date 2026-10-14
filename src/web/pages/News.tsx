@@ -6,6 +6,7 @@ import type { NewsItemDto, NewsPage, SourceRow } from '../../shared/api-types.ts
 import { dayKey } from '../../shared/time.ts';
 import { api, qs } from '../api.ts';
 import { fmtAgo, fmtDate, fmtDateTime, fmtNum, fmtTime } from '../format.ts';
+import { plainSymbol } from '../../shared/indices.ts';
 import { useStockSet, useTz, useWatchlist } from '../hooks.ts';
 import { useSearchParams } from 'react-router';
 import { Empty, ErrorNote, Loading, ScoreBar, Seg } from '../components/ui.tsx';
@@ -69,7 +70,7 @@ function NewsRow({ item, tz, stocks }: { item: NewsItemDto; tz: string; stocks: 
             {item.coins.map((c) => (
               <span key={c} className="tag gap-1 pl-1">
                 <CoinLogo coin={c} size={12} badge={stocks.has(c)} square={stocks.has(c)} />
-                {c}
+                {plainSymbol(c)}
               </span>
             ))}
             {item.related.length > 0 && (
@@ -233,7 +234,8 @@ export default function NewsPageView() {
             </button>
           ))}
         </div>
-        <select aria-label="Sursă" value={source} onChange={(e) => setSource(e.target.value)} className="h-8 max-w-[220px] py-0 text-[12.5px]">
+        {/* The height of the interval switch beside it (FD-SELECTSAFARI), as every dropdown. */}
+        <select aria-label="Sursă" value={source} onChange={(e) => setSource(e.target.value)} className="max-w-[220px] text-[13px]">
           <option value="">Toate sursele active</option>
           {(sources.data ?? [])
             .filter((s) => s.enabled)
@@ -248,7 +250,7 @@ export default function NewsPageView() {
             {favList.map((c) => (
               <button key={c} type="button" className="chip gap-1.5 pl-1.5" aria-pressed={activeCoins.includes(c)} onClick={() => toggleCoin(c)}>
                 <CoinLogo coin={c} size={16} badge={stockSet.has(c)} square={stockSet.has(c)} />
-                {c}
+                {plainSymbol(c)}
               </button>
             ))}
             <label className="ml-1 inline-flex items-center gap-2 text-[12.5px] text-muted">
@@ -258,7 +260,7 @@ export default function NewsPageView() {
           </div>
         )}
         <form
-          className="flex h-8 min-w-[220px] flex-1 items-center gap-2 rounded-[9px] border border-line-strong bg-ink px-2.5 focus-within:border-accent-dim lg:max-w-[300px]"
+          className="flex min-h-[38px] min-w-[220px] flex-1 items-center gap-2 rounded-[10px] border border-line-strong bg-ink px-3 focus-within:border-accent-dim pointer-coarse:min-h-11 lg:max-w-[300px]"
           role="search"
           onSubmit={(e) => {
             e.preventDefault();
@@ -272,14 +274,14 @@ export default function NewsPageView() {
             value={text}
             onChange={(e) => setText(e.target.value)}
             onBlur={() => applySearch(text.trim())}
-            className="h-full w-full min-w-0 rounded-none border-0 bg-transparent px-0 py-0 text-[12.5px] focus:border-0"
+            className="min-h-0 w-full min-w-0 rounded-none border-0 bg-transparent px-0 py-0 text-[13px] focus:border-0"
           />
         </form>
       </div>
       {favList.length > 0 && (onlyFavorites || activeCoins.length > 0) && (
         <p className="text-[12.5px] text-faint">Filtrele schimbă doar lista. Sentimentul zilei se calculează mereu din toate știrile.</p>
       )}
-      {favList.length === 0 && watchlist.data && <p className="text-[12.5px] text-faint">Adaugă monede sau acțiuni favorite din Setări ca să poți filtra știrile după ele.</p>}
+      {favList.length === 0 && watchlist.data && <p className="text-[12.5px] text-faint">Adaugă monede, acțiuni sau indici favoriți din Setări ca să poți filtra știrile după ei.</p>}
 
       <section className="panel overflow-hidden" aria-label="Lista de știri">
         {!q.data && !q.isError ? (
@@ -294,7 +296,7 @@ export default function NewsPageView() {
           <div className="px-5 py-2">
             <Empty>
               {onlyFavorites || activeCoins.length
-                ? `Nicio știre despre ${(activeCoins.length ? activeCoins : favList).join(', ')} în intervalul ales.`
+                ? `Nicio știre despre ${(activeCoins.length ? activeCoins : favList).map(plainSymbol).join(', ')} în intervalul ales.`
                 : 'Nicio știre pentru filtrele alese. Încearcă un interval mai lung.'}
             </Empty>
           </div>

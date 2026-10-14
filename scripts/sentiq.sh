@@ -222,6 +222,15 @@ check_port() {
 
 # ---------------------------------------------------------------- commands
 
+# FD-AZURE §2: the database lives in Azure SQL; without its connection the server cannot start.
+check_db_config() {
+  local file="$DATA_DIR/database.env"
+  [ -n "${SENTIQ_DB_CONNECTION:-}" ] && return 0
+  [ -n "${SENTIQ_DB_SERVER:-}" ] && [ -n "${SENTIQ_DB_PASSWORD:-}" ] && return 0
+  if [ -f "$file" ] && /usr/bin/grep -Eq '^SENTIQ_DB_(CONNECTION|SERVER)=.+' "$file"; then return 0; fi
+  fail "Baza de date nu e configurată: completează $file (server, bază, utilizator, parolă sau connection string)."
+}
+
 cmd_start() {
   local pid rc log_file log_mark
   if is_up; then
@@ -241,6 +250,7 @@ cmd_start() {
   fi
 
   [ -d node_modules ] || fail "Lipsesc dependențele. Rulează o dată, în Terminal, în folderul $ROOT: npm install"
+  check_db_config
   pick_node
   /bin/mkdir -p "$LOG_DIR" 2>/dev/null || fail "Nu pot crea folderul de log-uri $LOG_DIR."
   : 2>/dev/null >"$LAUNCH_LOG" || fail "Nu pot scrie în $LAUNCH_LOG."
@@ -460,6 +470,15 @@ cmd_admin() {
   esac
 }
 
+# FD-AZURE §3 / TD-AZURE §11: the connection check and the one-time move of the SQLite file.
+cmd_db() {
+  pick_node
+  case "$1" in
+    check) SENTIQ_DATA_DIR="$DATA_DIR" SENTIQ_PORT="$PORT" "$NODE_BIN" scripts/db-check.ts ;;
+    import) SENTIQ_DATA_DIR="$DATA_DIR" SENTIQ_PORT="$PORT" "$NODE_BIN" scripts/import-sqlite.ts $CMD_FLAGS ;;
+  esac
+}
+
 usage() {
   /bin/cat <<EOF
 Sentiq — pornire fără Terminal
@@ -473,6 +492,9 @@ Sentiq — pornire fără Terminal
   scripts/sentiq.sh app                  creează Sentiq.app (dublu-click, Dock, Login Items)
   scripts/sentiq.sh admin-email ADRESA   adresa contului de admin, înainte de prima intrare
   scripts/sentiq.sh admin-reset          șterge parola, 2FA și passkey-urile adminului (dacă nu mai poți intra)
+  scripts/sentiq.sh db-check             verifică legătura cu baza de date (data/database.env), fără să arate parola
+  scripts/sentiq.sh import-sqlite [--replace] [--force]
+                                         mută, o singură dată, data/kryptoniq.db în baza Azure SQL (Sentiq oprit)
 
 Adresa: $URL
 EOF
@@ -482,9 +504,14 @@ EOF
 
 CMD=""
 CMD_ARG=""
+CMD_FLAGS=""
 for arg in "$@"; do
   case "$arg" in
     --no-open) OPEN_BROWSER=0 ;;
+    --replace | --force)
+      [ "$CMD" = "import-sqlite" ] || fail "$arg merge doar cu import-sqlite. Vezi: scripts/sentiq.sh help"
+      CMD_FLAGS="$CMD_FLAGS $arg"
+      ;;
     -h | --help | help) CMD=help ;;
     *)
       if [ "$CMD" = "admin-email" ] && [ -z "$CMD_ARG" ]; then
@@ -509,6 +536,8 @@ case "${CMD:-start}" in
   app) cmd_app ;;
   admin-email) cmd_admin email ;;
   admin-reset) cmd_admin reset ;;
+  db-check) cmd_db check ;;
+  import-sqlite) cmd_db import ;;
   help) usage ;;
   *)
     usage >&2

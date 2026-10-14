@@ -105,15 +105,15 @@ export class PasskeyService {
   // ── Registration (signed in) ─────────────────────────────────────────────────────────────────────────
 
   async registrationOptions(userId: number, rp: RelyingParty) {
-    const u = this.users.byId(userId);
+    const u = await this.users.byId(userId);
     if (!u?.email) throw new PasskeyError('Contul nu are o adresă de email.');
-    const existing = this.db.all<{ credential_id: string; transports: string | null }>('SELECT credential_id, transports FROM passkeys WHERE user_id = ?', [userId]);
+    const existing = await this.db.all<{ credential_id: string; transports: string | null }>('SELECT credential_id, transports FROM passkeys WHERE user_id = ?', [userId]);
     const options = await generateRegistrationOptions({
       rpName: 'Sentiq',
       rpID: rp.id,
       userName: u.email,
       userDisplayName: u.name || u.email,
-      userID: this.users.userHandle(userId),
+      userID: await this.users.userHandle(userId),
       timeout: TIMEOUT_MS,
       attestationType: 'none',
       // An authenticator that already holds one of this account's credentials says so instead of adding a second.
@@ -141,17 +141,22 @@ export class PasskeyService {
     const info = result.registrationInfo;
     const cred = info.credential;
     const transports = (cred.transports ?? []).filter((t) => TRANSPORTS.has(t)).join(',') || null;
-    const count = this.db.get<{ n: number }>('SELECT count(*) AS n FROM passkeys WHERE user_id = ?', [userId])?.n ?? 0;
-    let id: number;
-    try {
-      id = this.db.run(
-        'INSERT INTO passkeys(user_id, credential_id, public_key, counter, transports, device_type, backed_up, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [userId, cred.id, Buffer.from(cred.publicKey), cred.counter, transports, info.credentialDeviceType, info.credentialBackedUp ? 1 : 0, cleanName(name) || `Passkey ${count + 1}`, this.now()],
+    const id = await this.db.tx(async () => {
+      if (await this.byCredential(cred.id)) throw new PasskeyError('Passkey-ul este deja înregistrat.');
+      const count = (await this.db.get<{ n: number }>('SELECT count(*) AS n FROM passkeys WHERE user_id = ?', [userId]))?.n ?? 0;
+      return (
+        await this.db.run(
+          'INSERT INTO passkeys(user_id, credential_id, public_key, counter, transports, device_type, backed_up, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [userId, cred.id, Buffer.from(cred.publicKey), cred.counter, transports, info.credentialDeviceType, info.credentialBackedUp ? 1 : 0, cleanName(name) || `Passkey ${count + 1}`, this.now()],
+        )
       ).lastInsertRowid;
-    } catch {
-      throw new PasskeyError('Passkey-ul este deja înregistrat.');
-    }
-    return this.summary(this.db.get<PasskeyRow>('SELECT * FROM passkeys WHERE id = ?', [id]) as PasskeyRow);
+    });
+    return this.summary((await this.db.get<PasskeyRow>('SELECT * FROM passkeys WHERE id = ?', [id])) as PasskeyRow);
+  }
+
+  /** The passkey with this credential id (found through its hash, TD-AZURE §3). */
+  private byCredential(credentialId: string): Promise<PasskeyRow | undefined> {
+    return this.db.get<PasskeyRow>("SELECT * FROM passkeys WHERE credential_hash = HASHBYTES('SHA2_256', CAST(@c AS NVARCHAR(MAX))) AND credential_id = @c", { c: credentialId });
   }
 
   // ── Sign-in (anonymous) ──────────────────────────────────────────────────────────────────────────────
@@ -168,11 +173,11 @@ export class PasskeyService {
     const challenge = this.consume(challengeId, 'get', null);
     const r = response as AuthenticationResponseJSON;
     const credId = typeof r?.id === 'string' ? r.id : '';
-    const row = credId ? this.db.get<PasskeyRow>('SELECT * FROM passkeys WHERE credential_id = ?', [credId]) : undefined;
+    const row = credId ? await this.byCredential(credId) : undefined;
     if (!row) throw new PasskeyError('Passkey-ul nu este înregistrat aici.');
     const handle = r.response?.userHandle;
     if (typeof handle === 'string' && handle.length) {
-      const own = Buffer.from(this.users.userHandle(row.user_id)).toString('base64url');
+      const own = Buffer.from(await this.users.userHandle(row.user_id)).toString('base64url');
       if (handle !== own) throw new PasskeyError('Passkey-ul aparține altui cont.');
     }
     let result;
@@ -191,7 +196,7 @@ export class PasskeyService {
       throw new PasskeyError(`Passkey-ul nu a fost acceptat: ${(err as Error).message}`);
     }
     if (!result.verified) throw new PasskeyError('Semnătura passkey-ului nu a putut fi verificată.');
-    this.db.run('UPDATE passkeys SET counter = ?, backed_up = ?, last_used_at = ? WHERE id = ?', [result.authenticationInfo.newCounter, result.authenticationInfo.credentialBackedUp ? 1 : 0, this.now(), row.id]);
+    await this.db.run('UPDATE passkeys SET counter = ?, backed_up = ?, last_used_at = ? WHERE id = ?', [result.authenticationInfo.newCounter, result.authenticationInfo.credentialBackedUp ? 1 : 0, this.now(), row.id]);
     return row.user_id;
   }
 
@@ -201,17 +206,17 @@ export class PasskeyService {
     return { id: p.id, name: p.name, synced: p.backed_up === 1, createdAt: p.created_at, lastUsedAt: p.last_used_at };
   }
 
-  list(userId: number): PasskeySummary[] {
-    return this.db.all<PasskeyRow>('SELECT * FROM passkeys WHERE user_id = ? ORDER BY created_at DESC', [userId]).map((p) => this.summary(p));
+  async list(userId: number): Promise<PasskeySummary[]> {
+    return (await this.db.all<PasskeyRow>('SELECT * FROM passkeys WHERE user_id = ? ORDER BY created_at DESC, id DESC', [userId])).map((p) => this.summary(p));
   }
 
-  rename(userId: number, id: number, name: unknown): boolean {
+  async rename(userId: number, id: number, name: unknown): Promise<boolean> {
     const n = cleanName(name);
-    return n.length > 0 && this.db.run('UPDATE passkeys SET name = ? WHERE id = ? AND user_id = ?', [n, id, userId]).changes > 0;
+    return n.length > 0 && (await this.db.run('UPDATE passkeys SET name = ? WHERE id = ? AND user_id = ?', [n, id, userId])).changes > 0;
   }
 
   /** No guard for the last one: the password (and its two-factor) always remain. */
-  remove(userId: number, id: number): boolean {
-    return this.db.run('DELETE FROM passkeys WHERE id = ? AND user_id = ?', [id, userId]).changes > 0;
+  async remove(userId: number, id: number): Promise<boolean> {
+    return (await this.db.run('DELETE FROM passkeys WHERE id = ? AND user_id = ?', [id, userId])).changes > 0;
   }
 }

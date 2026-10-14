@@ -32,6 +32,7 @@ export function callerKey(ip: string | undefined): string {
 
 export class Throttle {
   private readonly entries = new Map<string, Entry>();
+  private readonly queues = new Map<string, Promise<unknown>>();
   private readonly now: () => number;
   constructor(now: () => number = () => Date.now()) {
     this.now = now;
@@ -78,6 +79,24 @@ export class Throttle {
 
   reset(key: string): void {
     this.entries.delete(key);
+  }
+
+  /**
+   * Runs the attempts of one key one after the other (TD-AZURE §5): the check, the slow password / database work and
+   * the count happen together, so attempts sent in parallel cannot all pass the check before any is counted.
+   */
+  serial<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.queues.get(key) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.queues.set(key, tail);
+    void tail.then(() => {
+      if (this.queues.get(key) === tail) this.queues.delete(key);
+    });
+    return run;
   }
 
   /** Stale entries first, then the oldest, surrendering live lockouts last (as in Serento). */

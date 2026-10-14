@@ -1,5 +1,6 @@
 // What Claude reads to summarise a user's day (FD-SUMMARY §4, TD-SUMMARY §2), and the chart series it may choose
 // from. Only Sentiq's own data about today: nothing is fetched from the internet here.
+import { indexById, plainSymbol } from '../../shared/indices.ts';
 import { dayBounds, dayKey } from '../../shared/time.ts';
 import type { CalendarService } from '../calendar/service.ts';
 import type { Db } from '../db/database.ts';
@@ -77,12 +78,9 @@ interface NewsRow {
   coins: string | null;
 }
 
-/**
- * Today for this user, as text for Claude and as chart series for the page. `forTools`: the text for the Claude
- * connector (FD-MCP §3), which names indicators by the key its tools take and has no chart list.
- */
-export function buildDayContext(deps: DayContextDeps, userId: number, now = Date.now(), opts: { forTools?: boolean } = {}): DayContext {
-  const s = deps.settings.forUser(userId);
+/** Today for this user, as text for Claude and as chart series for the page. */
+export async function buildDayContext(deps: DayContextDeps, userId: number, now = Date.now()): Promise<DayContext> {
+  const s = await deps.settings.forUser(userId);
   const tz = s.timezone;
   const day = dayKey(now, tz);
   const { start, end } = dayBounds(day, tz);
@@ -93,7 +91,7 @@ export function buildDayContext(deps: DayContextDeps, userId: number, now = Date
   };
 
   // Time and markets.
-  const market = readContext(deps.db);
+  const market = await readContext(deps.db);
   const status = market.stocks.market;
   add('Momentul', [
     `Acum: ${dateTime(now, tz)} (fusul utilizatorului: ${tz}). Ziua analizată: ${day}, de la 00:00 până acum.`,
@@ -101,8 +99,8 @@ export function buildDayContext(deps: DayContextDeps, userId: number, now = Date
   ]);
 
   // Sentiment of the day.
-  const today = deps.daily.today(tz, now);
-  const history = deps.daily.history(7, tz, now);
+  const today = await deps.daily.today(tz, now);
+  const history = await deps.daily.history(7, tz, now);
   const counts = today.counts;
   add('Sentimentul zilei (0–100, 50 = neutru; calculat din toate știrile)', [
     `Index: ${today.index} (${today.confidence === 'high' ? 'încredere ridicată' : today.confidence === 'medium' ? 'încredere medie' : 'încredere scăzută'}); știri: ${counts.positive} pozitive, ${counts.neutral} neutre, ${counts.negative} negative, ${counts.pending} în analiză.`,
@@ -158,13 +156,12 @@ export function buildDayContext(deps: DayContextDeps, userId: number, now = Date
   }
 
   // The day's most weighty news, one per story.
-  const news = deps.db.all<NewsRow>(
-    `SELECT n.title, s.name AS source, n.category, n.published_at, n.sentiment, COALESCE(n.sentiment_impact, n.impact) AS impact, n.cluster_id,
-            (SELECT group_concat(coin) FROM news_coins c WHERE c.news_id = n.id) AS coins
+  const news = await deps.db.all<NewsRow>(
+    `SELECT TOP (200) n.title, s.name AS source, n.category, n.published_at, n.sentiment, COALESCE(n.sentiment_impact, n.impact) AS impact, n.cluster_id,
+            (SELECT STRING_AGG(coin, ',') FROM news_coins c WHERE c.news_id = n.id) AS coins
      FROM news n JOIN sources s ON s.id = n.source_id
      WHERE s.enabled = 1 AND n.published_at >= ? AND n.published_at <= ? AND n.relevance > 0 AND n.sentiment IS NOT NULL
-     ORDER BY n.relevance * COALESCE(n.sentiment_impact, n.impact) * (0.3 + abs(n.sentiment)) DESC, n.published_at DESC
-     LIMIT 200`,
+     ORDER BY n.relevance * COALESCE(n.sentiment_impact, n.impact) * (0.3 + abs(n.sentiment)) DESC, n.published_at DESC, n.id`,
     [start, now],
   );
   const seen = new Set<string>();
@@ -175,7 +172,7 @@ export function buildDayContext(deps: DayContextDeps, userId: number, now = Date
   );
 
   // Calendar: today so far, and the next 24 hours.
-  const events = deps.calendar.query({ userId, from: start, to: now + 24 * HOUR, impacts: ['High', 'Medium'] });
+  const events = await deps.calendar.query({ userId, from: start, to: now + 24 * HOUR, impacts: ['High', 'Medium'] });
   const past = events.filter((e) => e.ts <= now);
   const coming = events.filter((e) => e.ts > now);
   // The user's own calendar notes (any impact) say so: they are reminders, not market data.
@@ -190,16 +187,16 @@ export function buildDayContext(deps: DayContextDeps, userId: number, now = Date
   );
 
   // Economic indicators released today (the Economy page) and the important ones still due today.
-  const view = deps.economy.view(now);
+  const view = await deps.economy.view(now);
   const all = view.countries.flatMap((c) => c.indicators.map((i) => ({ country: c.name, i })));
   const releasedToday = all.filter(({ i }) => i.latest.ts >= start && i.latest.ts <= now).sort((a, b) => Number(b.i.important) - Number(a.i.important));
   const dueToday = all.filter(({ i }) => i.important && i.next && !i.next.overdue && i.next.ts > now && i.next.ts < end);
   add(
-    opts.forTools ? 'Indicatori economici publicați azi (cheia indicatorului în paranteze, pentru get_economy)' : 'Indicatori economici publicați azi (id grafic în paranteze)',
+    'Indicatori economici publicați azi (id grafic în paranteze)',
     releasedToday.slice(0, 40).map(({ country, i }) => {
       const id = `econ:${i.key}`;
       charts[id] = econChart(id, country, i);
-      return `- [${opts.forTools ? i.key : id}] ${country}${i.countryName ? ` / ${i.countryName}` : ''}: ${i.name} (${i.original}), ${i.latest.period ?? ''}: ${withUnit(i.latest.value, i.unit, i.scale)}; anterior ${withUnit(i.previous, i.unit, i.scale)}; prognoză ${withUnit(i.latest.forecast, i.unit, i.scale)}; ${sense(i.polarity)}${i.important ? '; IMPORTANT' : ''}`;
+      return `- [${id}] ${country}${i.countryName ? ` / ${i.countryName}` : ''}: ${i.name} (${i.original}), ${i.latest.period ?? ''}: ${withUnit(i.latest.value, i.unit, i.scale)}; anterior ${withUnit(i.previous, i.unit, i.scale)}; prognoză ${withUnit(i.latest.forecast, i.unit, i.scale)}; ${sense(i.polarity)}${i.important ? '; IMPORTANT' : ''}`;
     }),
   );
   add(
@@ -222,7 +219,7 @@ export function buildDayContext(deps: DayContextDeps, userId: number, now = Date
     `Favoritele utilizatorului (scanner Slingshot, timeframe ${s.scanner.tf})`,
     rows.map(
       (row) =>
-        `- ${row.coin}${row.kind === 'stock' ? ' (acțiune)' : ''}: preț ${row.price ?? 'n/a'}, 24h ${row.change24h === null || row.change24h === undefined ? 'n/a' : `${r2(row.change24h)}%`}, ${row.uptrend ? 'trend ascendent' : 'fără trend ascendent'}${row.liveSignal ? ', semnal LONG activ' : ''}${row.lastSignal ? `; ultimul semnal ${row.lastSignal.outcome}` : ''}`,
+        `- ${plainSymbol(row.coin)}${row.kind === 'stock' ? ' (acțiune)' : row.kind === 'index' ? ` (indice: ${indexById(row.coin)?.name ?? plainSymbol(row.coin)})` : ''}: preț ${row.price ?? 'n/a'}, 24h ${row.change24h === null || row.change24h === undefined ? 'n/a' : `${r2(row.change24h)}%`}, ${row.uptrend ? 'trend ascendent' : 'fără trend ascendent'}${row.liveSignal ? ', semnal LONG activ' : ''}${row.lastSignal ? `; ultimul semnal ${row.lastSignal.outcome}` : ''}`,
     ),
   );
   const movers = rows.filter((row) => typeof row.change24h === 'number');
@@ -233,12 +230,12 @@ export function buildDayContext(deps: DayContextDeps, userId: number, now = Date
       title: 'Favoritele: variația pe 24 h (%)',
       unit: '%',
       baseline: 0,
-      bars: movers.map((row) => ({ label: row.coin, value: r2(row.change24h as number) })),
+      bars: movers.map((row) => ({ label: plainSymbol(row.coin), value: r2(row.change24h as number) })),
       polarity: 1,
     };
   }
 
-  if (!opts.forTools) add('Grafice disponibile (alege după situație)', Object.values(charts).map((c) => `- ${c.id}: ${c.title}`));
+  add('Grafice disponibile (alege după situație)', Object.values(charts).map((c) => `- ${c.id}: ${c.title}`));
   return { day, tz, asOf: now, prompt: lines.join('\n'), charts };
 }
 

@@ -11,7 +11,7 @@ import { refreshStockContext } from '../market/stock-context.ts';
 import { syncStockSources } from '../news/sources.ts';
 import { readJobData, writeJobData } from './scheduler.ts';
 import { MAINTENANCE_JOB } from '../sentiment/daily.ts';
-import { pruneMcp } from '../mcp/oauth.ts';
+import { TD_PLAN_JOB } from '../market/stocks.ts';
 
 const MIN = 60_000;
 const LOG_RETENTION_DAYS = 30;
@@ -73,8 +73,8 @@ export function registerJobs(ctx: AppContext): void {
     runOnStart: true,
     run: async () => {
       // Once after an update that changes how news weigh (FD-IMPACT §3); then the regular refresh.
-      if (ctx.daily.upgradeHistory()) log.info('sentiment: daily history recomputed with the new weighing');
-      ctx.daily.refresh();
+      if (await ctx.daily.upgradeHistory()) log.info('sentiment: daily history recomputed with the new weighing');
+      await ctx.daily.refresh();
     },
   });
 
@@ -96,11 +96,11 @@ export function registerJobs(ctx: AppContext): void {
       await ctx.calendar.refreshTradingView(Date.now(), feedingEconomy(ctx.economy, log));
       // Bursts: poll again shortly after important releases until their actual values arrive.
       const now = Date.now();
-      if (ctx.calendar.awaitingActual(now) > 0) {
+      if ((await ctx.calendar.awaitingActual(now)) > 0) {
         scheduler.nudge(TV_JOB, 2 * MIN);
         return;
       }
-      const next = ctx.calendar.nextImportant(now);
+      const next = await ctx.calendar.nextImportant(now);
       if (next !== null && next - now < 15 * MIN) scheduler.nudge(TV_JOB, Math.max(MIN, next - now + MIN));
     },
   });
@@ -113,9 +113,20 @@ export function registerJobs(ctx: AppContext): void {
       const r = await refreshContext(db);
       if (r.coinListUpdated) {
         ctx.coins.invalidate();
-        retagRecent(db, ctx.coins.get(), Date.now() - 3 * 86_400_000, ctx.coins.classifier());
+        await retagRecent(db, await ctx.coins.get(), Date.now() - 3 * 86_400_000, await ctx.coins.classifier());
       }
       if (r.errors.length) throw new Error(r.errors.join('; '));
+    },
+  });
+
+  // FD-TDPLAN: the Twelve Data key's plan (limits a minute and a day), at start and every 6 hours; one credit a read.
+  scheduler.add({
+    name: TD_PLAN_JOB,
+    everyMs: 6 * 60 * MIN,
+    firstDelayMs: 20_000,
+    run: async () => {
+      const p = await ctx.stocks.refreshPlan();
+      if (p) log.info(`twelvedata: plan ${p.category}, ${p.perMinute} credits a minute, ${p.perDay === null ? 'no daily limit' : `${p.perDay} a day`}`);
     },
   });
 
@@ -126,7 +137,7 @@ export function registerJobs(ctx: AppContext): void {
     firstDelayMs: 30_000,
     run: async () => {
       // Every user's stocks, once (FD-USERS §2): each user then sees only the results of their own.
-      const symbols = db.all<{ coin: string }>("SELECT DISTINCT coin FROM watchlist WHERE kind = 'stock'").map((r) => r.coin);
+      const symbols = (await db.all<{ coin: string }>("SELECT DISTINCT coin FROM watchlist WHERE kind = N'stock' ORDER BY coin")).map((r) => r.coin);
       await ctx.calendar.refreshEarnings(symbols, (day) => ctx.stocks.nasdaq.earnings(day));
     },
   });
@@ -170,24 +181,21 @@ export function registerJobs(ctx: AppContext): void {
     everyMs: 24 * 60 * MIN,
     firstDelayMs: 10 * MIN,
     run: async () => {
-      const days = ctx.settings.get().retentionDays;
+      const days = (await ctx.settings.get()).retentionDays;
       const cutoff = Date.now() - days * 86_400_000;
-      const removed = db.run('DELETE FROM news WHERE published_at < ?', [cutoff]).changes;
+      const removed = (await db.run('DELETE FROM news WHERE published_at < ?', [cutoff])).changes;
       // Days before this threshold are no longer complete: a history recomputation keeps them (FD-IMPACT §3).
-      const prev = readJobData(db, MAINTENANCE_JOB, { retentionCutoff: 0 });
-      if (cutoff > prev.retentionCutoff) writeJobData(db, MAINTENANCE_JOB, { ...prev, retentionCutoff: cutoff });
-      db.run('DELETE FROM calendar_raw WHERE ts < ?', [Date.now() - 400 * 86_400_000]);
-      db.run('UPDATE sources SET item_count = (SELECT count(*) FROM news WHERE source_id = sources.id)');
+      const prev = await readJobData(db, MAINTENANCE_JOB, { retentionCutoff: 0 });
+      if (cutoff > prev.retentionCutoff) await writeJobData(db, MAINTENANCE_JOB, { ...prev, retentionCutoff: cutoff });
+      await db.run('DELETE FROM calendar_raw WHERE ts < ?', [Date.now() - 400 * 86_400_000]);
+      await db.run('UPDATE sources SET item_count = (SELECT count(*) FROM news WHERE source_id = sources.id)');
       // FD-USERS / FD-INVITE: sign-ins that ended, and account requests nobody answered within 30 days.
-      ctx.sessions.purgeExpired();
-      const purged = ctx.users.purgeOldRequests();
+      await ctx.sessions.purgeExpired();
+      const purged = await ctx.users.purgeOldRequests();
       if (purged) log.info(`users: removed ${purged} account requests nobody answered`);
-      // Feeds of stocks that left the watchlist go once their news has aged out.
-      syncStockSources(db);
-      ctx.economy.prune();
-      // FD-MCP: old codes, expired tokens, long-ended connections (with the connector off too).
-      pruneMcp(db);
-      db.raw.exec('PRAGMA optimize');
+      // Feeds of stocks nobody follows any more (another instance's change, FD-AUTOFEED).
+      for (const sym of await syncStockSources(db)) log.info(`news: removed the automatic feed of ${sym} (in nobody's favourites)`);
+      await ctx.economy.prune();
       pruneLogs(path.join(ctx.config.dataDir, 'logs'), Date.now() - LOG_RETENTION_DAYS * 86_400_000);
       if (removed) log.info(`retention: removed ${removed} news older than ${days} days`);
     },

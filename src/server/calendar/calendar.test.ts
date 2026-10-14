@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { Db } from '../db/database.ts';
+import { testDb } from '../test/db.ts';
 import { silentLogger } from '../log.ts';
 import { explain } from './glossary.ts';
 import { ffWeekRange, formatTv, matchEvents, mergeCalendar, normalizeTitle, parseValue } from './merge.ts';
@@ -122,25 +122,24 @@ describe('mergeCalendar', () => {
 describe('CalendarService', () => {
   const now = Date.parse('2026-10-12T16:00:00Z');
   it('respects the FF hourly limit and backs off when rate limited', async () => {
-    const db = new Db(':memory:');
+    const db = await testDb();
     const svc = new CalendarService(db, silentLogger);
     expect(await svc.refreshForexFactory(now, async () => ff)).toBe(109);
     expect(await svc.refreshForexFactory(now + 30 * 60_000, async () => ff)).toBeNull(); // < 1h
     await expect(svc.refreshForexFactory(now + 61 * 60_000, async () => Promise.reject(new RateLimitedError('x')))).rejects.toThrow();
-    expect(readJobData(db, FF_JOB, { blockedUntil: 0 }).blockedUntil).toBe(now + 61 * 60_000 + 60 * 60_000);
+    expect((await readJobData(db, FF_JOB, { blockedUntil: 0 })).blockedUntil).toBe(now + 61 * 60_000 + 60 * 60_000);
     expect(await svc.refreshForexFactory(now + 90 * 60_000, async () => ff)).toBeNull(); // still blocked
-    db.close();
   });
 
   it('queries merged events with filters, custom events and explanations', async () => {
-    const db = new Db(':memory:');
+    const db = await testDb();
     const svc = new CalendarService(db, silentLogger);
     await svc.refreshForexFactory(now, async () => ff);
     await svc.refreshTradingView(now, async () => tv);
-    const id = svc.addCustom(1, { title: 'ETH upgrade', ts: Date.parse('2026-10-15T10:00:00Z'), impact: 'High' });
+    const id = await svc.addCustom(1, { title: 'ETH upgrade', ts: Date.parse('2026-10-15T10:00:00Z'), impact: 'High' });
     const from = Date.parse('2026-10-14T00:00:00Z');
     const to = Date.parse('2026-10-16T00:00:00Z');
-    const events = svc.query({ userId: 1, from, to, impacts: ['High'], currencies: ['USD'] });
+    const events = await svc.query({ userId: 1, from, to, impacts: ['High'], currencies: ['USD'] });
     expect(events.every((e) => e.ts >= from && e.ts < to)).toBe(true);
     expect(events.every((e) => e.source === 'custom' || (e.impact === 'High' && e.currency === 'USD'))).toBe(true);
     const cpi = events.find((e) => e.title === 'CPI m/m')!;
@@ -148,21 +147,19 @@ describe('CalendarService', () => {
     expect(cpi.note).toMatch(/Inflația/);
     expect(events.find((e) => e.id === `custom:${id}`)).toMatchObject({ title: 'ETH upgrade', currency: 'CRYPTO' });
     // FD-USERS §2: somebody else's custom events are neither shown nor deletable.
-    const other = db.run("INSERT INTO users(email, name, role, created_at) VALUES ('b@example.com', 'B', 'user', 1)").lastInsertRowid;
-    expect(svc.query({ userId: other, from, to }).some((e) => e.source === 'custom')).toBe(false);
-    expect(svc.deleteCustom(other, id)).toBe(false);
-    expect(svc.deleteCustom(1, id)).toBe(true);
-    expect(() => svc.addCustom(1, { title: '', ts: 1 })).toThrow();
-    db.close();
+    const other = (await db.run("INSERT INTO users(email, name, role, created_at) VALUES ('b@example.com', 'B', 'user', 1)")).lastInsertRowid;
+    expect((await svc.query({ userId: other, from, to })).some((e) => e.source === 'custom')).toBe(false);
+    expect(await svc.deleteCustom(other, id)).toBe(false);
+    expect(await svc.deleteCustom(1, id)).toBe(true);
+    await expect(svc.addCustom(1, { title: '', ts: 1 })).rejects.toThrow();
   });
 
   it('replacing a week removes events that disappeared from the source', async () => {
-    const db = new Db(':memory:');
+    const db = await testDb();
     const svc = new CalendarService(db, silentLogger);
     await svc.refreshForexFactory(now, async () => ff);
     await svc.refreshForexFactory(now + 2 * 3600_000, async () => ff.slice(0, 10));
-    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM calendar_raw WHERE source = 'ff'")!.n).toBe(10);
-    db.close();
+    expect((await db.get<{ n: number }>("SELECT count(*) AS n FROM calendar_raw WHERE source = 'ff'"))!.n).toBe(10);
   });
 });
 
@@ -192,40 +189,38 @@ describe('earnings of the watchlist stocks (FD-SENTIQ §4.5)', () => {
   });
 
   it('stores only watchlist stocks, replaces a day only when its request worked, and follows the watchlist', async () => {
-    const db = new Db(':memory:');
+    const db = await testDb();
     const cal = new CalendarService(db, silentLogger);
     const now = Date.parse('2026-10-13T12:00:00Z');
-    db.run("INSERT INTO watchlist(coin, quote, position, aliases, added_at, kind, name) VALUES ('BAC', 'USD', 0, '[]', 1, 'stock', 'Bank of America Corporation Common Stock')");
+    await db.run("INSERT INTO watchlist(coin, quote, position, aliases, added_at, kind, name) VALUES ('BAC', 'USD', 0, '[]', 1, 'stock', 'Bank of America Corporation Common Stock')");
     const fetchDay = async (day: string) => {
       if (day === '2026-10-15') throw new Error('HTTP 503');
       return day === '2026-10-14' ? [row('BAC', 'pre'), row('MS', 'pre')] : [];
     };
     expect(await cal.refreshEarnings(['BAC'], fetchDay, now)).toBe(1);
     const q = { userId: 1, from: now, to: now + 7 * 86_400_000 };
-    const events = cal.query({ ...q, impacts: ['High'], currencies: ['EUR'] });
+    const events = await cal.query({ ...q, impacts: ['High'], currencies: ['EUR'] });
     expect(events.map((e) => [e.title, e.currency, e.source])).toEqual([['Rezultate trimestriale Bank of America', 'BAC', 'earn']]);
     expect(events[0]?.note).toContain('septembrie 2026');
-    expect(cal.query({ ...q, earnings: false })).toEqual([]);
-    expect(cal.lastUpdate().earn).toBe(now);
+    expect(await cal.query({ ...q, earnings: false })).toEqual([]);
+    expect((await cal.lastUpdate()).earn).toBe(now);
     // FD-USERS §2: results show only for those who follow the stock.
-    const other = db.run("INSERT INTO users(email, name, role, created_at) VALUES ('b@example.com', 'B', 'user', 1)").lastInsertRowid;
-    expect(cal.query({ ...q, userId: other })).toEqual([]);
+    const other = (await db.run("INSERT INTO users(email, name, role, created_at) VALUES ('b@example.com', 'B', 'user', 1)")).lastInsertRowid;
+    expect(await cal.query({ ...q, userId: other })).toEqual([]);
     // Out of the watchlist: hidden at once, deleted at the next refresh.
-    db.run("DELETE FROM watchlist WHERE coin = 'BAC'");
-    expect(cal.query(q)).toEqual([]);
+    await db.run("DELETE FROM watchlist WHERE coin = 'BAC'");
+    expect(await cal.query(q)).toEqual([]);
     await cal.refreshEarnings([], fetchDay, now);
-    expect(db.get("SELECT count(*) AS n FROM calendar_raw WHERE source = 'earn'")).toEqual({ n: 0 });
+    expect(await db.get("SELECT count(*) AS n FROM calendar_raw WHERE source = 'earn'")).toEqual({ n: 0 });
     // Every day failing is an error for the job.
     await expect(cal.refreshEarnings(['BAC'], async () => Promise.reject(new Error('down')), now)).rejects.toThrow(/Nasdaq earnings/);
-    db.close();
   });
 
   it('earnings never drive the TradingView bursts', async () => {
-    const db = new Db(':memory:');
+    const db = await testDb();
     const cal = new CalendarService(db, silentLogger);
     const now = Date.parse('2026-10-14T11:00:00Z');
     await cal.refreshEarnings(['BAC'], async (d) => (d === '2026-10-14' ? [row('BAC', 'pre')] : []), now);
-    expect(cal.nextImportant(now)).toBeNull();
-    db.close();
+    expect(await cal.nextImportant(now)).toBeNull();
   });
 });

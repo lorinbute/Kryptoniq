@@ -1,18 +1,19 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { ChartCandlestick, Coins, History, ListChecks, Plus, RefreshCw, Wallet } from 'lucide-react';
-import type { AccountView, BalanceRow, Portfolio } from '../../shared/api-types.ts';
-import { api, errorMessage } from '../api.ts';
+import type { AccountView, BalanceRow, Portfolio, StatsPeriod, TradeStats } from '../../shared/api-types.ts';
+import { api, errorMessage, qs } from '../api.ts';
 import { autoDigits, fmtAgo, fmtDateTime, fmtMoney, fmtNum, fmtPct, fmtPrice, fmtUsd } from '../format.ts';
 import { useTz } from '../hooks.ts';
 import { Empty, ErrorNote, Loading, Panel, Warning } from '../components/ui.tsx';
 import { CoinLogo } from '../components/icons.tsx';
 import { AccountWizard } from '../components/AccountWizard.tsx';
 import { ProviderLogo } from '../components/ProviderLogo.tsx';
+import { providerById } from '../../shared/providers.ts';
 
-const SECTION_RO: Record<string, string> = { balances: 'Solduri', positions: 'Poziții', orders: 'Ordine', fills: 'Tranzacții', prices: 'Prețuri', mode: 'Tip cont' };
+const SECTION_RO: Record<string, string> = { balances: 'Solduri', positions: 'Poziții', orders: 'Ordine', fills: 'Tranzacții', prices: 'Prețuri', mode: 'Tip cont', futures: 'Cont futures' };
 /** `who`: „exchange-ul” or „brokerul”. */
 const codeRo = (code: string, who: string): string =>
   ({
@@ -30,6 +31,59 @@ const SHOW_RAW = new Set(['AUTH', 'PERMISSION', 'EXCHANGE']);
 const STABLE_ASSETS = new Set(['USDT', 'USDC', 'USD', 'DAI', 'FDUSD']);
 
 const pnlClass = (v: number | null) => (v === null ? 'text-muted' : v >= 0 ? 'text-bull' : 'text-bear');
+
+/** FD-TRADESTATS §2: the period of the closed-position cards, kept in this browser. */
+const PERIODS: { id: StatsPeriod; label: string }[] = [
+  { id: 'today', label: 'Azi' },
+  { id: '7d', label: '7z' },
+  { id: '30d', label: '30z' },
+  { id: '90d', label: '90z' },
+];
+const PERIOD_KEY = 'sentiq:trades-period';
+function readPeriod(): StatsPeriod {
+  try {
+    const v = localStorage.getItem(PERIOD_KEY);
+    return PERIODS.some((p) => p.id === v) ? (v as StatsPeriod) : '30d';
+  } catch {
+    return '30d';
+  }
+}
+function writePeriod(v: StatsPeriod): void {
+  try {
+    localStorage.setItem(PERIOD_KEY, v);
+  } catch {
+    // private window: the choice lasts this visit
+  }
+}
+const statsKey = (id: number, period: StatsPeriod) => ['portfolio-stats', id, period] as const;
+const statsUrl = (id: number, period: StatsPeriod, force = false) => `/api/portfolio/${id}/stats${qs({ period, force: force ? '1' : undefined })}`;
+
+/** One summary card; `title` explains it (or why it shows a dash). */
+function Stat({ label, value, tone, title, hint }: { label: string; value: string; tone?: string; title?: string; hint?: string }) {
+  return (
+    <div className="panel min-w-0 px-4 py-3" title={title}>
+      <div className="truncate text-[12.5px] text-muted">{label}</div>
+      <div className={clsx('num mt-0.5 truncate text-[22px] tracking-[-0.02em]', tone)}>{value}</div>
+      {hint && <div className="truncate text-[11.5px] text-faint">{hint}</div>}
+    </div>
+  );
+}
+
+/** „Reîmprospătează” in the page's top row (FD-TRADESTATS §2): the account's portfolio and its stats for the period. */
+function useRefreshAccount(account: AccountView, period: StatsPeriod) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const crypto = account.kind !== 'stocks';
+      const [p, st] = await Promise.all([
+        api.get<Portfolio>(`/api/portfolio/${account.id}?force=1`),
+        crypto ? api.get<TradeStats>(statsUrl(account.id, period, true)).catch(() => null) : Promise.resolve(null),
+      ]);
+      qc.setQueryData(['portfolio', account.id], p);
+      if (st) qc.setQueryData(statsKey(account.id, period), st);
+    },
+  });
+}
 
 function CostBasisEditor({ accountId, row }: { accountId: number; row: BalanceRow }) {
   const qc = useQueryClient();
@@ -73,13 +127,85 @@ function CostBasisEditor({ accountId, row }: { accountId: number; row: BalanceRo
   );
 }
 
-function PortfolioView({ account }: { account: AccountView }) {
+/** FD-TRADESTATS §2: the seven cards of a crypto account, the period of the last four, and when it was read. */
+function CryptoCards({
+  p,
+  account,
+  stats,
+  period,
+  updated,
+}: {
+  p: Portfolio;
+  account: AccountView;
+  stats: { data?: TradeStats; isPending: boolean; isError: boolean };
+  period: StatsPeriod;
+  updated: React.ReactNode;
+}) {
+  const name = providerById(account.exchange)?.name ?? account.exchange;
+  // A server from before FD-TRADESTATS sends no `futuresAvailable`.
+  const futures = p.totals.futuresAvailable ?? null;
+  const futuresErr = p.errors.futures;
+  const futuresTitle = futuresErr
+    ? `Contul futures: ${codeRo(futuresErr.code, 'exchange-ul')}${SHOW_RAW.has(futuresErr.code) ? ` (${futuresErr.message})` : ''}`
+    : futures === null
+      ? `${name}: fără cont futures în Sentiq.`
+      : 'Suma liberă în contul futures, în USDT: cât poți folosi pentru poziții noi.';
+  const st = stats.data;
+  const statDash = (): string | undefined => {
+    if (stats.isPending) return undefined;
+    if (stats.isError || !st) return 'Statisticile nu s-au putut citi.';
+    if (!st.supported) return futures === null && !futuresErr ? `${name}: fără futures în Sentiq.` : `${name} nu dă prin API istoricul pozițiilor închise.`;
+    if (st.error) return `Istoricul pozițiilor: ${codeRo(st.error.code, 'exchange-ul')}`;
+    return undefined;
+  };
+  const why = statDash();
+  const count = (v: number | null | undefined) => (stats.isPending ? '…' : v === null || v === undefined ? '—' : fmtNum(v, 0));
+  const periodLabel = PERIODS.find((x) => x.id === period)?.label ?? period;
+  const closedTitle = (what: string) => why ?? `${what}: pozițiile futures închise în perioada aleasă (${periodLabel}), după rezultatul lor net (cu comisioane și funding).`;
+  return (
+    <div className="flex flex-col gap-2.5">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+        <Stat label="Disponibil în futures" value={fmtUsd(futures)} title={futuresTitle} />
+        <Stat
+          label="Valoare în contul spot"
+          value={fmtUsd(p.totals.spotValue)}
+          title="Tot ce ai în conturile spot (la KuCoin: Trading și Funding): monedele la prețul de acum, plus stablecoins. Contul futures nu e inclus."
+        />
+        <Stat label="PnL nerealizat (futures)" value={fmtUsd(p.totals.unrealizedPnl)} tone={pnlClass(p.totals.unrealizedPnl)} title="Profitul sau pierderea pozițiilor futures încă deschise, la prețul de acum." />
+        <Stat label="Tranzacții profitabile" value={count(st?.wins)} tone={st?.wins ? 'text-bull' : undefined} title={closedTitle('Profitabile')} />
+        <Stat label="Tranzacții cu pierdere" value={count(st?.losses)} tone={st?.losses ? 'text-bear' : undefined} title={closedTitle('Cu pierdere')} />
+        <Stat
+          label="Rata de succes"
+          value={stats.isPending ? '…' : st?.successRate === null || st?.successRate === undefined ? '—' : `${fmtNum(st.successRate, 1)} %`}
+          title={why ?? 'Profitabile din profitabile + cu pierdere; pozițiile închise pe zero nu intră.'}
+        />
+        <Stat
+          label="Câștig net"
+          value={stats.isPending ? '…' : fmtUsd(st?.net)}
+          tone={pnlClass(st?.net ?? null)}
+          title={why ?? 'Suma rezultatelor nete ale pozițiilor futures închise în perioadă.'}
+          hint={st?.netPartial ? 'parțial: o monedă fără preț' : undefined}
+        />
+      </div>
+      {/* The period is chosen in the page's top row (FD-UIPOLISH); here only what was read and when. */}
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1">
+        {st?.error && <span className="text-[12px] text-bear">{why}</span>}
+        <div className="ml-auto">{updated}</div>
+      </div>
+    </div>
+  );
+}
+
+function PortfolioView({ account, period }: { account: AccountView; period: StatsPeriod }) {
   const tz = useTz();
-  const qc = useQueryClient();
   const q = useQuery({ queryKey: ['portfolio', account.id], queryFn: () => api.get<Portfolio>(`/api/portfolio/${account.id}`), refetchInterval: 30_000 });
-  const refresh = useMutation({
-    mutationFn: () => api.get<Portfolio>(`/api/portfolio/${account.id}?force=1`),
-    onSuccess: (data) => qc.setQueryData(['portfolio', account.id], data),
+  const statsQ = useQuery({
+    queryKey: statsKey(account.id, period),
+    queryFn: () => api.get<TradeStats>(statsUrl(account.id, period)),
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+    enabled: account.kind !== 'stocks',
+    retry: 1,
   });
   if (!q.data && !q.isError) return <Loading label={account.kind === 'stocks' ? 'Se citesc datele de la broker…' : 'Se citesc datele de pe exchange…'} />;
   if (!q.data) return <ErrorNote error={q.error} onRetry={() => q.refetch()} />;
@@ -91,36 +217,40 @@ function PortfolioView({ account }: { account: AccountView }) {
   // Shares are quoted in cents (as on their chart); coins keep the finer steps they need.
   const digits = (v: number | null | undefined, crypto = false) => (stocks && !crypto ? (Math.abs(v ?? 1) < 1 ? 4 : 2) : autoDigits(v ?? 1));
   const chartOf = (asset: string, crypto = false) => (stocks && !crypto ? `/charts/s/${encodeURIComponent(asset)}` : `/charts/${asset}/USDT`);
+  const updated = (
+    <div className="text-[12px] text-faint">
+      {p.exchange === 'kucoin' ? `Cont ${p.mode === 'unified' ? 'unificat (UTA)' : p.mode === 'classic' ? 'clasic' : 'necunoscut'}, ` : ''}
+      {p.asOf ? `date la închiderea din ${fmtDateTime(p.asOf, tz)} (raport Flex), citit ${fmtAgo(p.fetchedAt)}` : `actualizat ${fmtAgo(p.fetchedAt)}`}
+    </div>
+  );
   return (
     <div className="flex flex-col gap-3.5">
-      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-3">
-        <div className="panel px-5 py-3.5">
-          <div className="text-[12.5px] text-muted">{stocks ? 'Valoare dețineri' : 'Valoare spot'}</div>
-          <div className="num mt-0.5 text-[24px] tracking-[-0.02em]">{money(p.totals.spotValue)}</div>
-        </div>
-        {stocks && p.cash !== null && (
+      {stocks ? (
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-3">
           <div className="panel px-5 py-3.5">
-            <div className="text-[12.5px] text-muted">Numerar disponibil</div>
-            <div className="num mt-0.5 text-[24px] tracking-[-0.02em]">{money(p.cash)}</div>
+            <div className="text-[12.5px] text-muted">Valoare dețineri</div>
+            <div className="num mt-0.5 text-[24px] tracking-[-0.02em]">{money(p.totals.spotValue)}</div>
           </div>
-        )}
-        {(!stocks || p.positions.length > 0) && (
-          <div className="panel px-5 py-3.5">
-            <div className="text-[12.5px] text-muted">{stocks ? 'PnL nerealizat (poziții)' : 'PnL nerealizat (futures)'}</div>
-            <div className={clsx('num mt-0.5 text-[24px] tracking-[-0.02em]', pnlClass(p.totals.unrealizedPnl))}>{money(p.totals.unrealizedPnl)}</div>
-          </div>
-        )}
-        <div className="text-[12px] text-faint">
-          {p.exchange === 'kucoin' ? `Cont ${p.mode === 'unified' ? 'unificat (UTA)' : p.mode === 'classic' ? 'clasic' : 'necunoscut'}, ` : ''}
-          {p.asOf ? `date la închiderea din ${fmtDateTime(p.asOf, tz)} (raport Flex), citit ${fmtAgo(p.fetchedAt)}` : `actualizat ${fmtAgo(p.fetchedAt)}`}
+          {p.cash !== null && (
+            <div className="panel px-5 py-3.5">
+              <div className="text-[12.5px] text-muted">Numerar disponibil</div>
+              <div className="num mt-0.5 text-[24px] tracking-[-0.02em]">{money(p.cash)}</div>
+            </div>
+          )}
+          {p.positions.length > 0 && (
+            <div className="panel px-5 py-3.5">
+              <div className="text-[12.5px] text-muted">PnL nerealizat (poziții)</div>
+              <div className={clsx('num mt-0.5 text-[24px] tracking-[-0.02em]', pnlClass(p.totals.unrealizedPnl))}>{money(p.totals.unrealizedPnl)}</div>
+            </div>
+          )}
+          {updated}
         </div>
-        <button className="btn ml-auto" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
-          <RefreshCw size={14} className={clsx(refresh.isPending && 'animate-spin')} aria-hidden /> Reîmprospătează
-        </button>
-      </div>
+      ) : (
+        <CryptoCards p={p} account={account} stats={statsQ} period={period} updated={updated} />
+      )}
       {errs.length > 0 && (
         <Warning>
-          {errs.map(([k, v]) => {
+          {errs.filter(([k]) => k !== 'futures').map(([k, v]) => {
             const staleAt = p.stale[k as keyof Portfolio['stale']];
             const code = v?.code ?? 'EXCHANGE';
             return (
@@ -388,29 +518,64 @@ export default function TradesPage() {
     );
   }
   const current = list.find((a) => a.id === selected) ?? list[0]!;
+  return <AccountsView list={list} current={current} onSelect={setSelected} onAdd={() => setWizard(true)} wizardEl={wizardEl} />;
+}
+
+/** The page with accounts: the top row (accounts, „Reîmprospătează”, „Adaugă un cont”) and the chosen account. */
+function AccountsView({ list, current, onSelect, onAdd, wizardEl }: { list: AccountView[]; current: AccountView; onSelect: (id: number) => void; onAdd: () => void; wizardEl: React.ReactNode }) {
+  const [period, setPeriod] = useState<StatsPeriod>(readPeriod);
+  const choosePeriod = useCallback((v: StatsPeriod) => {
+    setPeriod(v);
+    writePeriod(v);
+  }, []);
+  const refresh = useRefreshAccount(current, period);
+  // A failed refresh belongs to the account it was for: switching accounts clears its warning.
+  const resetRefresh = refresh.reset;
+  useEffect(() => resetRefresh(), [current.id, resetRefresh]);
   return (
     <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-3.5">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="page-title">Tranzacții</h1>
         <div className="seg" role="group" aria-label="Cont">
           {list.map((a) => (
-            <button key={a.id} type="button" aria-pressed={a.id === current.id} onClick={() => setSelected(a.id)} className="inline-flex items-center gap-1.5">
+            <button key={a.id} type="button" aria-pressed={a.id === current.id} onClick={() => onSelect(a.id)} className="inline-flex items-center gap-1.5">
               <ProviderLogo id={a.exchange} size={16} />
               {a.label}
             </button>
           ))}
         </div>
-        <button className="btn ml-auto" onClick={() => setWizard(true)}>
-          <Plus size={15} aria-hidden /> Adaugă un cont
-        </button>
+        {/* FD-TRADESTATS §2, FD-UIPOLISH: the period of the closed trades and the buttons share the top row. */}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {current.kind !== 'stocks' && (
+            <div className="flex items-center gap-2">
+              <span id="trades-period" className="text-[12.5px] text-muted">
+                Tranzacții închise în
+              </span>
+              <div className="seg" role="group" aria-labelledby="trades-period">
+                {PERIODS.map((x) => (
+                  <button key={x.id} type="button" aria-pressed={x.id === period} onClick={() => x.id !== period && choosePeriod(x.id)}>
+                    {x.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <button className="btn" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+            <RefreshCw size={14} className={clsx(refresh.isPending && 'animate-spin')} aria-hidden /> Reîmprospătează
+          </button>
+          <button className="btn" onClick={onAdd}>
+            <Plus size={15} aria-hidden /> Adaugă un cont
+          </button>
+        </div>
       </div>
+      {refresh.isError && <Warning>Reîmprospătarea nu a reușit: {errorMessage(refresh.error)}</Warning>}
       {current.permissionWarning && (
         <Warning>
           Cheia „{current.label}” are permisiuni în plus față de citire ({current.permissions}). Recomandat: creează o cheie doar pentru citire.
         </Warning>
       )}
       {current.lastError && <Warning>Ultima eroare: {current.lastError}</Warning>}
-      <PortfolioView key={current.id} account={current} />
+      <PortfolioView key={current.id} account={current} period={period} />
       {wizardEl}
     </div>
   );

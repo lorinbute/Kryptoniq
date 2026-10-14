@@ -1,9 +1,15 @@
 // End-to-end smoke test against the real internet without opening a port: fetches all sources, scores
 // sentiment, refreshes calendar/market data and exercises the API through fastify.inject.
 // Usage: SENTIQ_DATA_DIR=/tmp/sq npm run smoke   (uses a separate data dir; never your real one by accident)
+// The database is a test schema of the Azure SQL database in data/database.env (TD-AZURE §10), dropped at the end:
+// the real tables are never touched.
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadConfig } from '../src/server/config.ts';
 import { createContext } from '../src/server/context.ts';
+import { loadDbConfig } from '../src/server/db/config.ts';
+import { Db } from '../src/server/db/database.ts';
+import { createTestSchema, dropTestSchema, newRunId, schemaConfig } from '../src/server/test/schemas.ts';
 import { buildApp } from '../src/server/http/app.ts';
 import { createLogger } from '../src/server/log.ts';
 import { fetchDueSources } from '../src/server/news/fetcher.ts';
@@ -15,13 +21,16 @@ if (!process.env.SENTIQ_DATA_DIR && !process.env.KRYPTONIQ_DATA_DIR) {
 }
 const config = loadConfig();
 const log = createLogger(path.join(config.dataDir, 'logs'), true);
-const ctx = createContext(config, log);
+const base = loadDbConfig(process.env, fileURLToPath(new URL('../data/', import.meta.url)));
+const owner = await Db.open(base, { migrate: false, poolMax: 1 });
+const schema = await createTestSchema(owner, `${newRunId()}_1`);
+const ctx = await createContext(config, log, { db: await Db.open(schemaConfig(base, schema)) });
 const app = await buildApp(ctx);
 // Every API route needs a signed-in user (FD-USERS): the smoke test acts as the admin (given a password in a fresh
 // scratch directory: a session counts only for an account that can sign in).
-if (ctx.users.setupNeeded()) await ctx.users.setupAdmin({ email: 'smoke@example.com', password: 'Smoke-password-1' });
-const adminId = ctx.users.admin().id;
-const H = { host: '127.0.0.1:4317', cookie: `sentiq_session=${ctx.sessions.create(adminId, 'full')}` };
+if (await ctx.users.setupNeeded()) await ctx.users.setupAdmin({ email: 'smoke@example.com', password: 'Smoke-password-1' });
+const adminId = (await ctx.users.admin()).id;
+const H = { host: '127.0.0.1:4317', cookie: `sentiq_session=${await ctx.sessions.create(adminId, 'full')}` };
 const t0 = Date.now();
 const ctxRes = await refreshContext(ctx.db); ctx.coins.invalidate();
 console.log('context', ctxRes, Date.now() - t0, 'ms');
@@ -32,7 +41,7 @@ ctx.nli.warmUp();
 for (let i=0;i<120 && ctx.nli.status().state!=='ready' && ctx.nli.status().state!=='failed';i++) await new Promise(r=>setTimeout(r,1000));
 console.log('model', ctx.nli.status());
 let n=0; for (let i=0;i<40;i++){ const k = await ctx.sentiment.scorePending(undefined, 64); n+=k; if(!k) break; }
-console.log('scored', n, 'pending', ctx.sentiment.pendingCount(), Date.now()-t0,'ms');
+console.log('scored', n, 'pending', await ctx.sentiment.pendingCount(), Date.now()-t0,'ms');
 await ctx.calendar.refreshForexFactory().catch(e=>console.log('ff err', e.message));
 await ctx.calendar.refreshTradingView().catch(e=>console.log('tv err', e.message));
 const get = async (url: string) => { const res = await app.inject({ method: 'GET', url, headers: H }); return { status: res.statusCode, body: res.json() as any }; };
@@ -63,4 +72,5 @@ const csrf = await app.inject({ method: 'PUT', url: '/api/settings', headers: H,
 console.log('csrf', csrf.statusCode);
 const rebinding = await app.inject({ method: 'GET', url: '/api/health', headers: { host: 'evil.com' } });
 console.log('rebinding', rebinding.statusCode);
-await app.close(); ctx.db.close();
+await app.close(); await ctx.db.close();
+await dropTestSchema(owner, schema.name); await owner.close();

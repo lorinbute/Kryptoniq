@@ -13,6 +13,11 @@ export class SecretBox {
     this.key = key;
   }
 
+  /** A master key exists (in the environment or as `<dataDir>/master.key`): `load` will not make a new one. */
+  static available(dataDir: string, env: NodeJS.ProcessEnv = process.env): boolean {
+    return Boolean(env.SENTIQ_MASTER_KEY ?? env.KRYPTONIQ_MASTER_KEY) || existsSync(path.join(dataDir, 'master.key'));
+  }
+
   /**
    * Loads the master key from SENTIQ_MASTER_KEY (or KRYPTONIQ_MASTER_KEY, its name before the rename; base64) or `<dataDir>/master.key`,
    * generating the file (mode 0600) on first run.

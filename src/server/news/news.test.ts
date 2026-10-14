@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { Db } from '../db/database.ts';
+import { testDb } from '../test/db.ts';
 import { classify } from './classify.ts';
 import { findCluster, jaccard, titleTokens } from './cluster.ts';
 import { CoinDetector, detectCoins } from './coins.ts';
@@ -206,46 +206,44 @@ describe('ingest', () => {
   });
   const now = Date.parse('2026-10-12T12:00:00Z');
 
-  function setup() {
-    const db = new Db(':memory:');
-    seedSources(db);
+  async function setup() {
+    const db = await testDb();
+    await seedSources(db);
     return db;
   }
 
-  it('inserts, dedups by id and canonical URL, tags coins and clusters stories', () => {
-    const db = setup();
-    const r1 = ingestItems(db, { id: 'coindesk', category: 'crypto' }, [mk('Bitcoin surges past $80,000 as ETF inflows hit record', 'https://a.com/1?utm_source=x')], det, now);
+  it('inserts, dedups by id and canonical URL, tags coins and clusters stories', async () => {
+    const db = await setup();
+    const r1 = await ingestItems(db, { id: 'coindesk', category: 'crypto' }, [mk('Bitcoin surges past $80,000 as ETF inflows hit record', 'https://a.com/1?utm_source=x')], det, now);
     expect(r1).toEqual({ inserted: 1, updated: 0, skipped: 0 });
     // same article again (same source), and the same URL from another source
-    const r2 = ingestItems(db, { id: 'coindesk', category: 'crypto' }, [mk('Bitcoin surges past $80,000 as ETF inflows hit record', 'https://a.com/1')], det, now);
+    const r2 = await ingestItems(db, { id: 'coindesk', category: 'crypto' }, [mk('Bitcoin surges past $80,000 as ETF inflows hit record', 'https://a.com/1')], det, now);
     expect(r2.inserted).toBe(0);
-    const r3 = ingestItems(db, { id: 'decrypt', category: 'crypto' }, [mk('Different title', 'https://www.a.com/1/')], det, now);
+    const r3 = await ingestItems(db, { id: 'decrypt', category: 'crypto' }, [mk('Different title', 'https://www.a.com/1/')], det, now);
     expect(r3.inserted).toBe(0);
     // same story, other outlet → same cluster
-    ingestItems(db, { id: 'decrypt', category: 'crypto' }, [mk('Bitcoin Surges Past $80,000 on Record ETF Inflows', 'https://b.com/2')], det, now);
-    const rows = db.all<{ cluster_id: string; title: string }>('SELECT cluster_id, title FROM news ORDER BY fetched_at');
+    await ingestItems(db, { id: 'decrypt', category: 'crypto' }, [mk('Bitcoin Surges Past $80,000 on Record ETF Inflows', 'https://b.com/2')], det, now);
+    const rows = await db.all<{ cluster_id: string; title: string }>('SELECT cluster_id, title FROM news ORDER BY fetched_at, id');
     expect(rows).toHaveLength(2);
     expect(rows[0]!.cluster_id).toBe(rows[1]!.cluster_id);
-    expect(db.all('SELECT coin FROM news_coins')).toEqual([{ coin: 'BTC' }, { coin: 'BTC' }]);
-    db.close();
+    expect(await db.all('SELECT coin FROM news_coins ORDER BY news_id, coin')).toEqual([{ coin: 'BTC' }, { coin: 'BTC' }]);
   });
 
-  it('a changed title resets the sentiment for rescoring', () => {
-    const db = setup();
+  it('a changed title resets the sentiment for rescoring', async () => {
+    const db = await setup();
     const item = mk('Old title', 'https://a.com/x', Date.parse('2026-10-12T10:00:00Z'), 'g1');
-    ingestItems(db, { id: 'coindesk', category: 'crypto' }, [item], det, now);
-    db.run("UPDATE news SET sentiment = 0.5, sentiment_label = 'positive', sentiment_engine = 'local'");
-    const r = ingestItems(db, { id: 'coindesk', category: 'crypto' }, [{ ...item, title: 'New title about Ethereum' }], det, now);
+    await ingestItems(db, { id: 'coindesk', category: 'crypto' }, [item], det, now);
+    await db.run("UPDATE news SET sentiment = 0.5, sentiment_label = 'positive', sentiment_engine = 'local'");
+    const r = await ingestItems(db, { id: 'coindesk', category: 'crypto' }, [{ ...item, title: 'New title about Ethereum' }], det, now);
     expect(r.updated).toBe(1);
-    const row = db.get<{ title: string; sentiment: number | null; sentiment_engine: string | null }>('SELECT title, sentiment, sentiment_engine FROM news');
+    const row = await db.get<{ title: string; sentiment: number | null; sentiment_engine: string | null }>('SELECT title, sentiment, sentiment_engine FROM news');
     expect(row).toEqual({ title: 'New title about Ethereum', sentiment: null, sentiment_engine: null });
-    expect(db.all('SELECT coin FROM news_coins')).toEqual([{ coin: 'ETH' }]);
-    db.close();
+    expect(await db.all('SELECT coin FROM news_coins ORDER BY news_id, coin')).toEqual([{ coin: 'ETH' }]);
   });
 
-  it('rejects stale items and clamps future dates', () => {
-    const db = setup();
-    const r = ingestItems(
+  it('rejects stale items and clamps future dates', async () => {
+    const db = await setup();
+    const r = await ingestItems(
       db,
       { id: 'coindesk', category: 'crypto' },
       [mk('Stale', 'https://a.com/s', now - 4 * 86_400_000), mk('Future', 'https://a.com/f', now + 86_400_000), mk('Undated', 'https://a.com/u', null)],
@@ -253,8 +251,7 @@ describe('ingest', () => {
       now,
     );
     expect(r).toEqual({ inserted: 2, updated: 0, skipped: 1 });
-    expect(db.all('SELECT published_at FROM news')).toEqual([{ published_at: now }, { published_at: now }]);
-    db.close();
+    expect(await db.all('SELECT published_at FROM news')).toEqual([{ published_at: now }, { published_at: now }]);
   });
 
   it('newsId prefers guid, then canonical URL, then title', () => {
@@ -262,13 +259,12 @@ describe('ingest', () => {
     expect(newsId('s', { guid: null, link: 'https://a.com/?utm_source=1', title: 'x' })).toBe(newsId('s', { guid: null, link: 'https://www.a.com', title: 'y' }));
   });
 
-  it('seeding keeps a custom source that already uses a built-in URL', () => {
-    const db = new Db(':memory:');
-    db.run("INSERT INTO sources(id, name, url, category) VALUES ('mine', 'Mine', 'https://cointelegraph.com/rss', 'crypto')");
-    seedSources(db);
-    expect(db.get("SELECT count(*) AS n FROM sources WHERE url = 'https://cointelegraph.com/rss'")).toEqual({ n: 1 });
-    expect(db.get("SELECT id FROM sources WHERE id = 'cointelegraph'")).toBeUndefined();
-    db.close();
+  it('seeding keeps a custom source that already uses a built-in URL', async () => {
+    const db = await testDb();
+    await db.run("INSERT INTO sources(id, name, url, category) VALUES ('mine', 'Mine', 'https://cointelegraph.com/rss', 'crypto')");
+    await seedSources(db);
+    expect(await db.get("SELECT count(*) AS n FROM sources WHERE url = 'https://cointelegraph.com/rss'")).toEqual({ n: 1 });
+    expect(await db.get("SELECT id FROM sources WHERE id = 'cointelegraph'")).toBeUndefined();
   });
 });
 
@@ -307,6 +303,19 @@ describe('stocks in the news (FD-SENTIQ §4.4)', () => {
     expect(detectCoins(mine, 'Traders pile into $SPX', '')).toEqual(['SPX']);
   });
 
+  it('indices by their aliases, tagged with their id, before a coin of the same ticker (FD-INDICES)', () => {
+    const d = new CoinDetector([{ symbol: 'SPX', names: ['SPX6900'] }], { SPX: [] }, {}, { '^SPX': ['S&P 500', 'S&P500', 'SPX'], '^DJI': ['Dow Jones', 'DJIA'], '^VIX': ['VIX', 'volatility index'] });
+    expect(detectCoins(d, 'S&P 500 closes at a record', '')).toEqual(['^SPX']);
+    // The user follows SPX6900 too: a bare "SPX" is the index's alias, matched first.
+    expect(detectCoins(d, 'SPX slips as yields rise', '')).toEqual(['^SPX']);
+    expect(detectCoins(d, 'SPX6900 rallies', '')).toEqual([]);
+    // "Dow" alone is not an alias (Dow Inc.).
+    expect(detectCoins(d, 'Dow Jones drops 400 points; Dow Inc. reports next week', '')).toEqual(['^DJI']);
+    expect(detectCoins(d, 'The Volatility Index jumps', '')).toEqual(['^VIX']);
+    expect(detectCoins(d, 'a vix of nothing', '')).toEqual([]);
+    expect(newsQuerySchema.parse({ coins: '^spx,SOL,^' })).toMatchObject({ coins: ['^SPX', 'SOL'] });
+  });
+
   it('the news filter takes dotted tickers too', () => {
     expect(newsQuerySchema.parse({ coins: 'brk.b,SOL,bad!', category: 'stocks' })).toMatchObject({ coins: ['BRK.B', 'SOL'], category: 'stocks' });
   });
@@ -317,43 +326,61 @@ describe('stocks in the news (FD-SENTIQ §4.4)', () => {
     expect(classify('stocks', 'Corn gets a dead cat bounce on Monday', '', [])).toMatchObject({ relevance: 0.8 });
   });
 
-  it('keeps one Nasdaq feed per watchlist stock, and lets a removed stock\'s feed go with its news', () => {
-    const db = new Db(':memory:');
-    seedSources(db);
-    expect(db.all("SELECT id FROM sources WHERE category = 'stocks' ORDER BY id")).toEqual([{ id: 'cnbc-business' }, { id: 'investing-stocks' }, { id: 'nasdaq-stocks' }]);
-    const add = (coin: string) => db.run("INSERT INTO watchlist(coin, quote, position, aliases, added_at, kind) VALUES (?, 'USD', 0, '[]', 1, 'stock')", [coin]);
-    add('AAPL');
-    add('BRK.B');
-    syncStockSources(db, 'AAPL');
-    expect(db.all("SELECT id, url, auto, enabled, builtin FROM sources WHERE auto IS NOT NULL ORDER BY id")).toEqual([
+  it('keeps one Nasdaq feed per watchlist stock and deletes it, with its news, once nobody follows the stock (FD-AUTOFEED)', async () => {
+    const db = await testDb();
+    await seedSources(db);
+    expect(await db.all("SELECT id FROM sources WHERE category = 'stocks' ORDER BY id")).toEqual([{ id: 'cnbc-business' }, { id: 'investing-stocks' }, { id: 'nasdaq-stocks' }]);
+    const add = (coin: string, userId = 1) => db.run("INSERT INTO watchlist(user_id, coin, quote, position, aliases, added_at, kind) VALUES (?, ?, 'USD', 0, '[]', 1, 'stock')", [userId, coin]);
+    await add('AAPL');
+    await add('BRK.B');
+    expect(await syncStockSources(db, 'AAPL')).toEqual([]);
+    expect(await db.all("SELECT id, url, auto, enabled, builtin FROM sources WHERE auto IS NOT NULL ORDER BY id")).toEqual([
       { id: 'nasdaq-aapl', url: nasdaqFeedUrl('AAPL'), auto: 'nasdaq:AAPL', enabled: 1, builtin: 1 },
       { id: 'nasdaq-brk-b', url: 'https://www.nasdaq.com/feed/rssoutbound?symbol=BRK.B', auto: 'nasdaq:BRK.B', enabled: 1, builtin: 1 },
     ]);
-    // The user switched AAPL's feed off: it stays off, unless AAPL is added again.
-    db.run("UPDATE sources SET enabled = 0 WHERE id = 'nasdaq-aapl'");
-    syncStockSources(db);
-    expect(db.get("SELECT enabled FROM sources WHERE id = 'nasdaq-aapl'")).toEqual({ enabled: 0 });
-    syncStockSources(db, 'AAPL');
-    expect(db.get("SELECT enabled FROM sources WHERE id = 'nasdaq-aapl'")).toEqual({ enabled: 1 });
-    // Removed: a feed with news is switched off (its news stay), one without news is deleted.
-    db.run("INSERT INTO news(id, source_id, title, published_at, fetched_at, category, relevance, impact, cluster_id) VALUES ('n1', 'nasdaq-aapl', 'Apple', 1, 1, 'stocks', 1, 1, 'c1')");
-    db.run("DELETE FROM watchlist WHERE coin IN ('AAPL', 'BRK.B')");
-    syncStockSources(db);
-    expect(db.all('SELECT id, enabled FROM sources WHERE auto IS NOT NULL')).toEqual([{ id: 'nasdaq-aapl', enabled: 0 }]);
-    // Once retention removed its news, the next sync deletes it.
-    db.run("DELETE FROM news WHERE id = 'n1'");
-    syncStockSources(db);
-    expect(db.all('SELECT id FROM sources WHERE auto IS NOT NULL')).toEqual([]);
-    db.close();
+    // The admin switched AAPL's feed off: it stays off while AAPL is followed, unless AAPL is added again.
+    await db.run("UPDATE sources SET enabled = 0 WHERE id = 'nasdaq-aapl'");
+    await syncStockSources(db);
+    expect(await db.get("SELECT enabled FROM sources WHERE id = 'nasdaq-aapl'")).toEqual({ enabled: 0 });
+    await syncStockSources(db, 'AAPL');
+    expect(await db.get("SELECT enabled FROM sources WHERE id = 'nasdaq-aapl'")).toEqual({ enabled: 1 });
+    // Another user follows AAPL too: the feed stays until neither does.
+    await db.run("INSERT INTO users(email, name, role, created_at) VALUES ('ana@example.com', 'Ana', 'user', 1)");
+    const other = (await db.get<{ id: number }>("SELECT id FROM users WHERE email = 'ana@example.com'"))!.id;
+    await add('AAPL', other);
+    await db.run("INSERT INTO news(id, source_id, title, published_at, fetched_at, category, relevance, impact, cluster_id) VALUES ('n1', 'nasdaq-aapl', 'Apple', 1, 1, 'stocks', 1, 1, 'c1')");
+    await db.run("INSERT INTO news_coins(news_id, coin) VALUES ('n1', 'AAPL')");
+    await db.run("DELETE FROM watchlist WHERE user_id = 1 AND coin IN ('AAPL', 'BRK.B')");
+    expect(await syncStockSources(db)).toEqual(['BRK.B']);
+    expect(await db.all('SELECT id, enabled FROM sources WHERE auto IS NOT NULL')).toEqual([{ id: 'nasdaq-aapl', enabled: 1 }]);
+    // Nobody follows it any more: the feed goes at once, with its news (even though it has some).
+    await db.run('DELETE FROM watchlist WHERE user_id = ?', [other]);
+    expect(await syncStockSources(db)).toEqual(['AAPL']);
+    expect(await db.all('SELECT id FROM sources WHERE auto IS NOT NULL')).toEqual([]);
+    expect(await db.all("SELECT id FROM news WHERE id = 'n1'")).toEqual([]);
+    expect(await db.all("SELECT news_id FROM news_coins WHERE news_id = 'n1'")).toEqual([]);
   });
 
-  it('does not duplicate a feed the user already added by hand', () => {
-    const db = new Db(':memory:');
-    db.run("INSERT INTO sources(id, name, url, category) VALUES ('mine', 'Apple news', ?, 'stocks')", [nasdaqFeedUrl('AAPL')]);
-    db.run("INSERT INTO watchlist(coin, quote, position, aliases, added_at, kind) VALUES ('AAPL', 'USD', 0, '[]', 1, 'stock')");
-    syncStockSources(db, 'AAPL');
-    expect(db.all('SELECT id FROM sources')).toEqual([{ id: 'mine' }]);
-    db.close();
+  it('deletes a feed left switched off by the old rule (FD-AUTOFEED §2: BSOL)', async () => {
+    const db = await testDb();
+    await db.run("INSERT INTO sources(id, name, url, category, enabled, weight, builtin, auto) VALUES ('nasdaq-bsol', 'Nasdaq: BSOL', ?, 'stocks', 0, 1, 1, 'nasdaq:BSOL')", [nasdaqFeedUrl('BSOL')]);
+    await db.run("INSERT INTO news(id, source_id, title, published_at, fetched_at, category, relevance, impact, cluster_id) VALUES ('b1', 'nasdaq-bsol', 'Bitwise Solana', 1, 1, 'stocks', 1, 1, 'c9')");
+    expect(await syncStockSources(db)).toEqual(['BSOL']);
+    expect(await db.all("SELECT id FROM sources WHERE id = 'nasdaq-bsol'")).toEqual([]);
+    expect(await db.all("SELECT id FROM news WHERE id = 'b1'")).toEqual([]);
+    expect(await syncStockSources(db)).toEqual([]);
+  });
+
+  it('does not duplicate a feed the user already added by hand', async () => {
+    const db = await testDb();
+    await db.run("INSERT INTO sources(id, name, url, category) VALUES ('mine', 'Apple news', ?, 'stocks')", [nasdaqFeedUrl('AAPL')]);
+    await db.run("INSERT INTO watchlist(coin, quote, position, aliases, added_at, kind) VALUES ('AAPL', 'USD', 0, '[]', 1, 'stock')");
+    await syncStockSources(db, 'AAPL');
+    expect(await db.all('SELECT id FROM sources')).toEqual([{ id: 'mine' }]);
+    // Not an automatic feed: it stays when the stock leaves the watchlist.
+    await db.run("DELETE FROM watchlist WHERE coin = 'AAPL'");
+    expect(await syncStockSources(db)).toEqual([]);
+    expect(await db.all('SELECT id FROM sources')).toEqual([{ id: 'mine' }]);
   });
 });
 

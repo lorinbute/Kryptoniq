@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Db } from '../db/database.ts';
+import { testDb } from '../test/db.ts';
 import { silentLogger } from '../log.ts';
 import { parseTradingView, type RawEvent } from '../calendar/sources.ts';
 import { readJobData } from '../jobs/scheduler.ts';
@@ -57,8 +57,8 @@ function tv(events: Ev[]): RawEvent[] {
   );
 }
 
-const setup = () => {
-  const db = new Db(':memory:');
+const setup = async () => {
+  const db = await testDb();
   return { db, econ: new EconomyService(db, silentLogger) };
 };
 
@@ -99,8 +99,8 @@ describe('reading the source (TD-ECON §2)', () => {
 });
 
 describe('the Economy page (TD-ECON §4)', () => {
-  it('shows the latest value, the revised previous, the next release and the history of each period', () => {
-    const { db, econ } = setup();
+  it('shows the latest value, the revised previous, the next release and the history of each period', async () => {
+    const { db, econ } = await setup();
     const cpi = (period: string, month: number, actual: number | null, previous: number | null, date: number, forecast: number | null = null) => ({
       country: 'US',
       indicator: 'Inflation Rate',
@@ -114,7 +114,7 @@ describe('the Economy page (TD-ECON §4)', () => {
       importance: 1,
       unit: '%',
     });
-    econ.ingest(
+    await econ.ingest(
       tv([
         cpi('Jul', 6, 2.7, 2.6, NOW - 60 * DAY),
         // August: the previous month revised from 2.7 to 2.8.
@@ -141,7 +141,7 @@ describe('the Economy page (TD-ECON §4)', () => {
       undefined,
       NOW,
     );
-    const view = econ.view(NOW);
+    const view = await econ.view(NOW);
     const us = view.countries.find((c) => c.code === 'US')!;
     const inflation = us.indicators.find((i) => i.key === 'ECONOMICS:USIRYY')!;
     expect(inflation).toMatchObject({
@@ -160,8 +160,8 @@ describe('the Economy page (TD-ECON §4)', () => {
       source: 'Bureau of Labor Statistics',
       hasDescription: true,
     });
-    expect(econ.description('ECONOMICS:USIRYY')).toBe('Consumer prices.');
-    expect(econ.description('nope')).toBeNull();
+    expect(await econ.description('ECONOMICS:USIRYY')).toBe('Consumer prices.');
+    expect(await econ.description('nope')).toBeNull();
     expect(inflation.change).toBeCloseTo(0.1, 10);
     expect(inflation.explanation).toMatch(/Inflația/);
     expect(us.indicators.find((i) => i.key === 'ECONOMICS:USIJC')).toMatchObject({ name: 'Cereri inițiale de șomaj', latest: { value: 197 }, next: { overdue: true, forecast: 200 }, scale: 'K' });
@@ -178,12 +178,11 @@ describe('the Economy page (TD-ECON §4)', () => {
     ]);
     expect(view.countries.map((c) => c.code)).toEqual(['US', 'EU', 'GB', 'JP', 'CN', 'CA', 'CH', 'AU', 'NZ']);
     expect(view.updatedAt).toBe(NOW);
-    db.close();
   });
 
-  it('keeps 26 weeks of a weekly series and 13 periods of a monthly one', () => {
-    const { db, econ } = setup();
-    econ.ingest(
+  it('keeps 26 weeks of a weekly series and 13 periods of a monthly one', async () => {
+    const { db, econ } = await setup();
+    await econ.ingest(
       tv([
         ...Array.from({ length: 40 }, (_, k) => ({ country: 'US', indicator: 'Initial Jobless Claims', ticker: 'W', category: 'lbr', period: `w${k}`, ref: NOW - (41 - k) * 7 * DAY, actual: 200 + k, date: NOW - (40 - k) * 7 * DAY })),
         ...Array.from({ length: 20 }, (_, k) => ({ country: 'US', indicator: 'Retail Sales MoM', ticker: 'M', category: 'cnsm', period: `m${k}`, ref: NOW - (21 - k) * 30 * DAY, actual: k, date: NOW - (20 - k) * 30 * DAY })),
@@ -191,17 +190,16 @@ describe('the Economy page (TD-ECON §4)', () => {
       undefined,
       NOW,
     );
-    const us = econ.view(NOW).countries[0]!;
+    const us = (await econ.view(NOW)).countries[0]!;
     expect(us.indicators.find((i) => i.key === 'W')?.history).toHaveLength(26);
     expect(us.indicators.find((i) => i.key === 'M')?.history).toHaveLength(13);
     expect(us.indicators.find((i) => i.key === 'M')?.history.at(-1)?.[1]).toBe(19);
-    db.close();
   });
 
-  it('drops a scheduled release the source no longer lists, never a published one, never on an empty answer', () => {
-    const { db, econ } = setup();
+  it('drops a scheduled release the source no longer lists, never a published one, never on an empty answer', async () => {
+    const { db, econ } = await setup();
     const range = { from: NOW - 7 * DAY, to: NOW + 14 * DAY, countries: ['US'] };
-    econ.ingest(
+    await econ.ingest(
       tv([
         { id: 'past', country: 'US', indicator: 'Retail Sales MoM', ticker: 'R', category: 'cnsm', actual: 0.4, date: NOW - DAY },
         { id: 'moved', country: 'US', indicator: 'Retail Sales MoM', ticker: 'R', category: 'cnsm', date: NOW + 3 * DAY },
@@ -209,25 +207,24 @@ describe('the Economy page (TD-ECON §4)', () => {
       range,
       NOW,
     );
-    econ.ingest([], range, NOW);
-    expect(db.get<{ n: number }>('SELECT count(*) AS n FROM econ_releases')?.n).toBe(2);
-    econ.ingest(tv([{ id: 'new-date', country: 'US', indicator: 'Retail Sales MoM', ticker: 'R', category: 'cnsm', date: NOW + 5 * DAY }]), range, NOW);
-    expect(db.all<{ id: string }>('SELECT id FROM econ_releases ORDER BY id').map((r) => r.id)).toEqual(['new-date', 'past']);
+    await econ.ingest([], range, NOW);
+    expect((await db.get<{ n: number }>('SELECT count(*) AS n FROM econ_releases'))?.n).toBe(2);
+    await econ.ingest(tv([{ id: 'new-date', country: 'US', indicator: 'Retail Sales MoM', ticker: 'R', category: 'cnsm', date: NOW + 5 * DAY }]), range, NOW);
+    expect((await db.all<{ id: string }>('SELECT id FROM econ_releases ORDER BY id')).map((r) => r.id)).toEqual(['new-date', 'past']);
     // A value the source stops sending stays; a corrected one replaces it.
-    econ.ingest(tv([{ id: 'past', country: 'US', indicator: 'Retail Sales MoM', ticker: 'R', category: 'cnsm', actual: null, date: NOW - DAY }]), undefined, NOW);
-    expect(db.get('SELECT actual FROM econ_releases WHERE id = ?', ['past'])).toEqual({ actual: 0.4 });
-    econ.ingest(tv([{ id: 'past', country: 'US', indicator: 'Retail Sales MoM', ticker: 'R', category: 'cnsm', actual: 0.5, date: NOW - DAY }]), undefined, NOW);
-    expect(db.get('SELECT actual FROM econ_releases WHERE id = ?', ['past'])).toEqual({ actual: 0.5 });
+    await econ.ingest(tv([{ id: 'past', country: 'US', indicator: 'Retail Sales MoM', ticker: 'R', category: 'cnsm', actual: null, date: NOW - DAY }]), undefined, NOW);
+    expect(await db.get('SELECT actual FROM econ_releases WHERE id = ?', ['past'])).toEqual({ actual: 0.4 });
+    await econ.ingest(tv([{ id: 'past', country: 'US', indicator: 'Retail Sales MoM', ticker: 'R', category: 'cnsm', actual: 0.5, date: NOW - DAY }]), undefined, NOW);
+    expect(await db.get('SELECT actual FROM econ_releases WHERE id = ?', ['past'])).toEqual({ actual: 0.5 });
     // Two years later the release and its indicator go.
-    expect(econ.prune(NOW + KEEP_MS + 10 * DAY)).toBe(2);
-    expect(db.get('SELECT 1 AS x FROM econ_indicators')).toBeUndefined();
-    db.close();
+    expect(await econ.prune(NOW + KEEP_MS + 10 * DAY)).toBe(2);
+    expect(await db.get('SELECT 1 AS x FROM econ_indicators')).toBeUndefined();
   });
 });
 
 describe('history and schedule (TD-ECON §3)', () => {
   it('reads each country once, retries a failed one, then reads the schedule ahead', async () => {
-    const { db, econ } = setup();
+    const { db, econ } = await setup();
     const asked: string[] = [];
     let failGB = true;
     const fetcher = async (from: number, to: number, countries: readonly string[]) => {
@@ -236,37 +233,35 @@ describe('history and schedule (TD-ECON §3)', () => {
       return tv([{ country: countries[0] as string, indicator: 'Inflation Rate', actual: 2, date: from + DAY }]);
     };
     expect(await econ.backfill(fetcher, undefined, NOW, 0)).toHaveLength(ECON_SOURCE_COUNTRIES.length - 1);
-    expect(econ.historyReady()).toBe(false);
+    expect(await econ.historyReady()).toBe(false);
     failGB = false;
     asked.length = 0;
     expect(await econ.backfill(fetcher, undefined, NOW, 0)).toEqual(['GB']);
     expect(asked).toEqual(['GB:393']);
-    expect(econ.historyReady()).toBe(true);
-    expect(readJobData<{ done: string[] }>(db, ECON_JOB, { done: [] }).done).toHaveLength(ECON_SOURCE_COUNTRIES.length);
+    expect(await econ.historyReady()).toBe(true);
+    expect((await readJobData<{ done: string[] }>(db, ECON_JOB, { done: [] })).done).toHaveLength(ECON_SOURCE_COUNTRIES.length);
     expect(await econ.backfill(fetcher, undefined, NOW, 0)).toEqual([]);
     asked.length = 0;
     await econ.refreshSchedule(fetcher, NOW);
     expect(asked).toEqual([`${ECON_SOURCE_COUNTRIES.join(',')}:46`]);
-    db.close();
   });
 });
 
 describe('the Calendar feeding the Economy page (FD-ECON §3)', () => {
   it('passes the same answer on, never failing the Calendar, never trusting a cut answer', async () => {
-    const { db, econ } = setup();
+    const { db, econ } = await setup();
     const answer = tv([{ id: 'r1', country: 'US', indicator: 'Retail Sales MoM', ticker: 'R', category: 'cnsm', actual: 0.4, date: NOW - DAY }]);
     const feed = (await import('./service.ts')).feedingEconomy(econ, silentLogger, async () => answer);
     expect(await feed(NOW - 7 * DAY, NOW + 14 * DAY)).toBe(answer);
-    expect(db.get<{ n: number }>('SELECT count(*) AS n FROM econ_releases')?.n).toBe(1);
+    expect((await db.get<{ n: number }>('SELECT count(*) AS n FROM econ_releases'))?.n).toBe(1);
     // The Economy side failing: the Calendar still gets its events.
     const broken = { ingest: () => { throw new Error('disk full'); } } as unknown as EconomyService;
     expect(await (await import('./service.ts')).feedingEconomy(broken, silentLogger, async () => answer)(0, 1)).toBe(answer);
     // An answer at the cap may be cut: a scheduled release missing from it stays.
-    econ.ingest(tv([{ id: 'later', country: 'US', indicator: 'Retail Sales MoM', ticker: 'R', category: 'cnsm', date: Date.now() + 10 * DAY }]));
+    await econ.ingest(tv([{ id: 'later', country: 'US', indicator: 'Retail Sales MoM', ticker: 'R', category: 'cnsm', date: Date.now() + 10 * DAY }]));
     const full = tv(Array.from({ length: TV_CAP }, (_, k) => ({ id: `f${k}`, country: 'US', indicator: 'Other', date: NOW - DAY })));
-    econ.ingest(full, { from: NOW - 7 * DAY, to: Date.now() + 14 * DAY, countries: ['US'] });
-    expect(db.get('SELECT id FROM econ_releases WHERE id = ?', ['later'])).toEqual({ id: 'later' });
-    db.close();
+    await econ.ingest(full, { from: NOW - 7 * DAY, to: Date.now() + 14 * DAY, countries: ['US'] });
+    expect(await db.get('SELECT id FROM econ_releases WHERE id = ?', ['later'])).toEqual({ id: 'later' });
   });
 });
 

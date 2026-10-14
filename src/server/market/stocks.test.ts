@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { Db } from '../db/database.ts';
+import { testDb } from '../test/db.ts';
 import { setFetchImpl } from '../net/http.ts';
 import { MarketError } from './market.ts';
 import { parseCnn, readStockContext, refreshStockContext } from './stock-context.ts';
@@ -86,16 +86,19 @@ describe('Nasdaq parsing', () => {
 });
 
 describe('Twelve Data budget', () => {
-  it('allows 8 a minute and 800 a day, and remembers the day across restarts', () => {
-    const db = new Db(':memory:');
+  it('allows 8 a minute and 800 a day, and remembers the day across restarts', async () => {
+    const db = await testDb();
     let now = Date.parse('2026-10-13T10:00:00Z');
     const b = new CreditBudget({ db, now: () => now });
+    await b.ready;
     for (let i = 0; i < 8; i++) b.take();
     expect(() => b.take()).toThrow(/8 cereri pe minut/);
     now += 61_000;
     b.take();
     expect(b.status()).toMatchObject({ used: 9, minuteUsed: 1, perDay: 800 });
+    await b.settled();
     const again = new CreditBudget({ db, now: () => now });
+    await again.ready;
     expect(again.status().used).toBe(9);
     // A new UTC day starts from zero.
     now = Date.parse('2026-10-14T00:00:01Z');
@@ -110,8 +113,71 @@ describe('Twelve Data budget', () => {
   });
 });
 
+describe('Twelve Data plan (FD-TDPLAN)', () => {
+  it('applies the key’s plan: 55 a minute and no daily limit on Grow; kept in the database for the other instance', async () => {
+    const db = await testDb();
+    let now = Date.parse('2026-10-13T10:00:00Z');
+    const b = new CreditBudget({ db, now: () => now });
+    await b.ready;
+    expect(b.status()).toMatchObject({ perMinute: 8, perDay: 800, plan: { category: 'basic', assumed: true, at: null } });
+    await b.setPlan({ category: 'grow', perMinute: 55, perDay: null }, 'abcd');
+    for (let i = 0; i < 55; i++) b.take();
+    expect(() => b.take()).toThrow(/55 cereri pe minut/);
+    expect(b.status()).toMatchObject({ perMinute: 55, perDay: null, plan: { category: 'grow', assumed: false, at: now } });
+    // No daily limit: thousands in a day.
+    for (let m = 1; m <= 40; m++) {
+      now += 61_000;
+      b.take(50);
+    }
+    expect(b.status().used).toBe(2055);
+    // The other instance (Mac / Azure) reads the same plan, and picks a change up within 5 minutes.
+    const other = new CreditBudget({ db, now: () => now });
+    await other.ready;
+    expect(other.planFor('abcd')).toMatchObject({ category: 'grow', perMinute: 55, perDay: null });
+    expect(other.planFor('wxyz')).toBeNull();
+    await b.setPlan({ category: 'pro', perMinute: 610, perDay: null }, 'abcd');
+    expect(other.status().perMinute).toBe(55);
+    now += 5 * 60_000;
+    other.status();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(other.status().perMinute).toBe(610);
+    // The key removed: back to the free plan's limits.
+    await b.clearPlan();
+    expect(b.status()).toMatchObject({ perMinute: 8, perDay: 800, plan: { assumed: true } });
+  });
+
+  it('reads the plan from /api_usage (one credit): a daily limit only when Twelve Data gives one', async () => {
+    const budget = new CreditBudget({ now: () => Date.parse('2026-10-13T15:00:00Z') });
+    const client = new TwelveDataClient(async () => 'k'.repeat(32), budget);
+    serve((u) => (u.pathname === '/api_usage' ? { body: { timestamp: '2026-10-13 15:00:00', current_usage: 3, plan_limit: 8, daily_usage: 40, plan_daily_limit: 800, plan_category: 'basic' } } : undefined));
+    expect(await client.plan()).toEqual({ category: 'basic', perMinute: 8, perDay: 800 });
+    serve((u) => (u.pathname === '/api_usage' ? { body: { timestamp: '2026-10-13 15:00:00', current_usage: 0, plan_limit: 55, plan_category: 'Grow' } } : undefined));
+    expect(await client.plan()).toEqual({ category: 'grow', perMinute: 55, perDay: null });
+    expect(budget.status().used).toBe(2);
+    serve((u) => (u.pathname === '/api_usage' ? { body: { timestamp: 'x', current_usage: 0 } } : undefined));
+    await expect(client.plan()).rejects.toThrow(/răspuns neașteptat la citirea planului/);
+  });
+
+  it('StockData reads the plan for the key, forgets it without one, and keeps the last on a failed read', async () => {
+    const db = await testDb();
+    let key: string | null = 'a'.repeat(28) + 'wxyz';
+    // Another day than the test above, whose thousands of credits are still in this schema's count.
+    const s = new StockData({ db, key: async () => key, now: () => Date.parse('2026-10-20T15:00:00Z') });
+    await s.budget.ready;
+    serve((u) => (u.pathname === '/api_usage' ? { body: { current_usage: 0, plan_limit: 55, plan_category: 'grow', timestamp: 'x' } } : undefined));
+    expect(await s.refreshPlan()).toEqual({ category: 'grow', perMinute: 55, perDay: null });
+    expect(s.budget.planFor('wxyz')).toMatchObject({ perMinute: 55 });
+    serve(() => ({ status: 500, body: { status: 'error', code: 500, message: 'down' } }));
+    await expect(s.refreshPlan()).rejects.toThrow();
+    expect(s.budget.status().perMinute).toBe(55);
+    key = null;
+    expect(await s.refreshPlan()).toBeNull();
+    expect(s.budget.status()).toMatchObject({ perMinute: 8, perDay: 800 });
+  });
+});
+
 describe('Twelve Data client', () => {
-  const td = (key: string | null = 'k'.repeat(32)) => new TwelveDataClient(() => key, new CreditBudget({ now: () => Date.parse('2026-10-13T15:00:00Z') }));
+  const td = (key: string | null = 'k'.repeat(32)) => new TwelveDataClient(async () => key, new CreditBudget({ now: () => Date.parse('2026-10-13T15:00:00Z') }));
 
   it('maps the exchange-time datetimes to UTC, oldest first', async () => {
     serve((u) =>
@@ -202,7 +268,7 @@ describe('StockData', () => {
   });
 
   it('asks for the key on intraday timeframes', async () => {
-    const s = new StockData({ key: () => null, nasdaq: fakeNasdaq().n });
+    const s = new StockData({ key: async () => null, nasdaq: fakeNasdaq().n });
     await expect(s.candles('AAPL', '1h', 100)).rejects.toMatchObject({ code: 'UNSUPPORTED_TIMEFRAME' });
     await expect(s.candles('aapl!', '1d', 100)).rejects.toMatchObject({ code: 'UNKNOWN_SYMBOL' });
   });
@@ -215,7 +281,7 @@ describe('StockData', () => {
       { symbol: 'FB', name: 'old', exchange: '', type: 'Acțiune' },
       { symbol: 'META', name: 'Meta Platforms, Inc. Class A Common Stock', exchange: 'NASDAQ-GS', type: 'Acțiune' },
     ];
-    const s = new StockData({ key: () => null, nasdaq: f.n });
+    const s = new StockData({ key: async () => null, nasdaq: f.n });
     await expect(s.candles('FB', '1d', 50)).rejects.toMatchObject({ code: 'UNKNOWN_SYMBOL', message: 'FB nu are istoric la Nasdaq; încearcă META', suggestions: ['META'] });
     // The closest spelling first.
     n.search = async () => ['AADX', 'AAOI', 'AAPL', 'APLE'].map((symbol) => ({ symbol, name: symbol, exchange: '', type: 'Acțiune' }));
@@ -227,7 +293,7 @@ describe('StockData', () => {
   it('serves daily candles from Nasdaq, cached, and the last ones when Nasdaq fails', async () => {
     let now = Date.parse('2026-10-13T15:00:00Z');
     const f = fakeNasdaq();
-    const s = new StockData({ key: () => null, nasdaq: f.n, now: () => now });
+    const s = new StockData({ key: async () => null, nasdaq: f.n, now: () => now });
     const a = await s.candles('AAPL', '1d', 100);
     expect(a).toMatchObject({ exchange: 'nasdaq', symbol: 'AAPL', tf: '1d', pricePrecision: 2 });
     expect(a.candles).toHaveLength(100);
@@ -251,7 +317,7 @@ describe('StockData', () => {
     const n = f.n as unknown as { marketStatus: (now: number) => Promise<MarketStatus> };
     // On weekends the "opening time" Nasdaq reports can be in the past: it must not matter.
     n.marketStatus = async (t) => ({ state, label: '', opensAt: Date.parse('2026-10-16T13:30:00Z'), closesAt: null, fetchedAt: t });
-    const s = new StockData({ key: () => null, nasdaq: f.n, now: () => now });
+    const s = new StockData({ key: async () => null, nasdaq: f.n, now: () => now });
     await s.candles('AAPL', '1d', 50);
     now += 30 * 3_600_000;
     await s.candles('AAPL', '1d', 50);
@@ -280,7 +346,7 @@ describe('StockData', () => {
       if (down) throw new Error('HTTP 403');
       return { state: 'closed', label: '', opensAt: null, closesAt: null, fetchedAt: t };
     };
-    const s = new StockData({ key: () => null, nasdaq: f.n, now: () => now });
+    const s = new StockData({ key: async () => null, nasdaq: f.n, now: () => now });
     await s.candles('AAPL', '1d', 50);
     // Nasdaq's state stops answering over the weekend; on Monday the chart refreshes on its normal TTL.
     down = true;
@@ -292,7 +358,7 @@ describe('StockData', () => {
   it('keeps quotes 15 minutes while the market is closed', async () => {
     let now = Date.parse('2026-10-17T15:00:00Z');
     const f = fakeNasdaq({ status: 'closed' });
-    const s = new StockData({ key: () => null, nasdaq: f.n, now: () => now });
+    const s = new StockData({ key: async () => null, nasdaq: f.n, now: () => now });
     await s.marketStatus();
     await s.quote('AAPL');
     now += 10 * 60_000;
@@ -308,7 +374,7 @@ describe('StockData', () => {
   it('caches quotes a minute and keeps the last one on errors', async () => {
     let now = Date.parse('2026-10-13T15:00:00Z');
     const f = fakeNasdaq();
-    const s = new StockData({ key: () => null, nasdaq: f.n, now: () => now });
+    const s = new StockData({ key: async () => null, nasdaq: f.n, now: () => now });
     expect((await s.quote('AAPL')).last).toBe(340.97);
     await s.quote('AAPL');
     expect(f.calls.quote).toBe(1);
@@ -341,17 +407,17 @@ describe('stock market context', () => {
   });
 
   it('stores the state always, CNN and the Nasdaq-100 hourly while the market is closed', async () => {
-    const db = new Db(':memory:');
+    const db = await testDb();
     let now = Date.parse('2026-10-13T06:00:00Z');
     const f = fakeNasdaq({ status: 'closed' });
-    const s = new StockData({ key: () => null, nasdaq: f.n, now: () => now });
+    const s = new StockData({ key: async () => null, nasdaq: f.n, now: () => now });
     let cnnCalls = 0;
     const fetchCnn = async () => {
       cnnCalls++;
       return cnn;
     };
     expect(await refreshStockContext(db, s, now, fetchCnn)).toEqual([]);
-    const ctx = readStockContext(db);
+    const ctx = await readStockContext(db);
     expect(ctx.market?.state).toBe('closed');
     expect(ctx.indices?.items.map((i) => i.id)).toEqual(['SPX', 'NDX', 'VIX']);
     expect(ctx.fearGreed?.value).toBe(45);
@@ -361,6 +427,6 @@ describe('stock market context', () => {
     // A failing source keeps its last value.
     now += 61 * 60_000;
     await expect(refreshStockContext(db, s, now, async () => Promise.reject(new Error('HTTP 418')))).resolves.toEqual(['cnn fear&greed: HTTP 418']);
-    expect(readStockContext(db).indices?.items.find((i) => i.id === 'SPX')?.last).toBe(7807.24);
+    expect((await readStockContext(db)).indices?.items.find((i) => i.id === 'SPX')?.last).toBe(7807.24);
   });
 });

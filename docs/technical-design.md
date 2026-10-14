@@ -12,18 +12,17 @@
 |---|---|---|
 | Runtime | **Node ≥ 24** (testat pe 25.9), TypeScript rulat nativ (type stripping), `erasableSyntaxOnly`; TypeScript 7 doar pentru verificare | o singură limbă peste tot, fără pas de build pentru server |
 | HTTP | **Fastify 5** + `@fastify/static` | rapid, hook-uri simple, `inject()` pentru teste |
-| DB | **SQLite prin `node:sqlite`** (WAL) | zero dependențe native, un fișier |
+| DB | **Azure SQL Database prin `mssql` 12** (`tedious`), TD-AZURE; `node:sqlite` doar pentru importul fișierului vechi | găzduit, backup automat, aceeași bază pentru Mac și Azure App Service |
 | Validare | **zod 4** | input API, setări, răspunsuri externe, ieșirile lui Claude |
 | Feed-uri | **fast-xml-parser 5** + `he` | RSS 2.0 / Atom / RDF, CDATA, entități |
 | Sentiment local | **@huggingface/transformers 4** (onnxruntime-node), `Xenova/nli-deberta-v3-small` q8 + reguli | cel mai bun scor la evaluare (research §3), offline |
 | Claude | **@anthropic-ai/sdk** (structured outputs) | sentiment opțional, rezumatul zilei |
-| Connector | **@modelcontextprotocol/server 2** (+ `/client` în teste) | MCP peste Streamable HTTP, OAuth 2.1 |
 | Autentificare | `scrypt` (node:crypto), TOTP propriu, **@simplewebauthn/server 13** (passkey), `uqr` (codul QR) | fără add-on-uri native |
 | Piață / exchange | **ccxt 4.5** (crypto, public și privat); REST propriu pentru brokeri, Nasdaq, Twelve Data | o singură bibliotecă pentru 7 exchange-uri |
 | Frontend | **React 19 + Vite 8 + Tailwind 4 + TanStack Query 5 + react-router 8**, `lucide-react`, `@dnd-kit`, fonturile Geist / Geist Mono (`@fontsource-variable`) | standard, rapid |
 | Grafice | **lightweight-charts 5.2** + primitive proprii | aspect TradingView, plugin API |
 | Logo-uri | `@web3icons/core` (monede, servite de server la cerere), PNG / SVG oficiale (exchange-uri și brokeri) | fără resurse externe în pagină |
-| Teste | **vitest 5** | unit + integrare (Fastify `inject`, DB temporară, rețea simulată) |
+| Teste | **vitest 5** | unit + integrare (Fastify `inject`, scheme de test în Azure SQL, rețea simulată) |
 
 Un singur `package.json` (`sentiq`, fără workspaces). Structura:
 
@@ -39,7 +38,7 @@ src/
     main.ts, context.ts   # pornirea, serviciile aplicației
     config.ts, log.ts, settings.ts
     auth/                 # utilizatori, parole, sesiuni, TOTP, coduri de recuperare, passkey, limitare, email
-    db/                   # conexiune, migrații
+    db/                   # Azure SQL: configurare, conexiune și tranzacții, schemă și migrări, importul SQLite (+ codul SQLite vechi)
     http/                 # app Fastify, securitate, cookie-uri, autentificare, rute
     jobs/                 # scheduler + job-urile
     net/http.ts           # fetch cu timeout, limită de mărime, proxy, UA
@@ -49,23 +48,24 @@ src/
     economy/              # indicatorii pe țări
     market/               # ccxt public, acțiuni (Nasdaq, Twelve Data), context, logo-uri
     exchange/             # conturi, brokeri, reîncercări, cost mediu
-    scanner/, summary/, mcp/, secrets/crypto.ts
+    scanner/, summary/, secrets/crypto.ts
+    test/                 # schemele de test (setup-ul global Vitest, testDb)
   web/                    # aplicația React: pages/, components/, chart/, public/ (theme.js, brand/, provider-logos/)
   build/prune-assets.ts   # curățenia build-ului (FD-STALE, FD-NOAPI)
-scripts/                  # sentiq.sh (lansator, Sentiq.app), admin.ts, check-node.mjs, smoke.ts, app-icon/
+scripts/                  # sentiq.sh (lansator, Sentiq.app), admin.ts, db-check.ts, import-sqlite.ts, check-node.mjs, smoke.ts, app-icon/
 docs/
-data/                     # runtime (gitignored): kryptoniq.db (sentiq.db la o instalare nouă), master.key, models/, logs/, backups/
+data/                     # runtime (gitignored): database.env (conexiunea), master.key, models/, logs/; kryptoniq.db și backups/ doar ca rezervă (importul)
 ```
 
 Scripturi: `npm run dev` (server `node --watch` + Vite cu proxy `/api`), `npm start` (build web + server care servește `dist/web`), `npm run serve`, `npm test`, `npm run typecheck`, `npm run smoke`. Toate setează `NODE_USE_ENV_PROXY=1` (respectă `HTTPS_PROXY` dacă există). `scripts/sentiq.sh` pornește / oprește serverul în fundal și construiește `Sentiq.app` (TD-LAUNCH); scurtătura veche `scripts/kryptoniq.sh` nu mai există.
 
-Porturi: server **4317** pe toate interfețele (`SENTIQ_BIND`, implicit `::`), Vite dev **5317** (`localhost`). Variabile: `SENTIQ_PORT`, `SENTIQ_BIND`, `SENTIQ_DATA_DIR`, `SENTIQ_ALLOWED_HOSTS`, `SENTIQ_MASTER_KEY`, `SENTIQ_PUBLIC_URL`, `SENTIQ_MCP`, `SENTIQ_MCP_CLIENTS`, `SENTIQ_DISABLE_JOBS` (teste), `SENTIQ_QUIET` (lansatorul); fiecare acceptă și numele `KRYPTONIQ_*`.
+Porturi: server **4317** pe toate interfețele (`SENTIQ_BIND`, implicit `::`), Vite dev **5317** (`localhost`); pe App Service, `PORT`. Variabile: `SENTIQ_PORT`, `SENTIQ_BIND`, `SENTIQ_DATA_DIR`, `SENTIQ_ALLOWED_HOSTS`, `SENTIQ_MASTER_KEY`, `SENTIQ_PUBLIC_URL`, `SENTIQ_DISABLE_JOBS` (teste), `SENTIQ_QUIET` (lansatorul), `SENTIQ_PROXY=azure`; fiecare acceptă și numele `KRYPTONIQ_*`. Baza: `SENTIQ_DB_SERVER` / `NAME` / `USER` / `PASSWORD` / `PORT` sau `SENTIQ_DB_CONNECTION`, din mediu sau din `data/database.env` (TD-AZURE §1). App Service e recunoscut după `WEBSITE_SITE_NAME` (și `WEBSITE_HOSTNAME`).
 
 ## 2. Securitate
 
 1. **Host allowlist** (anti DNS rebinding, `http/security.ts`): răspunde doar la `localhost`, adresele IPv4 / IPv6 ale Mac-ului, numele lui (cu și fără `.local`), `SENTIQ_ALLOWED_HOSTS` și gazda adresei publice; recitită la un minut. Altfel 403 „Sentiq răspunde doar pe adresele acestui Mac”.
 2. **Origin**: dacă există, trebuie să fie exact gazda cererii (același origin), altfel 403.
-3. **CSRF**: orice metodă ne-GET cere header-ul `X-Sentiq: 1` (`X-Kryptoniq: 1` încă acceptat, pentru taburile de dinainte de redenumire) și, cu corp, `Content-Type: application/json` (forțează preflight CORS, pe care nu îl permitem). Excepție: rutele connectorului cu token Bearer (`/mcp`, `/oauth/token|revoke|register`), care nu citesc cookie-ul. Verificarea folosește ruta potrivită de router, nu URL-ul brut.
+3. **CSRF**: orice metodă ne-GET cere header-ul `X-Sentiq: 1` (`X-Kryptoniq: 1` încă acceptat, pentru taburile de dinainte de redenumire) și, cu corp, `Content-Type: application/json` (forțează preflight CORS, pe care nu îl permitem).
 4. **Autentificare** (`http/auth.ts`, TD-USERS): cookie `sentiq_session` (HttpOnly, SameSite=Strict, Secure pe HTTPS), sesiuni în DB după hash (`full` 30 de zile glisante, `pending` 5 minute între parolă și codul 2FA). Rute publice doar pentru login / cerere de cont / activare / resetare / passkey și `GET /api/ping`; restul cer sesiune `full`; `/api/admin/*`, `/api/health`, sursele, rescorarea și cheile globale cer rolul `admin`.
 5. **Parole**: `scrypt` (format `scrypt$N$r$p$salt$hash`, parametrii pot crește), minimum 12 caractere cu literă mare, mică și cifră. **TOTP**: SHA-1, 6 cifre, 30 s, ±1 pas, secretul criptat, un cod nu se poate refolosi (`totp_last_step`); 10 coduri de recuperare de unică folosință (SHA-256). **Passkey**: WebAuthn cu `userVerification: required`, RP = gazda cererii (merge pe `localhost`, nu pe IP). **Limitare**: 3 încercări greșite / dispozitiv → 15 minute.
 6. **Secrete** (chei exchange / broker, Claude, Twelve Data, Resend, secretul TOTP): AES-256-GCM cu cheia master de 32 de octeți din `SENTIQ_MASTER_KEY` (base64) sau `data/master.key` (generată la prima pornire, `chmod 600`). Format: `v1:<iv b64>:<tag b64>:<ct b64>`. API-ul nu returnează niciodată secretul, doar un indiciu (`abcd…wxyz`).
@@ -73,36 +73,54 @@ Porturi: server **4317** pe toate interfețele (`SENTIQ_BIND`, implicit `::`), V
 8. **Conținut din feed-uri**: doar text simplu (HTML eliminat, entități decodate); React escapează; link-urile doar `http(s)`, cu `rel="noopener noreferrer"`.
 9. **Header-e**: CSP pe HTML `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'` (tema se aplică dintr-un fișier, `public/theme.js`, nu inline), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`.
 10. **Log-uri** fără secrete (redactare `apiKey|api_key|secret|password|passphrase|claudeKey|x-api-key`); linkurile de activare / resetare nu apar niciodată în jurnal.
-11. Primul acces al adminului (parola) e permis doar de pe Mac (loopback). `scripts/sentiq.sh admin-reset` șterge parola, 2FA și passkey-urile adminului.
+11. Primul acces al adminului (parola) e permis doar de pe Mac (loopback; niciodată în spatele unui proxy). `scripts/sentiq.sh admin-reset` șterge parola, 2FA și passkey-urile adminului.
+12. **În spatele Azure App Service** (TD-AZURE §7): IP-ul vizitatorului din `X-Client-IP`, HTTPS din `X-Forwarded-Proto` (cookie `Secure`, passkey, `Strict-Transport-Security`), răspuns 404 la sonda `/robots933456.txt`. Pe Mac aceste header-e sunt ignorate.
+13. **Baza de date**: un utilizator doar pentru baza Sentiq (`db_owner` pe ea, fără acces la celelalte baze ale serverului); parola în `data/database.env` (`chmod 600`, gitignored) sau în setările App Service, niciodată în jurnal sau în mesajele de eroare.
 
 ## 3. Baza de date
 
-`PRAGMA journal_mode=WAL; foreign_keys=ON; busy_timeout=5000`. Migrații versionate prin `PRAGMA user_version` (`db/migrations.ts`, listă care doar crește, fiecare într-o tranzacție; azi **8**). Timp = **epoch ms (INTEGER)** peste tot. Fișierul: `data/kryptoniq.db` dacă există (instalările de dinainte de redenumire), altfel `data/sentiq.db`. Înainte de o repornire cu o migrare nouă se face un backup (`VACUUM INTO data/backups/…`).
+**Azure SQL Database** (TD-AZURE §2–§4), prin `server/db/database.ts`:
+- **Parametrii**: `?` sau `@nume`.
+- **Valorile**: `BIGINT` → `number`, `Uint8Array` → `VARBINARY`.
+- **Scrierile** se fac una după alta, sub un lock de aplicație per schemă (`sp_getapplock`), ca în SQLite, în toate procesele legate la aceeași bază. Fiecare secvență citire → scriere e o tranzacție (`db.tx`, `AsyncLocalStorage`).
+- **Citirile** nu așteaptă (`READ_COMMITTED_SNAPSHOT`).
+- **Erorile trecătoare** se reîncearcă. Baza indisponibilă → 503.
 
-| Tabel | Ce ține | Migrarea |
+Timp = **epoch ms (`BIGINT`)** peste tot. Schema e versionată în `schema_version` (`db/schema.ts`, migrări T-SQL care doar cresc; **1** = cele 8 migrări SQLite + `job_lease`; **2** = tabelele connectorului șterse, TD-MCPREMOVE), aplicate la pornire într-o tranzacție. Tot textul compară binar (`Latin1_General_100_BIN2`), ca în SQLite, în afară de emailuri (`CI_AS`). URL-urile și ID-urile de passkey sunt unice prin hash-ul lor. Backup: cel automat al Azure SQL. Datele de dinainte se mută o dată din `data/kryptoniq.db` (`scripts/sentiq.sh import-sqlite`, TD-AZURE §9).
+
+| Tabel | Ce ține | Din |
 |---|---|---|
-| `settings` | setările globale (JSON) și cheile criptate ale aplicației | 1 |
-| `sources` | sursele de știri (`category` ∈ crypto / macro / geopolitics / stocks; `auto` = feed gestionat de aplicație, ex. `nasdaq:AAPL`), starea fetch-ului | 1, 2 |
-| `news`, `news_coins` | știrile (relevanță, impact, flags, cluster, sentiment, `sentiment_impact` dat de Claude) și monedele / acțiunile detectate | 1, 4 |
-| `daily_sentiment` | indicele pe zi și fus (`final` după îngheț) | 1 |
-| `calendar_raw`, `calendar_custom` | evenimentele FF / TV / rezultate; evenimentele personale (`user_id`) | 1, 3 |
-| `job_state` | starea job-urilor (și date persistate, ex. săptămânile FF, bugetul Twelve Data) | 1 |
-| `watchlist` | favoritele per utilizator (`kind` crypto / stock, `name`, `exchange`, aliasuri, ordine) | 1–3 |
-| `exchange_accounts`, `cost_basis` | conturile (credențiale criptate, `env`, `user_id`) și prețul mediu introdus manual | 1–3 |
-| `market_cache` | contextul pieței (F&G, CoinGecko, CNN, Nasdaq), lista de monede | 1 |
-| `users`, `sessions`, `passkeys`, `user_tokens`, `user_settings` | conturi, sesiuni (hash), passkey-uri, linkuri unice (`reset`, `activate`; hash), setările personale | 3, 8 |
-| `econ_indicators`, `econ_releases` | indicatorii pagina Economie și publicările lor | 5 |
-| `day_summaries` | ultimul rezumat al zilei, per utilizator și zi | 6 |
-| `mcp_clients`, `mcp_grants`, `mcp_codes`, `mcp_tokens` | OAuth-ul connectorului (doar hash-uri) | 7 |
-| `account_requests` | cererile de cont | 8 |
+| `settings` | setările globale (JSON) și cheile criptate ale aplicației | v1 |
+| `sources` | sursele de știri (`category` ∈ crypto / macro / geopolitics / stocks; `auto` = feed gestionat de aplicație, ex. `nasdaq:AAPL`), starea fetch-ului; `url_hash` unic | v1, FD-SENTIQ |
+| `news`, `news_coins` | știrile (relevanță, impact, flags, cluster, sentiment, `sentiment_impact` dat de Claude; `canonical_hash`) și monedele / acțiunile detectate | v1, FD-IMPACT |
+| `daily_sentiment` | indicele pe zi și fus (`final` după îngheț) | v1 |
+| `calendar_raw`, `calendar_custom` | evenimentele FF / TV / rezultate; evenimentele personale (`user_id`) | v1, FD-USERS |
+| `job_state` | starea job-urilor (și date persistate, ex. săptămânile FF, bugetul Twelve Data) | v1 |
+| `job_lease` | ce proces rulează job-urile (§4) | FD-AZURE |
+| `watchlist` | favoritele per utilizator (`kind` crypto / stock, `name`, `exchange`, aliasuri, ordine) | v1–FD-USERS |
+| `exchange_accounts`, `cost_basis` | conturile (credențiale criptate, `env`, `user_id`) și prețul mediu introdus manual | v1–FD-USERS |
+| `market_cache` | contextul pieței (F&G, CoinGecko, CNN, Nasdaq), lista de monede | v1 |
+| `users`, `sessions`, `passkeys`, `user_tokens`, `user_settings` | conturi, sesiuni (hash), passkey-uri (`credential_hash` unic), linkuri unice (`reset`, `activate`; hash), setările personale | FD-USERS, FD-INVITE |
+| `econ_indicators`, `econ_releases` | indicatorii paginii Economie și publicările lor | FD-ECON |
+| `day_summaries` | ultimul rezumat al zilei, per utilizator și zi | FD-SUMMARY |
+| `account_requests` | cererile de cont | FD-INVITE |
 
-`news.id = sha1(source_id | guid ∥ canonical_url ∥ title)`. Duplicat între surse: același `canonical_url` deja existent → item ignorat.
+`news.id = sha1(source_id | guid ∥ canonical_url ∥ title)`. Duplicat între surse: același `canonical_url` deja existent → item ignorat. Știrile, monedele lor, scorurile, calendarul și indicatorii se scriu în loturi (un parametru JSON citit cu `OPENJSON`), un singur drum la server pe lot.
 
-Retenție (job `maintenance`, zilnic): știrile mai vechi de `retentionDays` (implicit 90), `calendar_raw` > 400 de zile, sesiunile expirate, cererile de cont mai vechi de 30 de zile, feed-urile acțiunilor scoase din favorite, istoricul economic vechi, codurile / tokenurile connectorului expirate, log-urile > 30 de zile, `PRAGMA optimize`. `daily_sentiment` se păstrează.
+Retenție (job `maintenance`, zilnic): știrile mai vechi de `retentionDays` (implicit 90), `calendar_raw` > 400 de zile, sesiunile expirate, cererile de cont mai vechi de 30 de zile, feed-urile acțiunilor scoase din favorite, istoricul economic vechi, log-urile > 30 de zile. `daily_sentiment` se păstrează.
 
 ## 4. Scheduler și job-uri
 
-`Scheduler` în proces (`jobs/scheduler.ts`): fiecare job `{name, everyMs, runOnStart | firstDelayMs, timeoutMs, run(signal)}`; un `setTimeout` per job cu jitter ±10%; **nu se suprapun**; timeout per rulare (cu `AbortSignal`); erorile sunt prinse și scrise în `job_state`; `nudge(name, ms)` aduce o rulare mai aproape; `stop()` la SIGINT / SIGTERM așteaptă job-urile curente (max 5 s) și închide DB. `SENTIQ_DISABLE_JOBS=1` le oprește (teste).
+`Scheduler` în proces (`jobs/scheduler.ts`):
+- fiecare job are forma `{name, everyMs, runOnStart | firstDelayMs, timeoutMs, run(signal)}`;
+- un `setTimeout` per job, cu jitter ±10%;
+- rulările **nu se suprapun**; fiecare are un timeout (cu `AbortSignal`);
+- erorile sunt prinse și scrise în `job_state`;
+- `nudge(name, ms)` aduce o rulare mai aproape;
+- `stop()` la SIGINT / SIGTERM așteaptă job-urile curente (max 5 s) și eliberează contractul;
+- `SENTIQ_DISABLE_JOBS=1` le oprește (teste).
+
+Cu mai multe procese pe aceeași bază, **job-urile rulează doar în procesul care ține `job_lease`** (60 s, reînnoit la 20 s, cu ceasul bazei; TD-AZURE §6). Celelalte doar servesc paginile; `trigger` (scanarea cerută din pagină) merge oriunde.
 
 | Job | Interval | Ce face |
 |---|---|---|
@@ -118,7 +136,7 @@ Retenție (job `maintenance`, zilnic): știrile mai vechi de `retentionDays` (im
 | `scanner` | 5 min | Slingshot pe favoritele fiecărui cont activ, cu timeframe-ul și setările indicatorului lui (aceeași pereche cu aceleași setări se calculează o dată) |
 | `maintenance` | 24 h | retenție și curățenie (§3) |
 
-Stările sunt expuse la `GET /api/health` (admin).
+Stările sunt expuse la `GET /api/health` (admin), cu `jobsLeader` (ce instanță rulează job-urile) și `db` (server, bază, nivel, spațiu).
 
 ## 5. Știri
 
@@ -153,6 +171,7 @@ Dicționar = top 250 CoinGecko (nume, simbol) + watchlist (cu aliasuri) + supras
 - Stablecoin-urile (USDT, USDC, DAI, FDUSD, TUSD, USDE) se detectează dar nu contează la „impact top 10”.
 
 - **Acțiunile** favorite (FD-SENTIQ §4) intră în dicționar cu simbolul și aliasurile lor (numele companiei, editabil); se etichetează ca monedele (`news_coins`).
+- **Indicii** favoriți (FD-INDICES) intră doar cu aliasurile lor (ca numele de companii); eticheta e id-ul `^SPX`.
 
 ### 5.6 Clustering (`news/cluster.ts`)
 Tokeni de titlu: lowercase, fără punctuație, fără stopwords, plural simplu (`s` final eliminat pentru cuvinte > 3 litere), numerele păstrate. Pentru fiecare item nou: candidați = știri din ultimele 36 h. `sim = |A∩B| / |A∪B|`. Dacă `sim ≥ 0.5`, sau `sim ≥ 0.34` și au aceleași monede ne-goale și un token numeric comun → același cluster (`cluster_id` = cel al candidatului cel mai similar; altfel `cluster_id = id`).
@@ -232,7 +251,8 @@ Pentru acțiunile din favoritele tuturor, calendarul de rezultate Nasdaq pe zile
 ## 8. Piață
 
 ### 8.1 Crypto (ccxt public, `market/market.ts`)
-- Instanță ccxt cache-uită per exchange (`kucoin, binance, bybit, okx`), `enableRateLimit`, proxy din env; `loadMarkets()` memoizat (24 h).
+- Instanță ccxt cache-uită per exchange (`kucoin, binance, bybit, okx, bitget`), `enableRateLimit`, proxy din env; `loadMarkets()` memoizat (24 h). `lists(id, symbol)` și `timeframes(id)` (TD-MARKETSRC §2).
+- **Sursa fiecărui utilizator** (`market/source.ts`, TD-MARKETSRC): exchange-ul conectat (dintre cele 5), cel ales dintre mai multe, altfel `marketData.exchange` (al adminului); o pereche sau un timeframe pe care exchange-ul lui nu le are vin de la cel implicit. Folosită de `/api/market/candles` (fără `exchange`), `/api/market/source`, `/api/market/symbols`, scanner și `get_chart`.
 - `getCandles(ex, symbol, tf, limit)`: cache în memorie (LRU), TTL 10 s (TF ≤ 15m) / 30 s; cereri identice simultane deduplicate; reîmprospătare incrementală (doar lumânările de la ultimul `open time`) cât cache-ul are < 1 h, altfel descărcare completă (`paginate` peste 1500). Rezultat sortat, fără duplicate, fără valori ne-finite.
 - Răspuns: `{candles: [t,o,h,l,c,v][], pricePrecision, tickSize, lastClosedIndex, fetchedAt}`.
 - Reîncercări și limitele exchange-ului (KuCoin `429000` etc.): TD-RATELIMIT.
@@ -240,6 +260,8 @@ Pentru acțiunile din favoritele tuturor, calendarul de rezultate Nasdaq pe zile
 ### 8.2 Acțiuni (`market/stocks.ts`, TD-SENTIQ §5)
 - **Nasdaq** (fără cheie): lumânări zilnice / săptămânale, cotații, căutare, informații despre companie, rezultate, starea bursei, graficul pe 60 de zile din bandă.
 - **Twelve Data** (cheia adminului, plan gratuit 8 credite / minut și 800 / zi UTC, buget local persistat): lumânările 1m – 4h; fără 3m / 6h / 8h / 12h (se alege cel mai apropiat). În afara ședinței regulate nu se cer lumânări noi; la limită se servesc ultimele, cu ora revenirii.
+- **Indici** (`market/indices.ts`, `market/cnbc.ts`, TD-INDICES, TD-INDEXINTRA): prin aceeași `StockData`, după id-ul `^SPX`. CNBC întâi: cotații în timp real, zilnic din 2010 și intraday (1m / 5m / 30m / 1h, ~100 de zile; 3m, 15m, 2h, 4h comasate). Rezervă (zilnic și cotații): Nasdaq (`assetclass=index`) pentru NDX / COMP / SOX și Cboe pentru SPX / VIX / RUT / DJI.
+- **Planul Twelve Data** (TD-TDPLAN): limitele bugetului vin din `/api_usage` (la salvarea cheii, la pornire, la 6 ore, la cerere), ținute în `market_cache` (`td:plan`).
 
 ### 8.3 Context
 - Crypto: Fear & Greed (`api.alternative.me/fng`), CoinGecko `global` + `coins/markets` top 250.
@@ -290,7 +312,7 @@ Portul [DI] Logarithmic Moving Average: linia de semnal, pragurile long / short 
 
 ## 10. Exchange-uri și brokeri (`exchange/`)
 - **Platformele** (`shared/providers.ts`, FD-NOAPI): pentru fiecare, câmpurile cerute (cu validare), mediile (live / demo / paper), pașii pentru o cheie doar de citire, pagina cheilor, ce se citește și logo-ul. Doar platformele cu API.
-- **Crypto** (KuCoin, Binance, Bybit, OKX, Kraken, Coinbase, Bitget): client ccxt privat (`adjustForTimeDifference`, proxy), cache-uit 10 min. `testAccount`: `fetchBalance()` + permisiunile cheii unde exchange-ul le spune (ex. KuCoin „General”, OKX `read_only`); orice drept peste citire → avertisment.
+- **Crypto** (KuCoin, Binance, Bybit, OKX, Kraken, Coinbase, Bitget): client ccxt privat (`adjustForTimeDifference`, proxy), cache-uit 10 min. Portofoliul are și soldul liber din contul futures (`totals.futuresAvailable`); `tradeStats` numără pozițiile futures închise (`exchange/trade-stats.ts`, TD-TRADESTATS). `testAccount`: `fetchBalance()` + permisiunile cheii unde exchange-ul le spune (ex. KuCoin „General”, OKX `read_only`); orice drept peste citire → avertisment.
 - **Brokeri** (`brokers.ts`): REST doar cu GET — Trading 212 (live / demo), eToro (real / demo), Interactive Brokers (Flex Web Service: cerere de raport + descărcare XML, ziua precedentă), Alpaca (live / paper). Aceleași forme de rânduri ca la crypto.
 - `getPortfolio(accountId)` (cache 20 s, dedup): solduri, poziții, ordine deschise (inclusiv trigger / stop), tranzacțiile din 7 zile, evaluare în USDT / moneda contului; erorile izolate per secțiune; o secțiune eșuată păstrează ultimele date bune, cu ora (`stale`).
 - KuCoin: conturi UTA și clasice (inclusiv HF), futures prin `kucoinfutures`.
@@ -311,15 +333,14 @@ Prefix `/api`; erorile au forma `{error: {code, message}}` cu 400 (validare), 40
 | Surse | `GET /sources`; `POST /sources`, `/sources/test`; `PUT\|DELETE /sources/:id` | GET utilizator; restul admin |
 | Calendar | `GET /calendar?from&to&impact&currencies`; `POST /calendar/custom`, `DELETE /calendar/custom/:id` | utilizator (evenimentele personale ale lui) |
 | Economie | `GET /economy`, `/economy/description` | utilizator |
-| Piață | `GET /market/candles`, `/market/symbols`, `/market/context`, `/logo/:symbol`; `GET /stocks/search\|info\|quotes\|spark` | utilizator |
+| Piață | `GET /market/candles`, `/market/source`, `/market/symbols`, `/market/context`, `/logo/:symbol`; `GET /stocks/search\|info\|quotes\|spark` | utilizator |
 | Scanner | `GET /scanner`; `POST /scanner/run` | utilizator |
 | Favorite | `GET\|POST /watchlist`; `PUT /watchlist/order`; `PUT\|DELETE /watchlist/:coin` | utilizator |
-| Conturi | `GET\|POST /accounts`; `DELETE /accounts/:id`; `POST /accounts/:id/test`; `GET /portfolio/:id`; `PUT /portfolio/:id/cost-basis/:asset` | utilizator (doar conturile lui) |
-| Setări | `GET\|PUT /settings`; `PUT /settings/claude-key\|twelvedata-key\|resend` | utilizator (globalele doar admin, §12); cheile admin |
+| Conturi | `GET\|POST /accounts`; `DELETE /accounts/:id`; `POST /accounts/:id/test`; `GET /portfolio/:id`, `/portfolio/:id/stats?period=` (TD-TRADESTATS); `PUT /portfolio/:id/cost-basis/:asset` | utilizator (doar conturile lui) |
+| Setări | `GET\|PUT /settings`; `PUT /settings/claude-key\|twelvedata-key\|resend` | utilizator (globalele doar admin, §12; detaliile Resend doar adminului); cheile admin |
 | Rezumat | `GET\|POST /summary` | utilizator |
-| Connector | `GET /mcp/status`, `DELETE /mcp/connections/:id`; `GET\|POST /oauth/requests/:id` (consimțământul) | utilizator |
 
-Connectorul, doar când e pornit (TD-MCP): `/mcp` (GET / POST / DELETE, Bearer), `/oauth/authorize`, `/oauth/token`, `/oauth/register`, `/oauth/revoke`, `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource[/mcp]`. Orice altă rută ne-`/api` → `index.html` (SPA).
+Orice altă rută ne-`/api` → `index.html` (SPA), în afară de adresele fostului connector (`/mcp`, `/oauth/…`, `/.well-known/…`), care răspund 404 (TD-MCPREMOVE).
 
 ## 12. Setări (`shared/settings.ts`, `server/settings.ts`)
 ```ts
@@ -333,11 +354,13 @@ Connectorul, doar când e pornit (TD-MCP): `/mcp` (GET / POST / DELETE, Bearer),
   charts: {symbol, showPositions, showLma, showSlingshot, lmaPane: 0.1..0.7 (0.25)}
 }
 ```
-- **Personale** (`user_settings`, câte un rând): `timezone, market, scanner, calendar, indicator, lma, charts`. **Globale** (`settings`, doar adminul le schimbă, altfel 403): `retentionDays, sentiment` și cheile (Claude, Twelve Data, Resend — criptate, în API doar `…KeySet` și un indiciu).
+- **Personale** (`user_settings`, câte un rând): `timezone, market` (exchange-ul ales dintre cele conectate, timeframe-ul graficului), `scanner, calendar, indicator, lma, charts`. **Globale** (`settings`, doar adminul le schimbă, altfel 403): `retentionDays, sentiment, marketData` (exchange-ul implicit și istoricul graficelor, TD-MARKETSRC) și cheile (Claude, Twelve Data, Resend — criptate, în API doar `…KeySet` și un indiciu; Resend doar pentru admin).
+- Tot în `settings`: `public_instance` (`{ url, at }`), adresa publică scrisă la pornire de instanța care o are (TD-ONLINE §2) și citită de celelalte prin `SettingsService.publicInstance()` (cache 30 s).
+- În interfață (TD-ADMINSET): `pages/Settings.tsx` („Ale mele”: favoritele, conturile, graficele și scanner-ul, fusul orar) și `pages/SettingsAdmin.tsx` (`/settings/admin`, doar admin: sursele, motorul de sentiment, Twelve Data, păstrarea știrilor, Resend), cu `components/SettingsTabs.tsx`.
 - `PUT /settings`: merge parțial, validare completă (zod), nimic salvat parțial.
 
 ## 13. Frontend
-- Rute: `/` (Azi), `/news`, `/calendar`, `/economy`, `/charts[/:base/:quote | /s/:ticker]`, `/trades`, `/settings`, `/security`, `/health` și `/users` (admin); fără cont: `/login`, `/request-account`, `/activate`, `/forgot`, `/reset-password`, `/setup`; `/oauth/consent` (connectorul).
+- Rute: `/` (Azi), `/news`, `/calendar`, `/economy`, `/charts[/:base/:quote | /s/:ticker]`, `/trades`, `/settings`, `/security`, `/settings/admin`, `/health` și `/users` (admin); fără cont: `/login`, `/request-account`, `/activate`, `/forgot`, `/reset-password`, `/setup`.
 - Date: TanStack Query; polling (cât tab-ul e vizibil): știri, sentiment și calendar 60 s, lumânări 10 s (TF ≤ 15m) / 30 s / acțiuni 60 s, portofoliu 30 s, piață și bandă 1–10 min, Economie 5 min, Stare sistem 10 s, ping 15 s. O reîmprospătare eșuată nu șterge datele afișate; banner global când serverul nu răspunde.
 - Client API: `fetch` cu `X-Sentiq: 1` pe mutații; un 401 trimite la login. `ErrorBoundary` pe pagină; o pagină încărcată la cerere care lipsește după o actualizare → o reîncărcare automată (`stale.ts`, FD-STALE).
 - **Teme** (`styles.css`, TD-THEME, TD-THEME2): tokenuri Tailwind 4 (`--color-*`) pentru tema întunecată în `@theme`, cea luminoasă sub `:root[data-theme='light']`, „insula” barei (`.theme-bar` / `.theme-page`); `public/theme.js` aplică tema înainte de desen; `theme.ts` (localStorage `sentiq:theme`, sincronizare între taburi). Componentele folosesc doar tokenuri (accent `accent`, hover `hover`, rânduri `row-alt`); `palette.test.ts` verifică contrastul.
@@ -346,8 +369,9 @@ Connectorul, doar când e pornit (TD-MCP): `/mcp` (GET / POST / DELETE, Bearer),
 ## 14. Testare
 - `shared/indicator`: primitive vs referință naivă (2000 de lumânări + cazuri limită); scenarii Slingshot (LONG, invalidare, TP, ATR TP / SL, Market Structure, HTF, 500 de etichete, istoric insuficient); semnalele 3.2 / 3.3 pe date reale; LMA.
 - `news`, `sentiment`, `calendar`, `economy`: parser, normalizare, monede și acțiuni, cluster, clasificare, reguli (setul de 50), indicele zilnic (ponderi, plafon, cluster, DST, impactul Claude), potrivirea FF ↔ TV, rezultate, indicatori.
-- `auth` și `http`: parole, TOTP, sesiuni, limitare, passkey, cereri de cont, activare, rolurile pe rute, Host / Origin / CSRF; rutele API cu `fastify.inject` pe DB temporară și rețea simulată; brokerii cu răspunsurile documentate.
-- `mcp`: OAuth (DCR, PKCE, rotația tokenurilor) și instrumentele, cu clientul MCP oficial.
+- `auth` și `http`: parole, TOTP, sesiuni, limitare, passkey, cereri de cont, activare, rolurile pe rute, Host / Origin / CSRF, modul Azure (IP, HTTPS, sonda); rutele API cu `fastify.inject` și rețea simulată; brokerii cu răspunsurile documentate.
+- `db`: parametri, tipuri, colații, unicitate prin hash, tranzacții și lock-ul de scriere (și între conexiuni), schema, importul SQLite (și migrările SQLite vechi), `data/database.env`; contractul job-urilor.
+- **Baza de test**: testele cu bază rulează în baza din `data/database.env`, fiecare worker Vitest în schema lui (`t_…`), cu un utilizator conținut fără acces la `dbo`. Setup-ul global le creează și le șterge (TD-AZURE §10); `testDb()` golește schema înaintea fiecărui test. Fără `data/database.env` sau fără acces la bază, doar acele teste eșuează, cu motivul. Fișierele fac drumuri reale la server (~5–6 minute suita completă, de pe Mac).
 - `web`: formatare, iconițe, tema, paleta (contrast), reîncărcarea după actualizare, ordonarea favoritelor, PnL, magazinul de zoom; `build`: curățenia `dist`.
 - Verificare manuală în Chrome (headless, CDP) pe o copie a datelor, în ambele teme, la 1440 și 390 px; smoke (`npm run smoke`) cu date reale.
 
@@ -364,7 +388,10 @@ Connectorul, doar când e pornit (TD-MCP): `/mcp` (GET / POST / DELETE, Bearer),
 | Limitele Twelve Data | buget local, fără cereri în afara ședinței, ultimele lumânări + ora revenirii |
 | Ceas local decalat | `adjustForTimeDifference` (exchange); TOTP ±1 pas |
 | Fus orar schimbat | indicii sunt per `(day, tz)` |
-| Pierderea `data/master.key` | cheile salvate nu mai pot fi citite (se reintroduc); documentat în ghid |
+| Pierderea `data/master.key` | cheile salvate nu mai pot fi citite (se reintroduc); documentat în ghid; pe Azure aceeași cheie e în `SENTIQ_MASTER_KEY` |
+| Baza Azure indisponibilă (mentenanță, rețea) | reîncercări, 503 cu mesaj, joburile reîncearcă la următoarea rulare (TD-AZURE §2) |
+| Două procese pe aceeași bază | scrieri serializate (lock de aplicație), job-uri pe o singură instanță (`job_lease`) |
+| Latența către Azure (~30–40 ms de pe Mac) | scrieri în loturi, un singur drum pentru o scriere simplă; App Service în aceeași regiune cu baza |
 
 ## 16. Economie (`economy/`, TD-ECON)
 Indicatorii din calendarul TradingView pentru țările din `TV_COUNTRIES` (`econ_indicators`, `econ_releases`): istoricul (~400 de zile) se citește o dată (job `econ.history`), valorile noi vin din citirile calendarului (`calendar.tv`), calendarul publicărilor zilnic. Grupele, „Esențialele”, polaritatea (bun / rău pentru economie) și numele în română: `economy/names.ts`; descrierea sursei la cerere (`/api/economy/description`).
@@ -372,16 +399,14 @@ Indicatorii din calendarul TradingView pentru țările din `TV_COUNTRIES` (`econ
 ## 17. Rezumatul zilei (`summary/`, TD-SUMMARY)
 `summary/context.ts` adună datele zilei utilizatorului (sentimentul, titlurile, calendarul, indicatorii publicați, contextul pieței, favoritele); `summary/service.ts` cere lui Claude (`claude-opus-5-5`, cheia adminului, structured output) verdictul, secțiunile și alegerea a 0–4 grafice din lista celor disponibile (cifrele graficelor sunt ale aplicației). Ultimul rezumat se ține per utilizator și zi (`day_summaries`); o cerere nouă cel mult la 2 minute.
 
-## 18. Connectorul Claude (`mcp/`, TD-MCP)
-- Pornit doar cu `SENTIQ_MCP=1` și `SENTIQ_PUBLIC_URL` valid; altfel rutele lipsesc.
-- OAuth 2.1 (`mcp/oauth.ts`): clienți prin CIMD (documentul publicat de Claude) sau DCR, doar de la gazdele din `SENTIQ_MCP_CLIENTS` (implicit `claude.ai, claude.com`); PKCE S256; consimțământul în pagina Sentiq; cod 60 s, access token 1 h, refresh 30 de zile cu rotație; doar hash-uri în DB.
-- Serverul MCP (`mcp/server.ts`, fără stare, câte unul pe cerere, pentru utilizatorul tokenului): instrumentele `get_day_overview`, `get_sentiment`, `search_news`, `get_calendar`, `get_economy`, `get_watchlist`, `get_chart`, `get_market_context` și prompturile `day_summary`, `analyze_symbol`; doar citire, doar datele utilizatorului.
+## 18. Fostul connector MCP
+Scos pe 14 oct 2026 (TD-MCPREMOVE): codul (`mcp/`, pagina de consimțământ, panoul), dependențele `@modelcontextprotocol/*` și tabelele lui (migrarea 2). Istoria lui e în Partea a II-a (TD-MCP, TD-MCPMULTI).
 
 ---
 
 # Partea a II-a — Istoricul
 
-Secțiunile de mai jos au fost scrise pentru fiecare schimbare și descriu implementarea de atunci; Partea I spune ce e valabil azi. Înlocuite ulterior: v1 (`127.0.0.1`, fără login, doar KuCoin, meniu lateral, paleta inițială) → Partea I; TD-REDESIGN (numele tokenului `brass`) → TD-THEME2 (`accent`); TD-SENTIQ (lista de platforme cu XTB, Tradeville, Revolut, Degiro și câmpul `available`) → TD-NOAPI; TD-USERS (înregistrarea și confirmarea emailului) → TD-INVITE; TD-SENTIQ (scurtătura `scripts/kryptoniq.sh`) și TD-LAUNCH (`kryptoniq.sh`, `Kryptoniq.app`) → `scripts/sentiq.sh`, `Sentiq.app`.
+Secțiunile de mai jos au fost scrise pentru fiecare schimbare și descriu implementarea de atunci; Partea I spune ce e valabil azi. Înlocuite ulterior: v1 (`127.0.0.1`, fără login, doar KuCoin, meniu lateral, paleta inițială) → Partea I; SQLite (`node:sqlite`, `PRAGMA user_version`, `VACUUM INTO`) din v1 și din TD-* până la TD-NOAPI → TD-AZURE (Azure SQL; codul SQLite rămâne doar pentru import); TD-REDESIGN (numele tokenului `brass`) → TD-THEME2 (`accent`); TD-SENTIQ (lista de platforme cu XTB, Tradeville, Revolut, Degiro și câmpul `available`) → TD-NOAPI; TD-USERS (înregistrarea și confirmarea emailului) → TD-INVITE; TD-SENTIQ (scurtătura `scripts/kryptoniq.sh`) și TD-LAUNCH (`kryptoniq.sh`, `Kryptoniq.app`) → `scripts/sentiq.sh`, `Sentiq.app`.
 
 ## TD-SS33 — Slingshot System 3.3 (implementează FD-SS33)
 
@@ -1571,3 +1596,567 @@ Tranzacții afișează titlurile după tip: „Dețineri” / „Poziții” la 
 - `web/public/provider-logos/`: șterse `xtb.png`, `tradeville.png`, `revolut.svg`.
 - Baza de date: fără migrare (coloana `exchange_accounts.exchange` nu are CHECK; niciun cont pe aceste platforme).
 - Teste: `providers.test.ts` (fiecare platformă are câmpuri, pași, pagina cheii, logo; id-urile sunt unice); `server.test.ts`: `xtb` refuzat ca platformă necunoscută.
+
+## TD-AZURE — implementează FD-AZURE
+
+### 1. Driver și configurare
+- Driver: **`mssql` 12.7.6** (peste `tedious` 20), singurul pachet nou la rulare. `node:sqlite` rămâne doar pentru importul din fișierul vechi (§9).
+- `server/db/config.ts` — `loadDbConfig(env, dataDir)`:
+  - citește `<dataDir>/database.env` cu un parser propriu: linii `NUME=valoare`; `#` doar la început de rând e comentariu; valoarea e **tot** ce urmează după primul `=` (fără ghilimele, fără `#` ca comentariu, fără expandare), doar `\r` final scos. Motiv: `util.parseEnv` taie parolele la `#` și la `'`. Doar cheile `SENTIQ_DB_*` sunt citite.
+  - mediul (`process.env`) are prioritate, cheie cu cheie (App Service pune setările în mediu).
+  - `SENTIQ_DB_CONNECTION` (connection string ADO.NET) → `ConnectionPool.parseConnectionString`; altfel `SENTIQ_DB_SERVER` / `NAME` / `USER` / `PASSWORD` (+ opțional `SENTIQ_DB_PORT`, implicit 1433). Lipsa oricăruia → `DbConfigError` cu mesajul din FD-AZURE §2.
+  - opțiuni fixe: `encrypt: true`, `trustServerCertificate: false`, `appName: 'Sentiq'`, `connectTimeout: 30 s`, `requestTimeout: 60 s`, pool `max 10` (teste: 3), `min 0`, `idleTimeoutMillis 30 s`.
+  - `describeDb()` pentru jurnal / Stare sistem: `server/bază (utilizator)`, niciodată parola.
+- `config.ts`:
+  - `db: DbConfig | null`, `dbError: string | null` (aplicația nu pornește fără `db`);
+  - `proxy: 'azure' | null` — `'azure'` când există `WEBSITE_SITE_NAME` (pus de App Service) sau `SENTIQ_PROXY=azure`;
+  - port: `SENTIQ_PORT`, apoi `PORT` (App Service), apoi 4317;
+  - `dataDir`: `SENTIQ_DATA_DIR`, altfel `/home/data` în modul Azure (`wwwroot` se rescrie la fiecare publicare), altfel `data/`;
+  - `allowedHosts` + `WEBSITE_HOSTNAME` (adresa `*.azurewebsites.net`);
+  - `legacyDbPath`: `data/kryptoniq.db` / `data/sentiq.db`, doar pentru import.
+- Jurnal: redactarea acoperă și `pwd` / `Password=` din connection string-uri.
+
+### 2. `Db` (`server/db/database.ts`, rescris, asincron)
+```ts
+class Db {
+  static open(cfg: DbConfig, opts?: { poolMax?: number; migrate?: boolean }): Promise<Db>;
+  static shared(pool, cfg): Db;         // un pool al altcuiva (testele: unul per worker); close() nu-l închide
+  all<T>(sql, params?): Promise<T[]>;   get<T>(sql, params?): Promise<T | undefined>;
+  run(sql, params?): Promise<{ changes: number; lastInsertRowid: number }>;
+  tx<T>(fn: () => Promise<T>): Promise<T>;
+  info(): Promise<DbInfo>;   close(): Promise<void>;
+}
+```
+- **Parametri**: `?` poziționali (array) se traduc o dată per text SQL (cache) în `@p0…@pN`, sărind peste literali `'…'`, identificatori `[…]` / `"…"` și comentarii; sau parametri numiți `@nume` (obiect), pentru instrucțiunile care folosesc aceeași valoare de două ori (upsert). Valori: `undefined` → `null`, `boolean` → 1 / 0, `Uint8Array` → `Buffer` (altfel `mssql` l-ar trimite ca text), restul după tipul JS (întreg ≤ int32 → `Int`, mai mare → `BigInt`, zecimal → `Float`, text → `NVarChar`). Peste 2000 de parametri → eroare (limita SQL Server e 2100): listele lungi și loturile merg ca un singur parametru JSON, citit cu `OPENJSON`. Un `NULL` pleacă drept `NVARCHAR`: într-o coloană `VARBINARY` intră doar cu `CONVERT(VARBINARY(MAX), …)` (importul o face).
+- **Rezultate**: coloanele `BIGINT` vin de la `tedious` ca text → convertite în `number` după metadatele coloanei (timpii în ms încap exact în 2^53). `VARBINARY` vine ca `Buffer` (e și `Uint8Array`).
+- **Scrieri serializate, ca în SQLite**: orice scriere ia întâi un lock exclusiv de aplicație, `sp_getapplock @Resource = 'sentiq:write:' + SCHEMA_NAME(), @LockOwner = 'Transaction', @LockTimeout = 30000`, deci scrierile se execută una după alta în toate procesele legate la aceeași bază (Mac + Azure, instanțele dintr-o actualizare). Citirile nu iau lock: Azure SQL are `READ_COMMITTED_SNAPSHOT` pornit, deci văd ultima stare salvată, fără să aștepte.
+  - `run()` în afara unei tranzacții = **un singur drum la server**: `SET XACT_ABORT ON; BEGIN TRAN; <lock>; <instrucțiunea>; SELECT @@ROWCOUNT AS __changes, CAST(SCOPE_IDENTITY() AS BIGINT) AS __id; COMMIT`. `changes` = rândurile ultimei instrucțiuni, `lastInsertRowid` = identitatea ultimului `INSERT` (0 dacă nu există).
+  - `tx(fn)`: `Transaction` `mssql` (READ COMMITTED) + `SET XACT_ABORT ON` + lock, apoi `fn` rulează într-un `AsyncLocalStorage`: orice `all/get/run` din `fn` (și din funcțiile chemate de ea) merge pe conexiunea tranzacției. Tranzacțiile imbricate se alătură celei exterioare. Pe o tranzacție, cererile se pun la coadă (`mssql` nu permite două deodată pe aceeași conexiune), deci și un `Promise.all` din `fn` merge. După `COMMIT` / `ROLLBACK`, starea e marcată „încheiată”: o promisiune lansată din `fn` și terminată mai târziu nu mai folosește tranzacția.
+  - **Regulă**: în `fn` doar baza de date (fără rețea, fără Claude, fără exchange-uri), ca lock-ul să țină milisecunde.
+  - Lock așteptat peste 30 s → `DbBusyError` → 503 (`DB_UNAVAILABLE`).
+  - Un lot întrerupt de timeout-ul clientului lasă tranzacția deschisă pe conexiunea din pool (`XACT_ABORT` nu acționează la un „attention”). De aceea fiecare citire și fiecare scriere simplă începe cu `IF @@TRANCOUNT > 0 ROLLBACK`. O tranzacție care găsește la început `@@TRANCOUNT > 1` se anulează și se reia.
+- **Erori trecătoare** (Azure): citirile și deschiderea tranzacțiilor se reîncearcă de 3 ori (0,25 / 1 / 3 s) la erori de conexiune (`ESOCKET`, `ETIMEOUT`, `ECONNCLOSED`, `ECONNRESET`) și la codurile 40613, 40197, 40501, 49918–49920, 10928, 10929, 4221, 233, 64, 1205. O scriere din afara unei tranzacții se reîncearcă doar dacă nu a ajuns la server (eroare la obținerea conexiunii) sau a fost respinsă înainte de execuție (40501, 49918–49920, 10928, 10929, 1205); altfel nu se știe dacă s-a salvat, deci eroarea urcă. Epuizat → `DbUnavailableError` → 503.
+- **Erori de pornire** → mesajele din FD-AZURE §2: `ELOGIN` / 18456 (utilizator / parolă), 40615 (IP-ul din mesaj nu e în firewall), 4060 (baza nu există sau lipsește accesul), `ESOCKET` / `ETIMEOUT` / `EINSTLOOKUP` (serverul nu răspunde, cu cuvintele driverului la „Detaliu”).
+  - Corectat 2026-10-14, după prima pornire pe App Service: tedious trimite un login refuzat (firewall, parolă, bază) ca `ConnectionError` cu codul `ELOGIN`, fără număr de eroare.
+    - Pornirea îl reîncerca drept trecător, iar după reîncercări rămânea doar `DbUnavailableError`, raportat ca „serverul nu răspunde”.
+    - Acum `connectRetryable` nu reîncearcă un `ELOGIN`, decât dacă tedious l-a marcat trecător (`isTransient`, de exemplu o bază în mutare).
+    - `explainConnectError` citește cauza unui `DbUnavailableError`.
+    - Teste: `db/connect-errors.test.ts`, cu erorile construite ca ale driverului.
+- `info()`: serverul din config, `DB_NAME()`, `DATABASEPROPERTYEX(… 'Edition' | 'ServiceObjective' | 'MaxSizeInBytes')`, mărimea din `sys.dm_db_partition_stats` (`reserved_page_count · 8 KB`); fără permisiunea `VIEW DATABASE STATE` (utilizatorii de test) → `null`.
+
+### 3. Schema (`server/db/schema.ts`)
+- `schema_version(version INT)` + listă de migrări T-SQL care doar crește. Fiecare migrare e o listă de loturi (fără `GO`). Toate migrările lipsă rulează într-o singură tranzacție, sub lock-ul de scriere (§2), deci două procese care pornesc deodată nu migrează de două ori (al doilea găsește versiunea la zi). Existența tabelelor se verifică cu nume calificate (`QUOTENAME(SCHEMA_NAME()) + '.schema_version'`), ca un utilizator de test să nu vadă tabelele din `dbo`.
+- **Migrarea 1** = starea finală a celor 8 migrări SQLite, plus `job_lease`. Conversii:
+
+| SQLite | Azure SQL |
+|---|---|
+| `INTEGER` timp (ms) | `BIGINT` |
+| `INTEGER` contor / boolean (0 / 1) / poziție | `INT`; `passkeys.counter` → `BIGINT` (contorul WebAuthn e pe 32 de biți fără semn) |
+| `INTEGER PRIMARY KEY [AUTOINCREMENT]` | `INT IDENTITY(1,1)` |
+| `REAL` | `FLOAT` |
+| `BLOB` | `VARBINARY(MAX)` |
+| `TEXT` cheie / în index | `NVARCHAR(n)` cu `n` pe măsură (PK ≤ 450 de caractere), colația `Latin1_General_100_BIN2` |
+| `TEXT` liber (titluri, rezumate, JSON, URL-uri) | `NVARCHAR(MAX)`, `Latin1_General_100_BIN2` |
+| `TEXT … COLLATE NOCASE` (emailuri) | `NVARCHAR(320) COLLATE Latin1_General_100_CI_AS` |
+| `UNIQUE` pe coloană care poate fi `NULL` (`users.email`) | index unic filtrat `WHERE email IS NOT NULL` (SQL Server permite un singur `NULL` într-un `UNIQUE` simplu) |
+| `UNIQUE` pe text lung (`sources.url`, `passkeys.credential_id`) | coloană calculată `… AS CAST(HASHBYTES('SHA2_256', col) AS BINARY(32)) PERSISTED` + index unic pe ea (cheia unui index are maxim 1700 de octeți) |
+| index pe `news.canonical_url` | `canonical_hash` calculat + index; la ingest, hash-urile adreselor unui lot se calculează în SQL din lista JSON (`HASHBYTES('SHA2_256', value)`), iar adresa găsită se compară apoi exact |
+
+- **Identitățile** continuă după cele importate (`IDENTITY_INSERT`). Spre deosebire de SQLite, un `INSERT` respins (de exemplu un email duplicat) consumă totuși un număr, deci id-urile pot avea goluri. Nimic din aplicație nu presupune id-uri consecutive.
+- **Colația**: comparațiile și ordonările rămân exact ca în SQLite (binar, sensibil la litere mari / mici) pentru tot textul, în afară de emailuri, indiferent de colația implicită a bazei create de utilizator. Unde un text din `OPENJSON` se compară cu o coloană, primește `COLLATE Latin1_General_100_BIN2` explicit (altfel: „collation conflict”). Diferență acceptată: SQL Server ignoră spațiile de la final în `=` (textele sunt deja curățate la intrare).
+- `ON DELETE CASCADE` ca în SQLite; nu există două drumuri de cascadă spre același tabel (verificat: `users → mcp_grants → mcp_tokens`, `users → exchange_accounts → cost_basis`, `sources → news → news_coins`).
+- Rândul inițial al adminului (id 1, fără email și parolă): `SET IDENTITY_INSERT users ON`, timpul din `DATEDIFF_BIG(MILLISECOND, '19700101', SYSUTCDATETIME())`.
+- `TABLES` (ordinea de ștergere, copiii întâi) e exportată pentru teste și import; un test verifică faptul că acoperă toate tabelele din schemă.
+
+### 4. Dialectul (conversia interogărilor)
+| SQLite | T-SQL |
+|---|---|
+| `INSERT … ON CONFLICT(k) DO UPDATE SET c = excluded.c` | `UPDATE t SET c = @c WHERE k = @k; IF @@ROWCOUNT = 0 INSERT …` (parametri numiți; fără cursă, pentru că scrierile sunt serializate) |
+| `INSERT OR IGNORE` | `INSERT … SELECT … WHERE NOT EXISTS (…)` |
+| `INSERT OR REPLACE` (`calendar_raw`) | upsert-ul de mai sus, cu toate coloanele |
+| `LIMIT n` | `TOP (n)` (parametrul se mută la începutul listei) |
+| `group_concat(x)` | `STRING_AGG(x, ',')` |
+| `json_each(?)` | `OPENJSON(?)` + `COLLATE` |
+| `substr(x, 1, instr(x, ':') - 1)` | `LEFT(x, CASE WHEN CHARINDEX(':', x) > 0 THEN CHARINDEX(':', x) - 1 ELSE 0 END)` (`LEFT` cu lungime negativă dă eroare) |
+| `expr AS flag` (boolean în `SELECT`) | `CASE WHEN expr THEN 1 ELSE 0 END` |
+| `CASE WHEN ? THEN` | `CASE WHEN ? = 1 THEN` |
+| `PRAGMA optimize` | scos (statisticile sunt automate) |
+| interogări fără `ORDER BY` al căror rezultat contează ca ordine | `ORDER BY` explicit (SQL Server nu garantează ordinea de inserare) |
+
+### 5. Codul devine asincron
+- Toate metodele care ating baza devin `async`, împreună cu apelanții lor: `createContext` (seed-ul surselor, setările, adminul), serviciile, rutele (deja `async`), job-urile, `Scheduler` (`job_state`), scripturile.
+- Apelurile date ca funcții sincrone devin asincrone: cheia Twelve Data pentru `StockData`, setările Resend pentru `Mailer`, `userActive` pentru `OAuthService`.
+- **Fiecare secvență citire → decizie → scriere** care până acum era atomică pentru că SQLite e sincron intră într-un `db.tx`: aprobarea cererilor de cont, activarea, prima parolă, resetarea, TOTP (pasul folosit, codurile de recuperare), passkey (contorul), înregistrarea clienților OAuth și schimbul codurilor / rotația tokenurilor, favoritele (poziția următoare, limita), conturile (limita), evenimentele personale (limita), sursele, ingestul știrilor, scorarea, upsert-urile.
+- Cache-urile din memorie se actualizează după `COMMIT`, nu înainte, și expiră, pentru că alt proces poate schimba aceeași bază: setările după 30 s (`SETTINGS_TTL_MS`), detectorul de monede (favoritele tuturor) după 5 minute.
+- Limitatorul de încercări (login, codul 2FA, acțiunile cu parolă din Securitate) tratează încercările aceluiași apelant una după alta (`Throttle.serial`). Altfel, încercări trimise în paralel ar fi trecut toate de verificare înainte să fie numărată vreuna. Cererile de cont se numără înainte de răspunsul bazei, dar doar cele valide.
+- Mailurile pleacă în fundal (răspunsul durează la fel, cu sau fără mail) și își citesc setările din bază, deci linkul apare în jurnal puțin după răspuns.
+
+### 6. Joburile pe o singură instanță (`job_lease`)
+- Tabel `job_lease(name PK, owner, host, expires_at BIGINT)`; fiecare proces are un `owner` aleator și `host` = numele mașinii.
+- La pornire și apoi la fiecare 20 s, `Scheduler` încearcă să ia / să prelungească contractul (60 s), în tranzacție, cu timpul serverului (`SYSUTCDATETIME`, nu ceasul local): îl ia dacă e al lui sau a expirat.
+- Lider: rulează job-urile ca până acum. La câștigarea contractului își programează job-urile ca la o pornire. La pierderea lui își oprește timerele (rularea curentă se termină).
+- Celelalte procese nu rulează job-uri (`nudge` e ignorat). `trigger` rulează local oricum: scanarea cerută din interfață și cea pornită de `GET /api/scanner` pe un proces care nu e lider (rezultatele scanner-ului sunt în memoria fiecărui proces), cel mult o dată pe minut.
+- La oprire contractul e eliberat (`expires_at = 0`), ca noua instanță dintr-o actualizare să preia imediat.
+- `/api/health` primește `jobsLeader: { host, self }`, citit din contract (`currentLeader`), deci corect și pe un proces cu joburile oprite.
+
+### 7. În spatele Azure App Service (`proxy = 'azure'`)
+- `registerSecurity` pune pe fiecare cerere `req.clientIp`, `req.viaHttps` și `req.behindProxy` (`clientIpOf`, `viaHttpsOf`, `http/security.ts`):
+  - `clientIp`: `X-Client-IP` (pus și suprascris de front-end-ul App Service) dacă e un IP valid; altfel ultimul element din `X-Forwarded-For` (cel adăugat de front-end), fără port (App Service pune `ip:port`); altfel socket-ul. În afara Azure: socket-ul (ca înainte), iar header-ele sunt ignorate. Înlocuiește `req.ip` peste tot (limite, sesiuni, OAuth).
+  - `viaHttps`: `X-Forwarded-Proto` = `https` în modul Azure, altfel `req.protocol`. Folosit pentru cookie-ul `Secure`, passkey (RP) și linkuri. `trustProxy` din Fastify rămâne oprit (ar lua `ip:port` drept IP).
+- `isLoopback(req)` e mereu fals în spatele proxy-ului (prima parolă de admin nu se poate seta de acolo).
+- `GET /robots933456.txt` (sonda de pornire App Service) → 404 înaintea verificării gazdei.
+- `Strict-Transport-Security: max-age=31536000` pe răspunsurile HTTPS.
+
+### 8. Pornire (`main.ts`)
+Pașii pornirii:
+1. `loadConfig`: dacă `db` lipsește, mesaj în jurnal și ieșire cu cod 1.
+2. `Db.open`: conectare și migrare; erorile sunt traduse.
+3. `createContext(config, log, { db })`. Dacă nu există cheia master (`SecretBox.available`), dar baza are ceva criptat (conturi, cheile aplicației, secrete TOTP), refuză în loc să facă o cheie nouă.
+4. Aplicația, apoi job-urile (dacă nu sunt oprite).
+
+O eroare la pașii 2–4 e scrisă în jurnal și oprește procesul cu cod 1. La oprire: `app.close`, `scheduler.stop` (eliberează contractul), `db.close`.
+
+### 9. Importul (`scripts/import-sqlite.ts`, `sentiq.sh import-sqlite [--replace]`)
+1. Dacă `http://localhost:<port>/api/ping` răspunde → refuză (FD-AZURE §3), cu `--force` ca ieșire.
+2. Copie consistentă a fișierului (`VACUUM INTO` într-un fișier temporar; dacă nu merge, fișierul împreună cu `-wal` și `-shm`). Dacă `user_version` < 8, pe copie se aplică migrările SQLite vechi (`db/sqlite-legacy.ts`, codul SQLite de dinainte, păstrat doar pentru import și testele lui). La > 8, refuză.
+3. `Db.open` pe Azure (migrează schema). Baza e „goală” dacă nu are niciun utilizator cu email sau parolă, nicio știre și niciun cont de exchange. Seed-ul unei porniri anterioare pe baza nouă (surse, setări, cele 3 favorite) nu contează ca date. Altfel e nevoie de `--replace`.
+4. O singură tranzacție: șterge toate rândurile (ordinea din `TABLES`), apoi copiază tabelele în ordinea părinte → copil, în `INSERT`-uri pe mai multe rânduri (≤ 1000 de rânduri și ≤ 2000 de parametri pe instrucțiune), cu `IDENTITY_INSERT` pe tabelele cu identitate. Coloanele = cele comune ambelor scheme (fără cele calculate). `BLOB` → `Buffer`.
+5. Verifică numărul de rânduri pe tabel (în tranzacție). Dacă există cheia master (`SecretBox.available`), încearcă să deschidă o cheie salvată cu ea (avertisment dacă nu merge). Dacă nu există, avertizează: o cheie nouă nu se face niciodată aici. Afișează un rezumat (tabel: rânduri).
+
+### 10. Testele în aceeași bază (`server/test/`)
+- `vitest.config.ts`: `globalSetup` + maxim 4 workeri (baza e mică); setup-ul face câte o schemă pentru fiecare worker posibil (`maxWorkers`).
+- `global-setup.ts` (cu utilizatorul din `data/database.env`):
+  1. șterge resturile mai vechi de 3 ore ale altor rulări (`t_<yyyymmddhhmm>_…`);
+  2. pentru fiecare worker creează un utilizator conținut cu parolă aleatoare și o schemă cu același nume (`CREATE USER … WITH PASSWORD, DEFAULT_SCHEMA`; `CREATE SCHEMA … AUTHORIZATION`; `GRANT CREATE TABLE`; `DENY SELECT, INSERT, UPDATE, DELETE, ALTER, REFERENCES, EXECUTE ON SCHEMA::dbo`);
+  3. migrează schema fiecăruia;
+  4. dă credențialele workerilor prin `project.provide`;
+  5. la final șterge (cheile străine, tabelele, schema, utilizatorul).
+- `testDb()`: un `Db` pe utilizatorul workerului (`VITEST_POOL_ID`), cu pool comun pe worker (`close()` nu-l închide). La fiecare apel, într-o tranzacție, golește toate tabelele în afară de `schema_version`, resetează identitățile (doar unde au fost folosite: `sys.identity_columns.last_value`) și pune la loc rândul adminului — echivalentul unei baze noi `:memory:`.
+- Un utilizator de test nu poate citi sau scrie în `dbo`, deci un test greșit nu atinge datele reale. Lock-ul de scriere e per schemă, deci testele nu blochează aplicația.
+- Testele migrărilor SQLite rămân (`sqlite-legacy.test.ts`: importul unui fișier mai vechi le folosește); testele importului pornesc de la o bază SQLite v8 cu date de probă și verifică în Azure rândurile, tipurile, identitățile, BLOB-urile, emailurile fără diferență de litere și hash-ul URL-urilor.
+
+### 11. Lansatorul și scripturile
+- `sentiq.sh start`: înainte de pornire verifică faptul că există configurația bazei. Altfel afișează mesajul din FD-AZURE §2 și nu pornește.
+- Comenzi noi:
+  - `import-sqlite [--replace] [--force]`: §9;
+  - `db-check`: `scripts/db-check.ts` — conectare, server, bază, nivel, spațiu, versiunea schemei, nivelul de compatibilitate (≥ 130 pentru `OPENJSON`), dacă utilizatorul e `db_owner` și dacă e adminul serverului (`dbo`, care ajunge și la celelalte baze); fără parolă.
+- `scripts/admin.ts` folosește `Db.open` pe baza din `data/database.env`; `scripts/smoke.ts` rulează într-o schemă de test temporară (ca testele), ștearsă la final.
+- `docs/deploy-azure.md`: pașii pentru App Service.
+  - Planul: B1 Linux, în aceeași regiune cu serverul bazei, o instanță; B2 din 14 oct 2026 seara (build-ul nu încăpea lângă aplicație pe B1).
+  - Runtime-ul: Node 24 LTS, cu startup `node src/server/main.ts`.
+  - Setările:
+    - Always On, HTTPS only, TLS ≥ 1.2;
+    - FTP oprit, publicarea cu parolă (basic auth) oprită;
+    - health check `/api/ping`.
+  - Variabilele de mediu: `SENTIQ_DB_*`, `SENTIQ_MASTER_KEY` din Key Vault, `SENTIQ_PUBLIC_URL`, `NODE_ENV=production`, `SCM_DO_BUILD_DURING_DEPLOYMENT=true` (build-ul se face pe Linux, deci `onnxruntime-node` și `sharp` primesc binarele potrivite).
+  - Build-ul (corectat 2026-10-14, după prima publicare eșuată): `CUSTOM_BUILD_COMMAND=bash scripts/azure-build.sh`.
+    - Problema: Oryx face implicit `npm install` + `npm run build`, dar cu `NODE_ENV=production` npm sare peste devDependencies, iar `vite build` pica („vite: not found”).
+    - Scriptul face `npm ci --include=dev`, apoi `npm run build`, apoi `npm prune --omit=dev`, ca la pornire să se despacheteze doar dependențele serverului.
+    - Tot el exportă `ONNXRUNTIME_NODE_INSTALL=skip`: pe Linux x64, `onnxruntime-node` ar descărca fișierele CUDA (sute de MB), iar modelul rulează pe CPU, cu binarele din pachet.
+    - Verificat local: scriptul rulat cu `NODE_ENV=production` pe o copie a zip-ului, apoi serverul pornit din copie (dependențe fără dev) pe o schemă de test.
+  - Firewall-ul Azure SQL: **toate** IP-urile de ieșire ale aplicației (`outboundIpAddresses`; aplicația iese prin oricare dintre ele).
+  - Domeniul și certificatul gestionat.
+  - Publicarea: zip deploy.
+
+### 12. Riscuri
+| Risc | Atenuare |
+|---|---|
+| Latența: fiecare interogare face un drum la server (~1–2 ms din aceeași regiune, ~40–60 ms de pe Mac) | scrierile simple într-un singur drum; loturi la ingest, la import și la reset-ul testelor; citirile independente ale paginii Stare sistem și ale setărilor deodată; App Service și baza în aceeași regiune |
+| Concurența apărută odată cu asincronul | lock-ul de scriere + tranzacții pe toate secvențele citire → scriere (§5); review dedicat |
+| Două instanțe pe aceeași bază | `job_lease` (§6) + scrieri serializate |
+| Testele încarcă baza reală (S0, 10 DTU) | maxim 4 workeri, scheme separate, lock per schemă |
+| Uitarea `await` (o scriere care nu mai așteaptă) | tsc (tipurile `Promise`) + o căutare a apelurilor fără `await` / `return` la fiecare review |
+| Parola în jurnal | nu se scrie niciodată; redactare pentru `Password=` / `pwd=` |
+| Node 24 pe App Service (pe Mac e 25) | doar API-uri disponibile în 24 (`engines >= 24`); pornirea verificată pe Node 24.21 |
+| Rosetta / Docker | nefolosite: nu e nevoie de un SQL Server local |
+
+## TD-ONLINE — implementează FD-ONLINE
+
+### 1. Connectorul
+Doar configurare: app setting `SENTIQ_MCP=1` pe `sentiq` (App Service); `SENTIQ_PUBLIC_URL=https://sentiq.money` era deja pus de utilizator, iar domeniul e legat cu certificat SNI. Codul FD-MCP rămâne neschimbat.
+
+### 2. Adresa publică în bază
+- Rândul `settings` cu cheia `public_instance`, valoare JSON `{ "url": "https://sentiq.money", "mcp": true, "at": <ms> }`.
+- `publishPublicInstance(db, config)` (în `settings.ts`), chemat din `createContext` după `seedSources`:
+  - `config.publicUrl` setat și hostul nu e loopback → `UPSERT_SETTING`;
+  - altfel, dacă `config.proxy === 'azure'` (App Service fără adresă publică) → `DELETE`;
+  - altfel (Mac, teste) → nimic.
+- `SettingsService.publicInstance()`: citește rândul, îl verifică prin `parsePublicInstance` (`url` trecut prin `parsePublicUrl` și nu loopback; `mcp` e adevărat doar pentru `true`) și îl ține în cache `SETTINGS_TTL_MS` (30 s). Rezultatul e `{ url, mcp } | null`; un JSON stricat sau o adresă nevalidă dau `null`.
+- `publicBase(ctx)` (în `http/auth-routes.ts`): `ctx.config.publicUrl ?? (await ctx.settings.publicInstance())?.url ?? null`.
+- `linkBase(req)` devine asincron: `publicBase ?? originOf(req)`. Îl folosesc linkul de activare și emailul către admin despre o cerere nouă. Linkul de parolă uitată rămâne pe `originOf(req)`, adică adresa de pe care a fost cerut.
+
+### 3. Connectorul văzut de pe o instanță fără el
+- `oauth.ts`: `listConnections(db, userId, now)` și `revokeGrantIn(db, log, id, userId, why, now)` devin funcții de modul. `OAuthService.connections` / `revokeGrant` le cheamă, deci comportamentul rămâne același.
+- `registerMcpApi(app, ctx)` primește contextul (avea doar `oauth`):
+  - `GET /api/mcp/status`:
+    - cu `ctx.oauth`: ca înainte;
+    - altfel, cu `publicInstance()?.mcp`: `{ enabled: true, url: <url>/mcp, connections }`;
+    - altfel: `{ enabled: false }`.
+  - `DELETE /api/mcp/connections/:id`: cu `ctx.oauth` → `oauth.revokeGrant`; altfel, cu `publicInstance()?.mcp` → `revokeGrantIn(…, userId)`; altfel 404.
+  - Rutele consimțământului (`/api/oauth/requests/:id`) rămân doar pe instanța cu `oauth`. Cererile sunt în memoria ei.
+
+### 4. Starea de login și textele
+- `AuthState.publicUrl?: string | null` (`publicBase`; opțional, lipsește la un server mai vechi). Pagina de login o folosește în nota despre passkey-uri (FD-ONLINE §3).
+- `App.tsx` / `OfflineBanner`: textul pentru Mac doar când `location.hostname` e `localhost`, `127.0.0.1` sau `[::1]`; altfel textul general.
+- Textele din `Settings.tsx`, `SettingsAdmin.tsx` (motorul de sentiment, emailul), `AccountWizard.tsx`, `Security.tsx` și `Auth.tsx`, ca în FD-ONLINE §3; în jurnalul de pornire, nota despre passkey-uri pe adresele din rețea (`main.ts`).
+
+### 5. Teste
+- `publishPublicInstance`: scrie pentru o adresă publică; nu scrie pentru loopback; șterge pe Azure fără adresă; nu atinge nimic local.
+- `publicInstance()`: valoare validă, JSON stricat, loopback ignorat, cache-ul.
+- Linkul de activare pe o instanță fără `SENTIQ_PUBLIC_URL`, dar cu adresa în bază → `https://…/activate?token=`.
+- `/api/mcp/status` fără connector local, dar cu `public_instance.mcp` → `enabled`, `url`, conexiunile utilizatorului (nu ale altuia); `DELETE` pe o conexiune proprie → revocată; pe una străină → 404.
+- `/api/auth/state` → `publicUrl`.
+
+## TD-ADMINSET — implementează FD-ADMINSET
+
+### 1. Rute și fișiere
+- `App.tsx`:
+  - `/settings` → `SettingsPage`;
+  - `/settings/admin` → `AdminSettingsPage`, doar pentru admin (altfel „Pagina nu există.”, ca `/users`).
+  - Linkul „Setări” din meniu nu are `end`, deci rămâne activ și pe fila Admin.
+  - Căutarea primește `{ to: '/settings/admin', label: 'Setări admin', admin: true }`, într-o listă doar pentru căutare (`SEARCH_PAGES`).
+- `components/SettingsTabs.tsx`: bara cu file (`NavLink`-uri cu `end`, fila activă subliniată cu `border-accent`, `aria-current="page"` pus de router). Apare doar pentru admin.
+- `pages/Settings.tsx` („Ale mele”): Favorite (`#watchlist`), Conturi (`#accounts`), Grafice și scanner (`#market`), General (`#general`, doar fusul orar).
+- `pages/SettingsAdmin.tsx` („Admin”): nota „Aceste setări se aplică tuturor utilizatorilor.”, apoi Surse de știri (`#sources`), Motorul de sentiment (`#sentiment`), Date de piață (`#market-data`: cheia Twelve Data și consumul), Păstrarea știrilor (`#retention`), Email (`#email`).
+- `hooks.ts`: `useSaveSettings()` (mutat din `Settings.tsx`) și `useHashScroll(ready)` (derularea la ancoră, folosită de ambele pagini). `ready` așteaptă și listele de deasupra ancorei: sursele pe Admin, favoritele și conturile pe „Ale mele”; altfel ancora ar fi împinsă în jos când se încarcă.
+- Linkuri: `DaySummary.tsx` → `/settings/admin#sentiment`; `Charts.tsx` → `/settings/admin#market-data`.
+
+### 2. Server
+- `SettingsService.viewFor`: pentru un utilizator care nu e admin, `resendKeySet`, `resendKeyHint`, `resendFrom` și `resendDev` nu mai apar în răspuns (sunt opționale în `SettingsView`).
+- Restul (403 la cheile globale, `USER_KEYS`) rămâne neschimbat.
+
+### 3. Teste
+- `GET /api/settings` ca utilizator: fără câmpurile Resend; ca admin: cu ele.
+- Interfața: verificată în Chrome (admin: ambele file, ancorele, căutarea; utilizator: fără file, `/settings/admin` → „Pagina nu există.”).
+
+## TD-AUTOFEED — implementează FD-AUTOFEED
+- `syncStockSources(db, added?)`:
+  - un feed automat (`auto = 'nasdaq:SYM'`) al cărui simbol nu mai e în niciun `watchlist` se **șterge** (`DELETE FROM sources`). Știrile lui pleacă prin `ON DELETE CASCADE` (`news` → `news_coins`);
+  - întoarce simbolurile șterse, iar apelanții (pornirea, mentenanța, schimbarea favoritelor, ștergerea unui utilizator) le scriu în jurnal (`news: removed the automatic feed of BSOL (in nobody's favourites)`);
+  - totul rămâne într-o singură tranzacție, ca înainte.
+- Pornirea (`createContext`) rulează deja `syncStockSources`, deci feed-urile rămase de dinainte se șterg la prima pornire.
+- `Settings → Admin → Surse`: textul etichetei „automată” (FD-AUTOFEED §2).
+- Teste (`news.test.ts`):
+  - acțiunea scoasă din singurele favorite → feed-ul și știrile lui șterse;
+  - acțiunea încă în favoritele altui utilizator → feed-ul rămâne;
+  - un feed automat oprit de admin, cu acțiunea încă în favorite → rămâne oprit;
+  - un feed rămas de dinainte (oprit, cu știri, fără favorite) → șters la `syncStockSources`;
+  - o sursă manuală cu aceeași adresă → nu se dublează și rămâne după ce acțiunea iese din favorite.
+
+## TD-TODAYGRID — implementează FD-TODAYGRID
+- `TodayPage`: ordinea `SentimentTile`, `NextEventTile`, `LiveNewsTile`, `DriversTile`, `HistoryTile`, `CoinsTile`.
+- Clase:
+  - `SentimentTile`: `md:row-span-2 xl:col-span-7` (era `md:col-span-2 xl:row-span-2`): de la 768 px are coloana stângă și două rânduri, iar `NextEventTile` și `LiveNewsTile` intră singure în dreapta, unul sub altul. E și `@container`: categoriile sunt `grid-cols-2 @lg:grid-cols-4` (după lățimea plăcii, nu a ecranului); etichetele „Negativ” / „Pozitiv” ale spectrului și „, N știri” sunt `@max-sm:hidden`;
+  - `DriversTile`: `xl:col-span-7`;
+  - `HistoryTile`: `xl:col-span-5`;
+  - secțiunea favoritelor: `md:col-span-2 xl:col-span-12`.
+- Grila rămâne `md:grid-cols-2 xl:grid-cols-12`. Cele două plăci au aceeași înălțime (`stretch`); graficul celor 30 de zile își păstrează `h-16` sus în placă.
+- Verificat în Chrome la 1600 / 1440 / 1280 / 1024 / 800 / 390 px de lățime, cu 14 favorite și cu știrile și calendarul reale din ultimele 36 de ore, copiate într-o schemă de test.
+
+## TD-MARKETSRC — implementează FD-MARKETSRC
+
+### 1. Setări (`shared/settings.ts`, `server/settings.ts`)
+- `MARKET_EXCHANGES` = `kucoin, binance, bybit, okx, bitget`.
+- `market` (al fiecăruia) = `{ exchange?, defaultTf }`.
+  - `exchange` e acum doar **preferința** dintre exchange-urile conectate, opțională: lipsește până când utilizatorul alege (atunci contează primul adăugat); o valoare salvată înainte contează ca alegere;
+  - `candles` iese din grupul personal (zod îl ignoră în rândurile vechi).
+- `marketData` (global, doar adminul) = `{ exchange: MARKET_EXCHANGES = 'kucoin', candles: 1500 | 3000 | 5000 = 1500 }`. Nu e în `USER_KEYS`.
+- `SCANNER_TFS = ['15m', '1h', '4h', '1d']` (comutatorul de pe Azi; toate cinci exchange-uri le au).
+- `SettingsService.migrateMarketData(adminId)`, la pornire, după `migrateLegacyToAdmin`: dacă rândul global nu are `marketData`, ia `market.exchange` și `market.candles` din rândul personal (JSON brut) al adminului, validate. Scrierea se face prin `writeGlobal`, în tranzacție, deci o singură dată pe Mac + Azure.
+
+### 2. Sursa prețurilor (`market/source.ts`, nou)
+`MarketSource(db, settings, market)`:
+- `connected(userId)`: `SELECT exchange FROM exchange_accounts WHERE user_id = ? ORDER BY id`, păstrate doar cele din `MARKET_EXCHANGES`, fără dubluri. Cache 30 s pe utilizator; `forget(userId)` îl golește.
+- `forUser(userId)` → `{ exchange, connected, defaultExchange, candles }`:
+  - un singur exchange conectat → acela;
+  - mai multe → `market.exchange` dacă e printre ele, altfel primul;
+  - niciunul → `marketData.exchange`.
+- `forSymbol(userId, symbol, tf?)`: exchange-ul utilizatorului dacă listează perechea (și are `tf`, când e dat); altfel cel implicit, dacă el o listează (și are `tf`); altfel tot al utilizatorului (eroarea lui ajunge la pagină). Perechea trece la cel implicit doar când se știe că exchange-ul utilizatorului n-o are: dacă piețele lui nu se pot citi (pană), rămâne al lui.
+
+`MarketData` primește:
+- `lists(id, symbol)`: perechea spot, activă, în `loadMarkets`;
+- `timeframes(id)`: cheile lui `ex.timeframes` care sunt în `TIMEFRAMES`.
+
+### 3. API
+- `GET /api/market/source?symbol=` → `{ exchange, userExchange, connected, defaultExchange, candles, timeframes }`.
+  - `exchange` e cel folosit pentru `symbol` (fără `symbol`: al utilizatorului);
+  - `timeframes` sunt cele pe care le are `exchange`.
+- `GET /api/market/candles`:
+  - fără `exchange` → `forSymbol(user, symbol)`. Un `exchange` explicit (un tab vechi) e încă acceptat;
+  - `limit` implicit = `marketData.candles`.
+- `GET /api/market/symbols?q=` → caută pe exchange-ul utilizatorului și pe cel implicit; rezultatele se unesc după `symbol` (ale utilizatorului întâi), maximum 50.
+- `POST /api/accounts` și `DELETE /api/accounts/:id` → `marketSource.forget(userId)` și `nudge('scanner')`.
+- `/api/scanner` (încă fără rezultat) → `exchange` din `forUser`.
+
+### 4. Scanner și connector
+- `Scanner.runFor`: `forSymbol(userId, symbol, s.scanner.tf)` pentru fiecare monedă. Cheia de memo conține exchange-ul. Istoricul vine din `marketData.candles`, la fel pentru rândurile de acțiuni.
+- `ScanResult.exchange` = al utilizatorului.
+- `mcp/server.ts` `get_chart`: `forSymbol` + `marketData.candles`.
+
+### 5. Interfață
+- `hooks.ts`: `useMarketSource(symbol?)` (cheia `['market-source', symbol ?? '']`, `staleTime` 30 s).
+- `MarketStrip.useSparks`: fără `exchange` în cerere; cheia `['spark', userExchange, symbol]`, ca să se reîncarce la o schimbare.
+- `CommandPalette`: cheia simbolurilor include `userExchange`.
+- `Charts.tsx`:
+  - pentru crypto: `useMarketSource(symbol)`; butoanele timeframe-urilor pe care exchange-ul nu le are sunt dezactivate (`title` „<Exchange> nu are 8h”);
+  - `activeTf` = cel mai apropiat disponibil (`nearestTimeframe`, fostul `stockTimeframe`, comun cu acțiunile), cu nota „<Exchange> nu are X; graficul arată Y”;
+  - Market Structure: `htfAvailable` și pentru crypto;
+  - numele exchange-ului din `candles.data.exchange`; `limit` din `settings.marketData.candles`; `viewKey` cu exchange-ul sursei;
+  - cererile fără `exchange`.
+- `Settings.tsx` („Ale mele”): fără `MarketSection`. În Conturi, cu ≥ 2 exchange-uri dintre cele 5 conectate: „Prețurile crypto vin de la:” (segment cu logo-uri), care salvează `market.exchange` și invalidează `market-source`, `spark`, `candles`, `scanner`.
+- `SettingsAdmin.tsx` → Date de piață: „Exchange implicit pentru prețurile crypto” și „Istoric încărcat pe grafice”, apoi Twelve Data.
+- `Today.tsx`: deasupra favoritelor, „Semnale Slingshot” cu segmentul `SCANNER_TFS` (plus valoarea salvată, dacă e alta); salvează `scanner.tf`.
+- `AccountWizard` (cont adăugat) și ștergerea unui cont: invalidează `market-source`, `spark`, `candles`, `scanner`.
+- Numele exchange-urilor (`EXCHANGE_NAME`): plus Bitget.
+
+### 6. Teste
+- `MarketSource`:
+  - fără conturi → implicit;
+  - un cont Kraken → implicit;
+  - un cont Bybit → Bybit;
+  - Binance + Bybit cu preferința Bybit → Bybit; fără preferință → primul;
+  - perechea lipsă → implicit;
+  - timeframe lipsă → implicit;
+  - piețele care nu se încarcă → al utilizatorului;
+  - `forget`.
+- Migrarea `marketData` din setările adminului; un rând personal vechi cu `market.candles` se citește fără eroare.
+- Rutele: `/api/market/source`, `/api/market/candles` fără `exchange` (sursa aleasă după cont), `/api/market/symbols` unite, contul adăugat schimbă sursa.
+- Interfața, în Chrome pe o schemă de test: „Ale mele” fără secțiune; alegerea cu două conturi; Admin → Date de piață; comutatorul de pe Azi; graficul cu OKX (8h dezactivat).
+
+## TD-TRADESTATS — implementează FD-TRADESTATS
+
+### 1. Soldul futures (în `Portfolio`)
+- `Portfolio.totals.futuresAvailable: number | null`; o eroare în `errors.futures` (secțiunea „Cont futures”).
+- Citit în `AccountsService.load` (crypto), în paralel cu restul, cu `FUTURES_BALANCE[exchange]`:
+| Exchange | Apel ccxt (clientul spot) | Valoare |
+|---|---|---|
+| KuCoin | `fetchBalance({ type: 'contract', code: 'USDT' })` (în modul UTA ccxt citește contul unificat) | `free.USDT` |
+| Binance | `fetchBalance({ type: 'future' })` | `free.USDT` |
+| Bybit, OKX | `fetchBalance()` (cont unificat) | `free.USDT` |
+| Bitget | `fetchBalance({ type: 'swap' })` | `free.USDT` |
+| Kraken, Coinbase | – | `null` (fără futures) |
+- Brokerii: `futuresAvailable: null`.
+
+### 2. Statisticile pozițiilor închise
+- `AccountsService.tradeStats(accountId, period, tz)` → `TradeStats`:
+  - `{ period, from, to, supported, wins, losses, breakeven, successRate, net, netPartial, currency: 'USD', error, fetchedAt }`;
+  - `period` ∈ `today | 7d | 30d | 90d`; `from` = 00:00 de azi în `tz` (Azi) sau acum − N zile; `to` = acum.
+- Doar crypto, doar exchange-urile cu `fetchPositionsHistory` în ccxt: KuCoin (clientul spot alege singur UTA sau clasic), Bybit (`subType: 'linear'`), OKX, Bitget. Pentru celelalte: `supported: false`.
+- **Ferestre de 7 zile** (limita KuCoin și Bybit), cerute câte 3 deodată.
+  - O fereastră care întoarce cât limita pe cerere (KuCoin 200, celelalte 100) se înjumătățește, recursiv, până sub limită (sau sub o oră).
+  - Pozițiile se deduplică după `id` (sau `info.closeId`), apoi se păstrează cele cu `lastUpdateTimestamp` (ora închiderii) în `[from, to]`.
+- Rezultatul unei poziții (`netResult`): `info.netProfit` la Bitget (cifra lui netă; `realizedPnl` din ccxt e `pnl`-ul brut); altfel `realizedPnl` (KuCoin `pnl`, Bybit `closedPnl`, OKX `realizedPnl`: toate după comisioane și funding).
+  - Decontarea e partea de după `:` din simbol (`BTC/USDT:USDT` → USDT).
+  - Stablecoins (USDT, USDC, …) → valoarea ca atare. Alte monede → `× preț` (`fetchTicker('<MONEDĂ>/USDT')`, o dată pe monedă). Fără preț → doar la numărare, `netPartial: true`.
+- Numărare: `> 0` câștig, `< 0` pierdere, `= 0` `breakeven`.
+  - `successRate` = `wins / (wins + losses) × 100` sau `null` fără tranzacții;
+  - `net` = suma rezultatelor convertite.
+- Cache în memorie: `(accountId, period)` → 5 minute; `force` îl ocolește. Cererile identice simultane se unesc (`inflight`).
+- Erori: `mapExchangeError` → `error: { code, message }`, cu `wins / losses / net = null`.
+- Reîncercări ca la portofoliu (`retryOn`).
+
+### 3. API
+- `GET /api/portfolio/:id/stats?period=today|7d|30d|90d&force=1`: contul trebuie să fie al utilizatorului (`ownAccount`); fusul orar vine din setările lui.
+
+### 4. Interfață (`Trades.tsx`)
+- Bara de sus: `[Tranzacții] [conturile] … [Reîmprospătează] [Adaugă un cont]`.
+  - „Reîmprospătează” (`useRefreshAccount(id)`) cere `/api/portfolio/:id?force=1` și `/stats?force=1` pentru perioada aleasă și pune rezultatele în cache.
+- `PortfolioView` (crypto): o grilă de 7 carduri (`grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7`), în ordinea din FD-TRADESTATS §2.
+  - Dedesubt: „Statistici pe” cu comutatorul `Azi · 7z · 30z · 90z` (localStorage `sentiq:trades-period`, cu `try/catch`) și rândul cu tipul contului și „actualizat acum …”.
+  - Query `['portfolio-stats', id, period]`, `staleTime` 60 s, `refetchInterval` 5 min.
+- `PortfolioView` (brokeri): neschimbat; doar butonul s-a mutat.
+- Cardul „Valoare în contul spot” are `title` cu explicația (FD-TRADESTATS §1).
+- `SECTION_RO.futures` = „Cont futures”.
+
+### 5. Setări → Favorite
+- Paragraful de sub titlu pierde `max-w-[75ch]`.
+
+### 6. Teste
+- `tradeStats` cu un client fals:
+  - ferestre de 7 zile și înjumătățirea unei ferestre pline;
+  - deduplicarea; pozițiile în afara perioadei;
+  - câștig / pierdere / zero; rata de succes; decontarea în monedă (cu și fără preț);
+  - „Azi” în fusul orar;
+  - exchange fără suport; eroarea; cache-ul și `force`.
+- Portofoliul: `futuresAvailable` pentru KuCoin (`type: 'contract'`), `null` pentru Kraken; eroarea în `errors.futures`.
+- Ruta: contul altui utilizator → 404; perioadă invalidă → 400.
+
+## TD-MCPMULTI — implementează FD-MCPMULTI
+- `config.ts`: `SENTIQ_MCP_CLIENTS` implicit = `claude.ai, claude.com, chatgpt.com, oauth-redirect.googleusercontent.com`.
+- `oauth.ts`:
+  - `resolveClient` (CIMD): documentul e acceptat dacă `token_endpoint_auth_method` lipsește sau e `none`, **sau** dacă `token_endpoint_auth_methods_supported` conține `none`.
+  - `register` (DCR): metoda cerută poate fi `none`, `client_secret_basic` sau `client_secret_post`. Clientul e salvat public, iar răspunsul are `token_endpoint_auth_method: 'none'` (RFC 7591 §3.2.1).
+  - Mesajele de refuz spun „aplicațiile AI acceptate”.
+- `routes.ts` `/oauth/token`: `client_id` din formular, altfel din antetul `Authorization: Basic` (partea dinaintea lui `:`, decodată URL), altfel din `client_assertion` (`sub`, apoi `iss`, din payload-ul JWT, fără verificarea semnăturii: PKCE și legarea codului de `client_id` + `redirect_uri` rămân verificarea). Textele paginii de eroare: „aplicația AI”.
+- `Consent.tsx`: titlul și listele cu `client.name` (de ex. „ChatGPT”, „Claude”, „Claude Code”); hostul rămâne afișat.
+- `Security.tsx`: panoul „Asistenți AI (connector)”, cu pașii pentru Claude, ChatGPT și Gemini (CLI și aplicație) și textele generale.
+- Teste (`mcp.test.ts`):
+  - documentul real ChatGPT (cu `private_key_jwt` + `none`) → autorizare, consimțământ, cod, schimb cu `client_id` în formular și în antetul Basic;
+  - un document doar cu `private_key_jwt` → refuzat;
+  - DCR în stilul Gemini (`client_secret_basic`, întoarcere `https://oauth-redirect.googleusercontent.com/r/abc`) → înregistrat ca public, conectare completă;
+  - un host necunoscut → refuzat;
+  - `client_assertion` cu `sub`.
+
+## TD-DBHEAL — implementează FD-DBHEAL
+- `Db.detached(fn)`: rulează `fn` cu `txStore.exit(fn)`, deci în afara oricărei tranzacții. Scheduler-ul îl folosește la reînnoirea lease-ului (`start` / `tick`) și la fiecare rulare de job (`execute`).
+- `Db.healStuckLock()`, chemat din `query()` (scrieri) și `tx()` (`begin` + lacăt) când lacătul nu vine (`isLockTimeout`):
+  - cel mult o dată la 60 s pe instanță;
+  - pe o conexiune din pool, fără lacăt, citește sesiunea care deține `APPLICATION` `sentiq:write:<schema>` (`sys.dm_tran_locks` + `dm_exec_sessions` + `dm_tran_session_transactions` / `dm_tran_active_transactions` + textul ultimei instrucțiuni);
+  - dacă `program_name = 'Sentiq'` și tranzacția are peste `STUCK_TX_MS` (5 min): o verifică din nou (aceeași sesiune, același `login_time`), apoi `KILL <spid>`; în jurnal `database: ended a stuck session …`;
+  - orice eroare (fără drept de `KILL`, DMV-uri indisponibile) → `false`, în liniște.
+  - Dacă a închis ceva, scrierea se mai încearcă o dată.
+- `program_name` vine din `appName: 'Sentiq'` (deja setat pe conexiuni).
+- `main.ts`: la SIGTERM / SIGINT, un temporizator de 15 s (`unref`) iese cu `process.exit(0)` dacă oprirea (`app.close`, `scheduler.stop`, `db.close`) nu s-a terminat.
+- Teste:
+  - `detached` (un apel din interiorul unei tranzacții nu i se alătură);
+  - reînnoirea lease-ului dintr-un context de tranzacție rămâne separată;
+  - decizia de vindecare pe rânduri simulate (vârstă, program, sesiunea schimbată) și limita de o dată pe minut.
+
+## TD-UIPOLISH — implementează FD-UIPOLISH
+- `Today.tsx`: `TrendArrow` (`TrendingUp` / `TrendingDown` din lucide, `text-bull` / `text-bear`, `role="img"` cu `aria-label` și `title` „Uptrend (Slingshot)” / „Downtrend (Slingshot)”) în locul cuvintelor; numele monedei e `truncate` într-un `min-w-0`.
+- `styles.css`: în `@layer base`, `input` (fără checkbox / radio / range / color) și `select` au `min-h-[38px]`, ca `.btn`; în `@media (pointer: coarse)` (`@layer components`), `.btn`, câmpurile și dropdown-urile au `min-h-[44px]`. `News.tsx`: dropdown-ul „Sursă” coboară minimul (`min-h-8`, pe ecrane tactile `min-h-9`), ca să rămână la înălțimea cipurilor. Câmpul de căutare din Știri, fără chenar, într-un `form` de `h-8`, are `min-h-0`. `Charts.tsx`: previzualizarea unei linii nu mai are `h-8`; rândul ei e `items-stretch`, deci are înălțimea dropdown-ului de stil.
+- `Settings.tsx`: rândurile favoritelor au `[&>td]:align-middle` (`.table td` rămâne `align-top` în rest); rândul de adăugare e `items-stretch`, iar câmpul `h-full`, deci are înălțimea comutatorului.
+- `Trades.tsx`: comutatorul perioadei (`PERIODS`, `choosePeriod`) trece din `CryptoCards` în bara din `AccountsView`, înaintea butoanelor, doar pentru conturile crypto. `CryptoCards` păstrează eroarea istoricului și rândul „actualizat …”.
+
+## TD-INDICES — implementează FD-INDICES
+
+### 1. Identitate și catalog (`shared/indices.ts`)
+- Un indice e un rând `watchlist` cu `kind = 'index'`, `coin` = id-ul cu `^` (`^SPX`), `quote = 'USD'`, `name` din catalog, `exchange` NULL. Coloana `kind` n-are CHECK, deci **fără migrare**.
+- Prefixul `^` (convenția Cboe / Yahoo) desparte indicele de moneda sau acțiunea cu același simbol (SPX6900, Compound, Compass): cheia `(user_id, coin)` nu se mai ciocnește.
+- `INDICES`: `{ id: '^SPX', symbol: 'SPX', name: 'S&P 500', aliases: [...] }` pentru cele 7; `isIndexId(s)`, `indexById(id)`, `indexId(symbolSauId)` (normalizează „spx” / „SPX” / „^SPX”, altfel `null`), `plainSymbol(coin)` (fără `^`, pentru afișare), `searchIndices(term)` (simbol sau nume, fără diacritice și majuscule), `INDEX_TIMEFRAMES = ['1d', '1w']`, `INDEX_DELAY_NOTE`.
+- `LISTED_SYMBOL_RE`: o acțiune (`STOCK_SYMBOL_RE`) sau `^` + 2–6 litere; rutele care primesc ambele îl folosesc, iar indicele se verifică apoi în catalog.
+
+### 2. Datele (`server/market/indices.ts`, `stocks.ts`)
+- `INDEX_SOURCES`: `^SPX → cboe _SPX`, `^VIX → cboe _VIX`, `^RUT → cboe _RUT`, `^DJI → cboe _DJX × 100`, `^NDX / ^COMP / ^SOX → nasdaq`.
+- `CboeClient` (`cdn-api.cboe.com/api/global/delayed_quotes/…`, aceleași anteturi de browser ca Nasdaq):
+  - `quote(code, scale)`: `current_price`, `price_change`, `price_change_percent`, `open/high/low`, `last_trade_time` (ora New York) → `StockQuote` (`name` din catalog, `status` din starea bursei Nasdaq);
+  - `daily(code, scale)`: `charts/historical/<code>.json`, tot istoricul (SPX ~1,7 MB); rândurile cu O/H/L/C ≤ 0 sau nefinite se sar (SPX înainte de 1996);
+  - `todayBar`: din cotație (`open/high/low/current_price`, ziua din `last_trade_time`), doar cu `open > 0`.
+- `NasdaqClient`: `quote / daily / today` primesc o clasă fixă (`'index'`), în loc să încerce `stocks` apoi `etf`.
+- `StockData` rutează după `isIndexId`:
+  - `candles(id, tf, count)`: doar `INDEX_TIMEFRAMES`, altfel `UNSUPPORTED_TIMEFRAME` („Indicii au doar 1d și 1w”); id necunoscut → `UNKNOWN_SYMBOL`;
+  - `IndexData.history(id)`: istoricul zilnic, ținut 5 minute (cereri simultane unite), comun pentru 1d, 1w, `spark` și scanner; lumânarea zilei se adaugă dacă e mai nouă decât ultima din istoric. Peste el, cache-ul lumânărilor din `StockData` (aceleași reguli ca la acțiuni: 15 minute pe 1d, până la deschidere cât piața e închisă); `1w` = `weeklyFromDaily`;
+  - `exchange` în răspuns: `cboe` / `nasdaq`; `pricePrecision` 2;
+  - `quote(id)`: TTL ca la acțiuni; `spark(id)`: ultimele 60 de închideri;
+  - `timeframesFor(sym)`: `INDEX_TIMEFRAMES` pentru indici, altfel `timeframes()`.
+
+### 3. API (`http/routes.ts`)
+- `POST /api/watchlist` primește și `{ kind: 'index', coin: 'SPX' | '^SPX' }`: `indexId` → altfel 400 „Indice necunoscut”; numele și aliasurile din catalog; duplicat → 409 „SPX este deja în favorite (ca indice)”.
+- `symbolRe` (ordine, aliasuri, ștergere) acceptă `^` în față; `PUT` refuză altă cotare decât USD pentru orice nu e crypto.
+- `listWatchlist` trimite `kind: 'crypto' | 'stock' | 'index'`.
+- `GET /api/market/candles?asset=index&symbol=SPX` (sau `^SPX`); `/api/stocks/quotes` și `/api/stocks/spark` acceptă id-uri de indici (`LISTED_SYMBOL_RE`, apoi catalogul).
+- Rutele rămase care citesc `kind` (scanner, conturi) tratează ca acțiune tot ce nu e `crypto`, nu doar `stock`.
+
+### 4. Server, în rest
+- **Scanner**: `w.kind !== 'crypto'` → `stockRow(coin, kind, …)`; timeframe-ul din `timeframesFor`; `ScanRow.kind` are și `'index'`; `symbol` = `^SPX/USD`.
+- **Conturi** (`accounts.ts`): perechile favoritelor doar pentru `kind = 'crypto'` (altfel `^SPX/USDT` ar fi căutat pe exchange).
+- **Știri** (`coin-registry.ts`, `coins.ts`): rândurile `index` merg într-o a patra hartă, `indices: id → aliasuri`, adăugate ca numele de companii (proprii, cu majuscule sau Title Case) și legate de id; fără potrivirea simbolurilor goale (`^` nu apare în texte). `newsQuerySchema.coins` acceptă `^`.
+- **Feeduri automate, rezultate, calendar**: rămân pe `kind = 'stock'` (indicii nu au feed Nasdaq și nici rezultate).
+- **MCP**: `get_chart` acceptă `^SPX`; un simbol fără `^` rămâne acțiune, ca înainte; descrierea spune „or a US index (^SPX, ^NDX, ^COMP, ^DJI, ^RUT, ^VIX, ^SOX)”; timeframe sub 1d → 1d cu nota „Timeframe … is not available for indices; showing 1d.”; `rowLines` scrie `(index: S&P 500)` / `(stock)`.
+- **Rezumat** (`summary/context.ts`): „(indice)” / „(acțiune)”.
+
+### 5. Interfață
+- `api-types.ts`: `WatchItem.kind: 'crypto' | 'stock' | 'index'`; `ScanRow.kind` la fel.
+- `chart/paths.ts`: `indexChartPath('^SPX') = '/charts/i/SPX'`; `chartPathOf` pentru `index`; `charts.symbol` salvat ca `index:SPX`; `rememberedPath` îl înțelege. `App.tsx`: ruta `/charts/i/:index` (case-sensitive, ca `/charts/s/`).
+- `CoinLogo`: pentru un id `^…`, insigna pătrată cu pictograma `ChartNoAxesCombined`, culoarea după simbol.
+- `Settings.tsx`: comutatorul cu trei valori; la „Indici”, sub rând, o listă de butoane (`IndexPicker`, din `searchIndices`: toți 7 cu câmpul gol), nu un dropdown: apare imediat și nu depinde de focus; cele deja adăugate marcate „în favorite” și dezactivate; tabelul: „Indice”, „indice SUA”, simbolul fără `^`. Adăugările, ștergerile și aliasurile numără schimbările în curs: un răspuns se afișează doar când e singura schimbare în curs, iar după ultima lista se recitește (răspunsurile pot sosi în altă ordine decât cererile).
+- `Today.tsx`, `MarketStrip.tsx`: tot ce nu e crypto merge pe fișa / bulina de acțiune; simbolul fără `^`; `title` cu întârzierea pe preț.
+- `Charts.tsx`: `ChartsPage` citește `:index`; `ChartView` primește `listed` (acțiune sau indice) și `index`; timeframe-urile `INDEX_TIMEFRAMES`, motivul dezactivării „Indicii au doar 1d și 1w”; titlul cu simbolul simplu și numele indicelui; căutarea are grupul „Indici”.
+- `CommandPalette.tsx`: favoritele indici (eticheta fără `^`, numele ca indiciu) și grupul „Indici” (cu cel puțin 2 caractere).
+- `News.tsx`: cipurile și etichetele știrilor arată simbolul fără `^`; insigna indicelui vine din `CoinLogo` (după `^`), deci `useStockSet` rămâne doar pentru acțiuni. `TopicIcon`: „indice” la trecerea cursorului.
+- `shared/settings.ts`: `CHART_SYMBOL_RE` acceptă `index:SPX` (graficul ținut minte).
+
+### 6. Teste
+- `shared/indices.test.ts`: `indexId`, `plainSymbol`, `searchIndices` („s&p”, „dow”, diacritice).
+- `market/indices.test.ts`: parsarea Cboe (cotație, istoric cu rânduri 0 sărite, DJX × 100, lumânarea zilei fără `open`), un refuz Cboe (403) ca eroare a sursei, Nasdaq cu clasa `index`; `StockData`: 1d / 1w, 1h refuzat, lumânarea zilei adăugată o singură dată, cache-ul comun cu `spark`.
+- `server.test.ts`: adăugarea după „SPX” și „^SPX”, duplicatul, moneda SPX și indicele SPX împreună, indice necunoscut, ordine / aliasuri / ștergere cu `^`, lumânările și cotațiile prin API.
+- `scanner.test.ts`: rândul unui indice (1d, `STOCK_TF_FALLBACK` cu semnalele pe 1h).
+- `news.test.ts`: aliasurile unui indice etichetează `^SPX`; „SPX” cu moneda și indicele în favorite → indicele; filtrul de știri cu `^SPX`.
+- `mcp.test.ts`: `get_chart` cu `^SPX` (și 1h → 1d cu nota).
+
+## TD-ROWCENTER — implementează FD-ROWCENTER
+- `Settings.tsx`, rândurile favoritelor (`[&>td]:align-middle` rămâne):
+  - butoanele de ordine stau într-un `div` `flex items-center` (fără `align-middle` pe mâner);
+  - logo-ul, simbolul și numele, într-un `div` `flex min-w-0 items-center gap-2` (în loc de `span` `inline-flex`, care stătea pe linia de bază);
+  - coșul, într-un `div` `flex justify-end`;
+  - câmpul de aliasuri e `block w-full` (fără spațiul liniei de bază sub el).
+- Verificare: `getBoundingClientRect` pentru fiecare celulă față de mijlocul rândului; înainte −2,9 px (săgeți, logo, simbol, coș), după 0.
+- `deploy-azure.md` §5: planul B2 (schimbat de utilizator), publicarea fără oprirea aplicației; oprirea rămâne rezerva.
+
+## TD-SELECTSAFARI — implementează FD-SELECTSAFARI
+- `styles.css` (`@layer base`): `select { appearance: none; padding-right: 32px }`, cu săgeata din două `linear-gradient` (45° și −45°, 5 × 5 px, `var(--color-muted)`), la `right 18px` și `right 13px`. Fără aspectul nativ, WebKit respectă `min-h-[38px]` / `44px`.
+- `News.tsx`: dropdown-ul „Sursă” fără `h-8` (regula generală), iar căutarea are `min-h-[38px]` (`pointer-coarse:min-h-11`), cu câmpul din ea `min-h-0`.
+- `Charts.tsx`: căutarea de lângă favorite are `h-[30px]` (`pointer-coarse:h-9`), ca `.chip`.
+- Verificare (scratchpad `wk/audit.mjs`, Playwright 1.64.1): WebKit și Chrome; pentru fiecare `.btn` / `button`, controalele de pe același rând (la cel mult 28 px, suprapuse vertical peste jumătate): diferența de înălțime și de mijloc peste 1 px; plus înălțimea fiecărui `select`.
+
+## TD-AICLARITY — implementează FD-AICLARITY
+- `sentiment/usage.ts` (nou): `ClaudeUsage`, pe ziua UTC, în `market_cache` (`claude:usage`, JSON `{ day, sentiment: { calls, items, input, output }, summary: { calls, input, output } }`). `record(kind, …)` citește și scrie într-o tranzacție (Mac-ul și Azure scriu în același rând); o eroare la scriere nu oprește scorarea și nici rezumatul.
+- `ClaudeEngine` primește `onUsage` și, după fiecare răspuns, îl apelează cu titlurile lotului și cu `usage.input_tokens` / `output_tokens`. `SentimentService` îl leagă de `ClaudeUsage`.
+- `SummaryService` înregistrează `message.usage` după fiecare rezumat.
+- `/api/health` (admin): `claudeUsage` (ziua de azi, model sentiment, model Rezumat).
+- Interfață:
+  - `McpSection` se mută din `Security.tsx` în `Settings.tsx` (`#ai`), cu textele din FD §1 și starea „oprit”;
+  - `Security.tsx` păstrează doar trimiterea;
+  - `SettingsAdmin.tsx`: blocul „La ce folosește Sentiq cheia Claude”;
+  - `DaySummary.tsx`: subsolul;
+  - `App.tsx`: pagina „Asistenți AI (connector)” în ⌘K (`/settings#ai`).
+- Teste: `ClaudeUsage` (ziua nouă, adunarea, doi scriitori), `ClaudeEngine` (apelul `onUsage`), `/api/health`, Rezumatul (tokenii înregistrați).
+
+## TD-MCPREMOVE — implementează FD-MCPREMOVE
+- Șterse:
+  - `src/server/mcp/` (`oauth.ts`, `routes.ts`, `server.ts`, `mcp.test.ts`);
+  - `src/web/pages/Consent.tsx`, `src/web/components/AiConnector.tsx`;
+  - dependențele `@modelcontextprotocol/server` și `@modelcontextprotocol/client`.
+- `config.ts`: fără `McpConfig` (`SENTIQ_MCP`, `SENTIQ_MCP_CLIENTS`); `publicUrl` rămâne.
+- `context.ts`: fără `oauth` și `fetchClientDoc`. `http/app.ts`: fără rutele connectorului și fără regula „adresele connectorului nu sunt pagina”. `security.ts`: fără `bearerRoutes` (existau doar pentru connector).
+- `auth-routes.ts`: fără `revokeUserGrants` (resetarea parolei, „Ieși peste tot”, dezactivarea contului). `jobs/register.ts`: fără `pruneMcp`. `main.ts`: fără mesajele „Claude connector on”.
+- `settings.ts`: `public_instance` = `{ url, at }`; cititorul ignoră un `mcp` vechi.
+- `db/schema.ts`:
+  - migrarea **2** (`DROP TABLE mcp_tokens, mcp_codes, mcp_grants, mcp_clients`, copiii întâi);
+  - `TABLES` și `IDENTITY_TABLES` fără ele;
+  - `sqlite-migrations.ts` rămâne neschimbat (e istoria bazei SQLite, pentru import).
+- `shared/api-types.ts`: fără `McpConnection`, `McpStatus`, `OAuthRequestInfo`.
+- Interfața:
+  - `App.tsx`: fără ruta `/oauth/consent` și fără „Asistenți AI” în ⌘K;
+  - `Settings.tsx`: fără panou și fără starea lui în `useHashScroll`;
+  - `Security.tsx`: textul de la „Ieși peste tot”, fără asistenți;
+  - `DaySummary.tsx` și `SettingsAdmin.tsx`: fără mențiunile connectorului.
+- Backup: `data/backups/sentiq-mcp-tables-2026-10-14.json` (citire din `dbo`, `chmod 600`), înainte ca migrarea să ruleze pe baza reală.
+- Teste: `mcp.test.ts` dispare; `schema.test.ts` (versiunea 2, lista tabelelor) acoperă migrarea; un test nou: `/mcp`, `/.well-known/oauth-authorization-server` și `/oauth/token` nu mai răspund ca înainte.
+
+## TD-TDPLAN — implementează FD-TDPLAN
+- `TwelveDataClient.plan(key?)`: `GET /api_usage` (1 credit, luat din buget) → `{ category, perMinute: plan_limit, perDay: plan_daily_limit ?? null }`; un răspuns fără `plan_limit` numeric e o eroare.
+- `CreditBudget`:
+  - `perMinute` / `perDay` vin din `plan`, ținut în `market_cache` (`td:plan`: `{ category, perMinute, perDay, at, keyHint }`);
+  - `perDay = null` = fără limită zilnică;
+  - `ready` citește și planul; `setPlan(p)` îl scrie;
+  - planul e recitit din bază la 5 minute (îl poate scrie cealaltă instanță);
+  - `status()` dă și `plan` (`category`, `at`, `assumed`).
+- `StockData.refreshPlan()`:
+  - citește planul, dacă există cheie;
+  - îl notează cu `keyHint` (ultimele 4 caractere ale cheii), pentru diagnostic; limitele nu-l verifică, fiindcă orice schimbare a cheii recitește sau șterge imediat planul (iar jobul îl recitește la pornire);
+  - e folosit la salvarea cheii (după `verify`), la pornire și în jobul nou `twelvedata.plan` (6 ore, pe instanța cu joburile); ștergerea cheii șterge și planul;
+  - `POST /api/settings/twelvedata-plan` (admin): recitire la cerere.
+- Interfața: `SettingsAdmin.tsx` (planul, consumul fără „/ 800” când nu e limită, „Recitește planul”), `Health.tsx` („fără limită zilnică”).
+- Teste: bugetul cu un plan fără limită zilnică și cu 55 pe minut, persistat și recitit; `plan()` pe răspunsurile Basic / Grow / eroare; ruta de recitire; cheia schimbată.
+
+## TD-INDEXINTRA — implementează FD-INDEXINTRA
+- `market/cnbc.ts` (nou):
+  - `CnbcClient.quotes(symbols)`: `quote.cnbc.com/quote-html-webservice/restQuote/…`, mai multe simboluri într-o cerere → `last`, `change`, `change_pct`, `open/high/low`, `last_time`, `realTime`;
+  - `CnbcClient.bars(symbol, interval, from, to)`: `ts-api.cnbc.com/harmony/app/bars/<sym>/<1M|5M|30M|1H|1D>/<from>/<to>/adjusted/EST5EDT.json` → lumânări cu `t = tradeTimeinMills`;
+  - pe intraday păstrează doar barele cu `start < 16:00` și `start + interval > 9:30` (ora New York, din `tradeTime`); pe zilnic sare barele cu O / H / L / C ≤ 0.
+- `INDEX_SOURCES` primește `cnbc` (`^SPX → .SPX`, `^COMP → .IXIC`, `^DJI → .DJI` …), lângă sursa de rezervă.
+- `IndexData`:
+  - `quote`: CNBC, altfel rezerva (`delayed: true` pe Cboe);
+  - `history` (zilnic): CNBC din 2010, plus bara zilei din cotație, altfel rezerva;
+  - `intraday(id, tf, count)`: baza (`1m` pentru 1m / 3m, `5m` pentru 5m / 15m, `30m`, `1h` pentru 1h / 2h / 4h), cerută pe câte zile trebuie (`count` / barele unei ședințe × 1,6 + 4, cel mult 110), ținută 30 s, cu cererile simultane unite;
+  - comasarea pe ceasul New York: 3m și 15m pe minute, 2h pe `floor(oră / 2)`, 4h pe `floor(oră / 4)`.
+- `shared/indices.ts`: `INDEX_TIMEFRAMES` = 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w; `INDEX_DELAY_NOTE` doar pentru `delayed`.
+- `StockQuote.delayed?` (cotația unui indice din rezervă). Interfața arată nota doar atunci. Motivul dezactivării din Grafice: „Indicii nu au …”.
+- Teste:
+  - parsarea CNBC: cotații, bare intraday cu cele din afara ședinței sărite, zilnic;
+  - comasările 3m / 15m / 2h / 4h;
+  - `IndexData`: CNBC întâi, apoi rezerva (cotație cu `delayed`, zilnic);
+  - `StockData`: 1h pentru un indice, 6h refuzat;
+  - scanner-ul pe 1h pentru un indice;
+  - API-ul (lumânări 1h prin `asset=index`).

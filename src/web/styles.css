@@ -189,6 +189,25 @@
   textarea {
     @apply bg-panel-2 border border-line-strong rounded-[10px] px-3 py-2 text-text;
   }
+  /* A field or a dropdown next to a button has the button's height (FD-UIPOLISH): .btn is at least 38px too. */
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']),
+  select {
+    @apply min-h-[38px];
+  }
+  /* FD-SELECTSAFARI: Safari draws its own dropdown and ignores min-height and padding (22px whatever is set). Without the
+     native look every browser takes the sizes above; the arrow is drawn here, in the theme's colour: two thin strokes. */
+  select {
+    appearance: none;
+    padding-right: 32px;
+    background-image:
+      linear-gradient(45deg, transparent calc(50% - 0.75px), var(--color-muted) calc(50% - 0.75px), var(--color-muted) calc(50% + 0.75px), transparent calc(50% + 0.75px)),
+      linear-gradient(-45deg, transparent calc(50% - 0.75px), var(--color-muted) calc(50% - 0.75px), var(--color-muted) calc(50% + 0.75px), transparent calc(50% + 0.75px));
+    background-position:
+      right 18px center,
+      right 13px center;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+  }
   input::placeholder,
   textarea::placeholder {
     @apply text-faint;
@@ -466,7 +485,9 @@
     letter-spacing: -0.05em;
   }
   @media (pointer: coarse) {
-    .btn {
+    .btn,
+    input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']),
+    select {
       @apply min-h-[44px];
     }
     .seg > button {

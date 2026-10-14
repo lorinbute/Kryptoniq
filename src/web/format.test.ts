@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fmtCountdown } from './format.ts';
+import { fmtBytes, fmtCountdown } from './format.ts';
 
 describe('fmtCountdown', () => {
   const now = Date.parse('2026-10-12T18:46:00Z');
@@ -12,5 +12,15 @@ describe('fmtCountdown', () => {
   });
   it('never goes negative', () => {
     expect(fmtCountdown(now - 60_000, now)).toBe('0m 00s');
+  });
+});
+
+describe('fmtBytes', () => {
+  it('goes up to GB for the database limits (FD-AZURE §5)', () => {
+    expect(fmtBytes(512)).toBe('512 B');
+    expect(fmtBytes(4.4 * 1024 ** 2)).toBe('4.4 MB');
+    expect(fmtBytes(2 * 1024 ** 3)).toBe('2 GB');
+    expect(fmtBytes(10 * 1024 ** 3)).toBe('10 GB');
+    expect(fmtBytes(1.5 * 1024 ** 3)).toBe('1.5 GB');
   });
 });

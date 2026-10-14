@@ -3,6 +3,7 @@
 import { explain } from '../calendar/glossary.ts';
 import { fetchTradingView, TV_COUNTRIES, type RawEvent } from '../calendar/sources.ts';
 import type { Db } from '../db/database.ts';
+import { BIN } from '../db/schema.ts';
 import { readJobData, writeJobData } from '../jobs/scheduler.ts';
 import type { Logger } from '../log.ts';
 import { ECON_COUNTRIES, ECON_SOURCE_COUNTRIES, ESSENTIAL, EU_MEMBERS, groupOf, polarityOf, RO_EXPLAIN, RO_NAMES, type EconGroup, type Polarity } from './names.ts';
@@ -44,7 +45,7 @@ export function feedingEconomy(economy: EconomyService, log: Logger, fetcher: (f
   return async (from: number, to: number): Promise<RawEvent[]> => {
     const events = await fetcher(from, to);
     try {
-      economy.ingest(events, { from, to, countries: TV_COUNTRIES });
+      await economy.ingest(events, { from, to, countries: TV_COUNTRIES });
     } catch (err) {
       log.warn(`economy: ${(err as Error).message}`);
     }
@@ -145,45 +146,93 @@ export class EconomyService {
    * Stores the indicators and releases of `events`. With a range, unreleased releases of those countries inside it
    * that the answer no longer has (moved or cancelled) are removed, as the Calendar does with its events.
    */
-  ingest(events: RawEvent[], range?: { from: number; to: number; countries: readonly string[] }, now = Date.now()): number {
+  async ingest(events: RawEvent[], range?: { from: number; to: number; countries: readonly string[] }, now = Date.now()): Promise<number> {
+    // The rows of `events` folded per indicator / release, as upserting them one after the other did: the last name and
+    // time win, a value the source stops sending is kept (the last one that was sent), the importance only grows.
+    const indicators = new Map<string, Record<string, string | number | null>>();
+    const releases = new Map<string, Record<string, string | number | null>>();
+    const keep = <T,>(next: T | null | undefined, prev: T | null | undefined): T | null => (next ?? prev ?? null) as T | null;
     let stored = 0;
     const ids: string[] = [];
-    this.db.tx(() => {
-      for (const e of events) {
-        const key = indicatorKey(e);
-        if (!key || !e.tv) continue;
-        const tv = e.tv;
-        this.db.run(
-          `INSERT INTO econ_indicators(key, country, name, category, unit, scale, currency, importance, source, source_url, comment, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(key) DO UPDATE SET name = excluded.name, category = COALESCE(excluded.category, econ_indicators.category),
-             unit = COALESCE(excluded.unit, econ_indicators.unit), scale = COALESCE(excluded.scale, econ_indicators.scale),
-             currency = COALESCE(excluded.currency, econ_indicators.currency), importance = MAX(econ_indicators.importance, excluded.importance),
-             source = COALESCE(excluded.source, econ_indicators.source), source_url = COALESCE(excluded.source_url, econ_indicators.source_url),
-             comment = COALESCE(excluded.comment, econ_indicators.comment), updated_at = excluded.updated_at`,
-          [key, (e.country ?? '').toUpperCase(), tv.indicator, tv.category, e.unit, e.scale, e.currency || null, tv.importance ?? -1, tv.source, tv.sourceUrl, tv.comment, now],
+    for (const e of events) {
+      const key = indicatorKey(e);
+      if (!key || !e.tv) continue;
+      const tv = e.tv;
+      const old = indicators.get(key);
+      indicators.set(key, {
+        key,
+        country: old ? (old.country as string) : (e.country ?? '').toUpperCase(),
+        name: tv.indicator,
+        category: keep(tv.category, old?.category as string | null),
+        unit: keep(e.unit, old?.unit as string | null),
+        scale: keep(e.scale, old?.scale as string | null),
+        currency: keep(e.currency || null, old?.currency as string | null),
+        importance: Math.max(tv.importance ?? -1, (old?.importance as number | undefined) ?? -Infinity),
+        source: keep(tv.source, old?.source as string | null),
+        source_url: keep(tv.sourceUrl, old?.source_url as string | null),
+        comment: keep(tv.comment, old?.comment as string | null),
+        updated_at: now,
+      });
+      const id = String(e.extId);
+      const prev = releases.get(id);
+      releases.set(id, {
+        id,
+        key,
+        ts: e.ts,
+        period: e.period,
+        reference_date: tv.referenceDate,
+        actual: keep(tv.actual, prev?.actual as number | null),
+        previous: keep(tv.previous, prev?.previous as number | null),
+        forecast: keep(tv.forecast, prev?.forecast as number | null),
+        fetched_at: now,
+      });
+      ids.push(id);
+      stored++;
+    }
+    const ind = JSON.stringify([...indicators.values()]);
+    const rel = JSON.stringify([...releases.values()]);
+    const IND = `OPENJSON(?) WITH ([key] nvarchar(200), country nvarchar(16), name nvarchar(max), category nvarchar(max), unit nvarchar(max), scale nvarchar(max),
+      currency nvarchar(max), importance int, source nvarchar(max), source_url nvarchar(max), comment nvarchar(max), updated_at bigint) j`;
+    const REL = `OPENJSON(?) WITH (id nvarchar(100), [key] nvarchar(200), ts bigint, period nvarchar(max), reference_date bigint, actual float, previous float,
+      forecast float, fetched_at bigint) j`;
+    await this.db.tx(async () => {
+      if (indicators.size) {
+        await this.db.run(
+          `UPDATE i SET name = j.name, category = COALESCE(j.category, i.category), unit = COALESCE(j.unit, i.unit), scale = COALESCE(j.scale, i.scale),
+             currency = COALESCE(j.currency, i.currency), importance = CASE WHEN j.importance > i.importance THEN j.importance ELSE i.importance END,
+             source = COALESCE(j.source, i.source), source_url = COALESCE(j.source_url, i.source_url), comment = COALESCE(j.comment, i.comment), updated_at = j.updated_at
+           FROM econ_indicators i JOIN ${IND} ON i.[key] = j.[key] COLLATE ${BIN}`,
+          [ind],
+        );
+        await this.db.run(
+          `INSERT INTO econ_indicators([key], country, name, category, unit, scale, currency, importance, source, source_url, comment, updated_at)
+           SELECT j.[key], j.country, j.name, j.category, j.unit, j.scale, j.currency, j.importance, j.source, j.source_url, j.comment, j.updated_at
+           FROM ${IND} WHERE NOT EXISTS (SELECT 1 FROM econ_indicators i WHERE i.[key] = j.[key] COLLATE ${BIN})`,
+          [ind],
         );
         // A value the source stops sending (a glitch) is kept; a corrected one replaces it.
-        this.db.run(
-          `INSERT INTO econ_releases(id, key, ts, period, reference_date, actual, previous, forecast, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET key = excluded.key, ts = excluded.ts, period = excluded.period, reference_date = excluded.reference_date,
-             actual = COALESCE(excluded.actual, econ_releases.actual), previous = COALESCE(excluded.previous, econ_releases.previous),
-             forecast = COALESCE(excluded.forecast, econ_releases.forecast), fetched_at = excluded.fetched_at`,
-          [e.extId, key, e.ts, e.period, tv.referenceDate, tv.actual, tv.previous, tv.forecast, now],
+        await this.db.run(
+          `UPDATE r SET [key] = j.[key], ts = j.ts, period = j.period, reference_date = j.reference_date, actual = COALESCE(j.actual, r.actual),
+             previous = COALESCE(j.previous, r.previous), forecast = COALESCE(j.forecast, r.forecast), fetched_at = j.fetched_at
+           FROM econ_releases r JOIN ${REL} ON r.id = j.id COLLATE ${BIN}`,
+          [rel],
         );
-        ids.push(e.extId);
-        stored++;
+        await this.db.run(
+          `INSERT INTO econ_releases(id, [key], ts, period, reference_date, actual, previous, forecast, fetched_at)
+           SELECT j.id, j.[key], j.ts, j.period, j.reference_date, j.actual, j.previous, j.forecast, j.fetched_at
+           FROM ${REL} WHERE NOT EXISTS (SELECT 1 FROM econ_releases r WHERE r.id = j.id COLLATE ${BIN})`,
+          [rel],
+        );
       }
       // An empty answer is a broken one, not a calendar without events, and an answer at the source's cap may be cut
       // short: nothing is removed from either.
       if (range && events.length > 0 && events.length < TV_CAP) {
         const from = Math.max(range.from, now);
-        const placeholders = range.countries.map(() => '?').join(',');
-        this.db.run(
+        await this.db.run(
           `DELETE FROM econ_releases WHERE ts >= ? AND ts < ? AND actual IS NULL
-             AND key IN (SELECT key FROM econ_indicators WHERE country IN (${placeholders}))
-             AND id NOT IN (SELECT value FROM json_each(?))`,
-          [from, range.to, ...range.countries.map((c) => c.toUpperCase()), JSON.stringify(ids)],
+             AND [key] IN (SELECT [key] FROM econ_indicators WHERE country IN (SELECT value COLLATE ${BIN} FROM OPENJSON(?)))
+             AND id NOT IN (SELECT value COLLATE ${BIN} FROM OPENJSON(?))`,
+          [from, range.to, JSON.stringify(range.countries.map((c) => c.toUpperCase())), JSON.stringify(ids)],
         );
       }
     });
@@ -193,17 +242,17 @@ export class EconomyService {
 
   /** ~400 days of history, once per country (TD-ECON §3); returns the countries read now. */
   async backfill(fetcher: EconFetcher = fetchTradingView, signal?: AbortSignal, now = Date.now(), pauseMs = 1000): Promise<string[]> {
-    const state = readJobData<BackfillState>(this.db, ECON_JOB, { done: [] });
+    const state = await readJobData<BackfillState>(this.db, ECON_JOB, { done: [] });
     const done = new Set(state.done);
     const read: string[] = [];
     for (const c of ECON_SOURCE_COUNTRIES) {
       if (done.has(c) || signal?.aborted) continue;
       try {
         const events = await fetchEconRange(now - HISTORY_DAYS * DAY, now - 7 * DAY, [c], fetcher, pauseMs);
-        this.ingest(events, undefined, now);
+        await this.ingest(events, undefined, now);
         done.add(c);
         read.push(c);
-        writeJobData(this.db, ECON_JOB, { ...state, done: [...done] });
+        await writeJobData(this.db, ECON_JOB, { ...state, done: [...done] });
       } catch (err) {
         this.log.warn(`economy: history of ${c} not read (${(err as Error).message}); retried at the next run`);
       }
@@ -212,8 +261,8 @@ export class EconomyService {
     return read;
   }
 
-  historyReady(): boolean {
-    const done = new Set(readJobData<BackfillState>(this.db, ECON_JOB, { done: [] }).done);
+  async historyReady(): Promise<boolean> {
+    const done = new Set((await readJobData<BackfillState>(this.db, ECON_JOB, { done: [] })).done);
     return ECON_SOURCE_COUNTRIES.every((c) => done.has(c));
   }
 
@@ -226,25 +275,26 @@ export class EconomyService {
   }
 
   /** Releases older than two years, and indicators left without any. */
-  prune(now = Date.now()): number {
-    const removed = this.db.run('DELETE FROM econ_releases WHERE ts < ?', [now - KEEP_MS]).changes;
-    this.db.run('DELETE FROM econ_indicators WHERE key NOT IN (SELECT DISTINCT key FROM econ_releases)');
+  async prune(now = Date.now()): Promise<number> {
+    const removed = (await this.db.run('DELETE FROM econ_releases WHERE ts < ?', [now - KEEP_MS])).changes;
+    await this.db.run('DELETE FROM econ_indicators WHERE [key] NOT IN (SELECT DISTINCT [key] FROM econ_releases)');
     if (removed) this.cache = null;
     return removed;
   }
 
   /** The source's description of an indicator (English), for the row the user opens. */
-  description(key: string): string | null {
-    return this.db.get<{ comment: string | null }>('SELECT comment FROM econ_indicators WHERE key = ?', [key])?.comment ?? null;
+  async description(key: string): Promise<string | null> {
+    return (await this.db.get<{ comment: string | null }>('SELECT comment FROM econ_indicators WHERE [key] = ?', [key]))?.comment ?? null;
   }
 
   /** What the Economy page shows (TD-ECON §4); kept a minute. */
-  view(now = Date.now()): EconomyView {
+  async view(now = Date.now()): Promise<EconomyView> {
     if (this.cache && now - this.cache.at < VIEW_TTL_MS) return this.cache.view;
-    const indicators = this.db.all<IndicatorRow>(
-      'SELECT key, country, name, category, unit, scale, importance, source, source_url, comment IS NOT NULL AS has_comment FROM econ_indicators',
+    const indicators = await this.db.all<IndicatorRow>(
+      `SELECT [key], country, name, category, unit, scale, importance, source, source_url, CASE WHEN comment IS NOT NULL THEN 1 ELSE 0 END AS has_comment
+       FROM econ_indicators ORDER BY [key]`,
     );
-    const releases = this.db.all<ReleaseRow>('SELECT id, key, ts, period, reference_date, actual, previous, forecast, fetched_at FROM econ_releases WHERE ts >= ? ORDER BY ts', [
+    const releases = await this.db.all<ReleaseRow>('SELECT id, [key], ts, period, reference_date, actual, previous, forecast, fetched_at FROM econ_releases WHERE ts >= ? ORDER BY ts, id', [
       now - (HISTORY_DAYS + 60) * DAY,
     ]);
     const byKey = new Map<string, ReleaseRow[]>();
@@ -306,7 +356,7 @@ export class EconomyService {
       }
       return { code, name, indicators: list };
     });
-    const view: EconomyView = { updatedAt, historyReady: this.historyReady(), countries };
+    const view: EconomyView = { updatedAt, historyReady: await this.historyReady(), countries };
     this.cache = { at: now, view };
     return view;
   }

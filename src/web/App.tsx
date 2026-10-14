@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Route, Routes, useLocation } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { Activity, CalendarDays, ChartCandlestick, Gauge, Landmark, LogOut, Moon, Newspaper, Search, Settings as SettingsIcon, ShieldCheck, Sparkles, Sun, Users, Wallet } from 'lucide-react';
+import { Activity, CalendarDays, ChartCandlestick, Gauge, Landmark, LogOut, Moon, Newspaper, Search, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Users, Wallet } from 'lucide-react';
 import type { AccountRequest, PublicUser } from '../shared/api-types.ts';
 import { api, errorMessage } from './api.ts';
 import { AUTH_PATHS, clearAfterSignIn, landAfterSignOut, REQUESTS_KEY, SIGNED_OUT_EVENT, useAuthChange, useAuthState } from './auth.ts';
@@ -25,11 +25,11 @@ const EconomyPage = lazy(() => import('./pages/Economy.tsx'));
 const ChartsPage = lazy(() => import('./pages/Charts.tsx'));
 const TradesPage = lazy(() => import('./pages/Trades.tsx'));
 const SettingsPage = lazy(() => import('./pages/Settings.tsx'));
+const AdminSettingsPage = lazy(() => import('./pages/SettingsAdmin.tsx'));
 const HealthPage = lazy(() => import('./pages/Health.tsx'));
 const SecurityPage = lazy(() => import('./pages/Security.tsx'));
 const DaySummary = lazy(() => import('./components/DaySummary.tsx').then((m) => ({ default: m.DaySummary })));
 const UsersPage = lazy(() => import('./pages/Users.tsx'));
-const ConsentPage = lazy(() => import('./pages/Consent.tsx'));
 
 /** `admin`: only the admin sees it (FD-USERS §1). */
 const NAV = [
@@ -47,6 +47,8 @@ const ACCOUNT_PAGES = [
   { to: '/security', label: 'Securitate', icon: ShieldCheck },
   { to: '/users', label: 'Utilizatori', icon: Users, admin: true },
 ];
+/** Only in the search (⌘K): the admin's tab of Settings (FD-ADMINSET). */
+const SEARCH_PAGES = [{ to: '/settings/admin', label: 'Setări admin', icon: SlidersHorizontal, admin: true }];
 const forRole = <T extends { admin?: boolean }>(items: T[], user: PublicUser) => items.filter((i) => !i.admin || user.role === 'admin');
 
 /** Polled by the top bar status dot and the offline banner (one shared query). */
@@ -243,13 +245,23 @@ function TopNav({ onSearch, onSummary, user }: { onSearch: () => void; onSummary
   );
 }
 
-/** Shown when the local server stops answering: pages keep their last data, this says it may be stale. */
+/** Sentiq opened on the computer that runs it (http://localhost), not on its public or network address. */
+const isThisComputer = () => ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
+
+/** Shown when the server stops answering: pages keep their last data, this says it may be stale. */
 function OfflineBanner() {
   const ping = usePing();
   if (!ping.isError) return null;
   return (
     <div role="alert" className="border-b border-bear/40 bg-bear/10 px-4 py-2.5 text-[13.5px] sm:px-6">
-      Serverul Sentiq nu răspunde. Datele afișate pot fi vechi; deschide <strong>Sentiq.app</strong> sau rulează <code>scripts/sentiq.sh start</code>.
+      {/* FD-ONLINE §3: what to do depends on where Sentiq is opened (this Mac, or the public address). */}
+      {isThisComputer() ? (
+        <>
+          Serverul Sentiq nu răspunde. Datele afișate pot fi vechi; deschide <strong>Sentiq.app</strong> sau rulează <code>scripts/sentiq.sh start</code>.
+        </>
+      ) : (
+        'Serverul Sentiq nu răspunde. Datele afișate pot fi vechi; pagina revine singură când serverul răspunde.'
+      )}
     </div>
   );
 }
@@ -284,16 +296,6 @@ export function App() {
   const user = auth.data.user;
   if (!user) return <SignedOutApp state={auth.data} />;
   if (AUTH_PATHS.includes(location.pathname)) return <SignedInAuthRoutes state={auth.data} />;
-  // FD-MCP §4: the Claude connector's consent page stands alone, like the sign-in pages.
-  if (location.pathname === '/oauth/consent') {
-    return (
-      <ErrorBoundary resetKey={location.pathname}>
-        <Suspense fallback={<Loading />}>
-          <ConsentPage />
-        </Suspense>
-      </ErrorBoundary>
-    );
-  }
   return <SignedInApp user={user} />;
 }
 
@@ -375,11 +377,13 @@ function SignedInApp({ user }: { user: PublicUser }) {
               <Route path="/calendar" element={<CalendarPage />} />
               <Route path="/economy" element={<EconomyPage />} />
               <Route path="/charts" element={<ChartsPage />} />
-              {/* Case-sensitive: /charts/S/USDT is the Sonic pair, /charts/s/AAPL a stock. */}
+              {/* Case-sensitive: /charts/S/USDT is the Sonic pair, /charts/s/AAPL a stock, /charts/i/SPX an index. */}
               <Route path="/charts/s/:ticker" caseSensitive element={<ChartsPage />} />
+              <Route path="/charts/i/:index" caseSensitive element={<ChartsPage />} />
               <Route path="/charts/:base/:quote" element={<ChartsPage />} />
               <Route path="/trades" element={<TradesPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              {user.role === 'admin' && <Route path="/settings/admin" element={<AdminSettingsPage />} />}
               {user.role === 'admin' && <Route path="/health" element={<HealthPage />} />}
               <Route path="/security" element={<SecurityPage />} />
               {user.role === 'admin' && <Route path="/users" element={<UsersPage />} />}
@@ -388,7 +392,7 @@ function SignedInApp({ user }: { user: PublicUser }) {
           </Suspense>
         </ErrorBoundary>
       </main>
-      <CommandPalette open={search} onClose={closeSearch} pages={[...forRole(NAV, user), ...forRole(ACCOUNT_PAGES, user)]} />
+      <CommandPalette open={search} onClose={closeSearch} pages={[...forRole(NAV, user), ...forRole(ACCOUNT_PAGES, user), ...forRole(SEARCH_PAGES, user)]} />
       {summary && (
         // Its own boundary: a window that cannot load (an old tab after an update) must not blank the app.
         <ErrorBoundary resetKey={location.pathname} fallback={(err) => <SummaryFailed error={err} onClose={closeSummary} />}>

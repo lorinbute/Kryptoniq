@@ -45,16 +45,16 @@ function content(kind: MailKind, name: string, link: string): { subject: string;
 }
 
 export class Mailer {
-  private readonly settings: () => MailSettings;
+  private readonly settings: () => MailSettings | Promise<MailSettings>;
   private readonly log: Logger;
-  constructor(settings: () => MailSettings, log: Logger) {
+  constructor(settings: () => MailSettings | Promise<MailSettings>, log: Logger) {
     this.settings = settings;
     this.log = log;
   }
 
   /** True when Resend accepted the mail. `link` is absent for notices without one. */
   async send(kind: MailKind, to: string, name: string, link = ''): Promise<boolean> {
-    const { apiKey, from } = this.settings();
+    const { apiKey, from } = await this.settings();
     const { subject, html } = content(kind, name, link);
     if (!apiKey) {
       if (kind === 'reset') this.log.warn(`email: no Resend key, so the ${kind} mail for ${to} was not sent. The link is written here instead: ${link}`);

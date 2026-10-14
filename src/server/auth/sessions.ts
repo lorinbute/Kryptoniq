@@ -34,10 +34,10 @@ export class Sessions {
     this.now = now;
   }
 
-  create(userId: number, kind: SessionKind, meta: { ip?: string; userAgent?: string } = {}): string {
+  async create(userId: number, kind: SessionKind, meta: { ip?: string; userAgent?: string } = {}): Promise<string> {
     const token = newToken();
     const now = this.now();
-    this.db.run(
+    await this.db.run(
       'INSERT INTO sessions(id_hash, user_id, kind, created_at, last_seen_at, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [hashToken(token), userId, kind, now, now, now + (kind === 'full' ? FULL_SESSION_MS : PENDING_SESSION_MS), meta.ip ?? null, (meta.userAgent ?? '').slice(0, 300) || null],
     );
@@ -45,18 +45,18 @@ export class Sessions {
   }
 
   /** The live session for a token (expired ones are removed); a full one slides forward. */
-  read(token: string | undefined): SessionRow | null {
+  async read(token: string | undefined): Promise<SessionRow | null> {
     if (!token || token.length > 100) return null;
     const idHash = hashToken(token);
-    const row = this.db.get<SessionRow>('SELECT id_hash, user_id, kind, created_at, last_seen_at, expires_at FROM sessions WHERE id_hash = ?', [idHash]);
+    const row = await this.db.get<SessionRow>('SELECT id_hash, user_id, kind, created_at, last_seen_at, expires_at FROM sessions WHERE id_hash = ?', [idHash]);
     if (!row) return null;
     const now = this.now();
     if (row.expires_at <= now) {
-      this.db.run('DELETE FROM sessions WHERE id_hash = ?', [idHash]);
+      await this.db.run('DELETE FROM sessions WHERE id_hash = ?', [idHash]);
       return null;
     }
     if (row.kind === 'full' && now - row.last_seen_at >= SLIDE_EVERY_MS) {
-      this.db.run('UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id_hash = ?', [now, now + FULL_SESSION_MS, idHash]);
+      await this.db.run('UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id_hash = ?', [now, now + FULL_SESSION_MS, idHash]);
       row.last_seen_at = now;
       row.expires_at = now + FULL_SESSION_MS;
       row.slid = true;
@@ -64,22 +64,22 @@ export class Sessions {
     return row;
   }
 
-  destroy(token: string | undefined): void {
-    if (token) this.db.run('DELETE FROM sessions WHERE id_hash = ?', [hashToken(token)]);
+  async destroy(token: string | undefined): Promise<void> {
+    if (token) await this.db.run('DELETE FROM sessions WHERE id_hash = ?', [hashToken(token)]);
   }
 
   /** Every session of a user, except (optionally) the one making the request. */
-  destroyAll(userId: number, exceptToken?: string): number {
-    if (exceptToken) return this.db.run('DELETE FROM sessions WHERE user_id = ? AND id_hash <> ?', [userId, hashToken(exceptToken)]).changes;
-    return this.db.run('DELETE FROM sessions WHERE user_id = ?', [userId]).changes;
+  async destroyAll(userId: number, exceptToken?: string): Promise<number> {
+    if (exceptToken) return (await this.db.run('DELETE FROM sessions WHERE user_id = ? AND id_hash <> ?', [userId, hashToken(exceptToken)])).changes;
+    return (await this.db.run('DELETE FROM sessions WHERE user_id = ?', [userId])).changes;
   }
 
   /** Pending sessions of a user (2FA turned off elsewhere invalidates them). */
-  destroyPending(userId: number): void {
-    this.db.run("DELETE FROM sessions WHERE user_id = ? AND kind = 'pending'", [userId]);
+  async destroyPending(userId: number): Promise<void> {
+    await this.db.run("DELETE FROM sessions WHERE user_id = ? AND kind = N'pending'", [userId]);
   }
 
-  purgeExpired(): number {
-    return this.db.run('DELETE FROM sessions WHERE expires_at <= ?', [this.now()]).changes;
+  async purgeExpired(): Promise<number> {
+    return (await this.db.run('DELETE FROM sessions WHERE expires_at <= ?', [this.now()])).changes;
   }
 }

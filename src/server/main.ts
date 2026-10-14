@@ -3,6 +3,8 @@ import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { loadConfig } from './config.ts';
 import { createContext } from './context.ts';
+import { describeDb } from './db/config.ts';
+import { Db } from './db/database.ts';
 import { buildApp } from './http/app.ts';
 import { registerJobs } from './jobs/register.ts';
 import { createLogger } from './log.ts';
@@ -10,11 +12,33 @@ import { createLogger } from './log.ts';
 async function main(): Promise<void> {
   const config = loadConfig();
   const log = createLogger(path.join(config.dataDir, 'logs'), config.quietConsole);
-  const ctx = createContext(config, log);
-  const app = await buildApp(ctx);
+  // FD-AZURE §2: without a database Sentiq does not start, and says what to fix.
+  if (!config.db) {
+    log.error(config.dbError ?? 'Baza de date nu e configurată.');
+    process.exit(1);
+  }
+  let db: Db;
+  try {
+    db = await Db.open(config.db);
+  } catch (err) {
+    log.error((err as Error).message);
+    process.exit(1);
+  }
+  log.info(`database: ${describeDb(config.db)}`);
+  let ctx: Awaited<ReturnType<typeof createContext>>;
+  let app: Awaited<ReturnType<typeof buildApp>>;
+  try {
+    ctx = await createContext(config, log, { db });
+    app = await buildApp(ctx);
+  } catch (err) {
+    log.error(`Cannot start: ${(err as Error).stack ?? err}`);
+    await db.close();
+    process.exit(1);
+  }
   if (!config.disableJobs) {
     registerJobs(ctx);
-    ctx.scheduler.start();
+    // Only one process on this database runs the jobs (TD-AZURE §6).
+    await ctx.scheduler.start();
     ctx.nli.warmUp();
   }
 
@@ -23,11 +47,16 @@ async function main(): Promise<void> {
     if (closing) return;
     closing = true;
     log.info(`${signal} received, shutting down`);
+    // A shutdown that hangs (an open stream, a stuck query) must not leave a process behind holding connections (FD-DBHEAL).
+    setTimeout(() => {
+      log.warn('shutdown took over 15 s: exiting now');
+      process.exit(0);
+    }, 15_000).unref();
     try {
       await app.close();
       await ctx.scheduler.stop();
     } finally {
-      ctx.db.close();
+      await ctx.db.close();
       process.exit(0);
     }
   };
@@ -49,20 +78,17 @@ async function main(): Promise<void> {
     const e = err as NodeJS.ErrnoException;
     log.error(e.code === 'EADDRINUSE' ? `Port ${config.port} is already in use — is Sentiq already running?` : `Cannot start: ${e.message}`);
     await ctx.scheduler.stop();
-    ctx.db.close();
+    await ctx.db.close();
     process.exit(1);
   }
-  log.info(`Sentiq running at http://localhost:${config.port}`);
-  if (host === '::' || host === '0.0.0.0') {
+  log.info(config.proxy ? `Sentiq running on port ${config.port}, behind Azure App Service` : `Sentiq running at http://localhost:${config.port}`);
+  if (!config.proxy && (host === '::' || host === '0.0.0.0')) {
     const lan = Object.values(networkInterfaces())
       .flat()
       .filter((a) => a && a.family === 'IPv4' && !a.internal)
       .map((a) => `http://${a!.address}:${config.port}`);
-    if (lan.length) log.info(`On the local network: ${lan.join(', ')} (passkeys work only on http://localhost)`);
+    if (lan.length) log.info(`On the local network: ${lan.join(', ')} (passkeys do not work on an IP address: use http://localhost here)`);
   }
-  // FD-MCP §2: the Claude connector is off unless both settings are there.
-  if (ctx.oauth) log.info(`Claude connector on: ${ctx.oauth.resource}`);
-  else if (config.mcp.requested) log.warn('SENTIQ_MCP=1 but SENTIQ_PUBLIC_URL is missing or not https: the Claude connector stays off');
 }
 
 void main();

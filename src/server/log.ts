@@ -8,7 +8,7 @@ export interface Logger {
   error(msg: string): void;
 }
 
-const SECRET_RE = /("?(?:apiKey|api_key|secret|password|passphrase|claudeKey|x-api-key)"?\s*[:=]\s*)"?[^",\s}]+"?/gi;
+const SECRET_RE = /("?(?:apiKey|api_key|secret|password|pwd|passphrase|claudeKey|x-api-key)"?\s*[:=]\s*)"?[^",\s}]+"?/gi;
 
 export function redact(msg: string): string {
   return msg.replace(SECRET_RE, '$1"[redacted]"');

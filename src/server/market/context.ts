@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Db } from '../db/database.ts';
 import { fetchJson } from '../net/http.ts';
 import { COIN_LIST_CACHE_KEY, type CachedCoin } from '../news/coin-registry.ts';
-import { readStockContext, type StockContext } from './stock-context.ts';
+import { PUT_CACHE, readStockContext, type StockContext } from './stock-context.ts';
 
 export const FNG_KEY = 'fng';
 export const GLOBAL_KEY = 'coingecko:global';
@@ -46,16 +46,12 @@ export interface MarketContext {
   stocks: StockContext;
 }
 
-function put(db: Db, key: string, value: unknown, now: number): void {
-  db.run('INSERT INTO market_cache(key, value, fetched_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, fetched_at = excluded.fetched_at', [
-    key,
-    JSON.stringify(value),
-    now,
-  ]);
+async function put(db: Db, key: string, value: unknown, now: number): Promise<void> {
+  await db.run(PUT_CACHE, { k: key, v: JSON.stringify(value), t: now });
 }
 
-function get<T>(db: Db, key: string): (T & { fetchedAt: number }) | null {
-  const row = db.get<{ value: string; fetched_at: number }>('SELECT value, fetched_at FROM market_cache WHERE key = ?', [key]);
+async function get<T>(db: Db, key: string): Promise<(T & { fetchedAt: number }) | null> {
+  const row = await db.get<{ value: string; fetched_at: number }>('SELECT value, fetched_at FROM market_cache WHERE [key] = ?', [key]);
   if (!row) return null;
   try {
     return { ...(JSON.parse(row.value) as T), fetchedAt: row.fetched_at };
@@ -91,17 +87,17 @@ export function parseGlobal(raw: unknown): GlobalMarket {
 export async function refreshContext(db: Db, now = Date.now()): Promise<{ coinListUpdated: boolean; errors: string[] }> {
   const errors: string[] = [];
   try {
-    put(db, FNG_KEY, parseFearGreed(await fetchJson('https://api.alternative.me/fng/?limit=31')), now);
+    await put(db, FNG_KEY, parseFearGreed(await fetchJson('https://api.alternative.me/fng/?limit=31')), now);
   } catch (err) {
     errors.push(`fear&greed: ${(err as Error).message}`);
   }
   try {
-    put(db, GLOBAL_KEY, parseGlobal(await fetchJson('https://api.coingecko.com/api/v3/global')), now);
+    await put(db, GLOBAL_KEY, parseGlobal(await fetchJson('https://api.coingecko.com/api/v3/global')), now);
   } catch (err) {
     errors.push(`coingecko global: ${(err as Error).message}`);
   }
   let coinListUpdated = false;
-  const coinRow = db.get<{ fetched_at: number }>('SELECT fetched_at FROM market_cache WHERE key = ?', [COIN_LIST_CACHE_KEY]);
+  const coinRow = await db.get<{ fetched_at: number }>('SELECT fetched_at FROM market_cache WHERE [key] = ?', [COIN_LIST_CACHE_KEY]);
   if (!coinRow || now - coinRow.fetched_at > COINLIST_MAX_AGE_MS) {
     try {
       const all: CachedCoin[] = [];
@@ -110,7 +106,7 @@ export async function refreshContext(db: Db, now = Date.now()): Promise<{ coinLi
         for (const c of list) all.push({ symbol: c.symbol.toUpperCase(), name: c.name, rank: c.market_cap_rank ?? null });
       }
       if (all.length > 0) {
-        put(db, COIN_LIST_CACHE_KEY, all, now);
+        await put(db, COIN_LIST_CACHE_KEY, all, now);
         coinListUpdated = true;
       }
     } catch (err) {
@@ -120,6 +116,6 @@ export async function refreshContext(db: Db, now = Date.now()): Promise<{ coinLi
   return { coinListUpdated, errors };
 }
 
-export function readContext(db: Db): MarketContext {
-  return { fearGreed: get<FearGreed>(db, FNG_KEY), global: get<GlobalMarket>(db, GLOBAL_KEY), stocks: readStockContext(db) };
+export async function readContext(db: Db): Promise<MarketContext> {
+  return { fearGreed: await get<FearGreed>(db, FNG_KEY), global: await get<GlobalMarket>(db, GLOBAL_KEY), stocks: await readStockContext(db) };
 }

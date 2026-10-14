@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Db } from '../db/database.ts';
+import { testDb } from '../test/db.ts';
 import { hashPassword, passwordProblem, verifyPassword } from './passwords.ts';
 import { countRecoveryCodes, hashRecoveryCodes, newRecoveryCodes, redeemRecoveryCode } from './recovery.ts';
 import { FULL_SESSION_MS, PENDING_SESSION_MS, Sessions } from './sessions.ts';
@@ -104,30 +104,29 @@ describe('throttle', () => {
 });
 
 describe('sessions', () => {
-  it('keep a full sign-in for 30 days of use and a pending one for 5 fixed minutes', () => {
-    const db = new Db(':memory:');
+  it('keep a full sign-in for 30 days of use and a pending one for 5 fixed minutes', async () => {
+    const db = await testDb();
     let now = Date.UTC(2026, 9, 13);
     const s = new Sessions(db, () => now);
-    const full = s.create(1, 'full');
-    const pending = s.create(1, 'pending');
-    expect(db.get<{ n: number }>('SELECT count(*) AS n FROM sessions WHERE id_hash = ?', [full])?.n).toBe(0); // only hashes are stored
+    const full = await s.create(1, 'full');
+    const pending = await s.create(1, 'pending');
+    expect((await db.get<{ n: number }>('SELECT count(*) AS n FROM sessions WHERE id_hash = ?', [full]))?.n).toBe(0); // only hashes are stored
     now += PENDING_SESSION_MS - 1;
-    expect(s.read(pending)?.kind).toBe('pending');
+    expect((await s.read(pending))?.kind).toBe('pending');
     now += 1;
-    expect(s.read(pending)).toBeNull();
+    expect(await s.read(pending)).toBeNull();
     // Used every 20 days, a full session never ends; left alone for 30 days, it does.
     for (let i = 0; i < 3; i++) {
       now += 20 * 86_400_000;
-      expect(s.read(full)?.kind).toBe('full');
+      expect((await s.read(full))?.kind).toBe('full');
     }
     now += FULL_SESSION_MS;
-    expect(s.read(full)).toBeNull();
-    const a = s.create(1, 'full');
-    const b = s.create(1, 'full');
-    expect(s.destroyAll(1, a)).toBe(1);
-    expect(s.read(a)).not.toBeNull();
-    expect(s.read(b)).toBeNull();
-    expect(s.read('x'.repeat(200))).toBeNull();
-    db.close();
+    expect(await s.read(full)).toBeNull();
+    const a = await s.create(1, 'full');
+    const b = await s.create(1, 'full');
+    expect(await s.destroyAll(1, a)).toBe(1);
+    expect(await s.read(a)).not.toBeNull();
+    expect(await s.read(b)).toBeNull();
+    expect(await s.read('x'.repeat(200))).toBeNull();
   });
 });

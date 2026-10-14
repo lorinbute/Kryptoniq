@@ -4,7 +4,11 @@ import { slingshotParamsSchema } from './indicator/params.ts';
 import { lmaParamsSchema } from './indicator/lma-params.ts';
 import { TIMEFRAMES } from './time.ts';
 
-export const MARKET_EXCHANGES = ['kucoin', 'binance', 'bybit', 'okx'] as const;
+/** The exchanges crypto prices can come from (FD-MARKETSRC §1: Kraken and Coinbase lack the pairs and the history). */
+export const MARKET_EXCHANGES = ['kucoin', 'binance', 'bybit', 'okx', 'bitget'] as const;
+export type MarketExchange = (typeof MARKET_EXCHANGES)[number];
+/** The timeframes of the Slingshot signals on Today (FD-MARKETSRC §2): every price exchange has them. */
+export const SCANNER_TFS = ['15m', '1h', '4h', '1d'] as const;
 export const IMPACTS = ['High', 'Medium', 'Low', 'Holiday'] as const;
 export type Impact = (typeof IMPACTS)[number];
 export const CALENDAR_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'CAD', 'AUD', 'NZD', 'CHF', 'ALL'] as const;
@@ -12,9 +16,8 @@ export const CANDLE_COUNTS = [1500, 3000, 5000] as const;
 export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5';
 export const CLAUDE_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'] as const;
 
-/** A spot pair as the charts address it (BASE/QUOTE in capitals). */
-/** The pair of a crypto chart ("BTC/USDT") or, since FD-SENTIQ, a stock ("stock:AAPL"). */
-export const CHART_SYMBOL_RE = /^(?:[A-Z0-9][A-Z0-9._-]{0,29}\/[A-Z0-9]{1,15}|stock:[A-Z][A-Z0-9.-]{0,9})$/;
+/** The pair of a crypto chart ("BTC/USDT"), since FD-SENTIQ a stock ("stock:AAPL"), since FD-INDICES an index ("index:SPX"). */
+export const CHART_SYMBOL_RE = /^(?:[A-Z0-9][A-Z0-9._-]{0,29}\/[A-Z0-9]{1,15}|stock:[A-Z][A-Z0-9.-]{0,9}|index:[A-Z]{2,6})$/;
 
 export const settingsSchema = z.object({
   timezone: z.string().min(1).max(64).default('UTC'),
@@ -25,10 +28,20 @@ export const settingsSchema = z.object({
       claudeModel: z.enum(CLAUDE_MODELS).default(DEFAULT_CLAUDE_MODEL),
     })
     .prefault({}),
+  /**
+   * Each user's: `exchange` is the one chosen among several connected exchanges (FD-MARKETSRC §2; absent until one is
+   * chosen: the first added counts), `defaultTf` the chart's last timeframe.
+   */
   market: z
     .object({
-      exchange: z.enum(MARKET_EXCHANGES).default('kucoin'),
+      exchange: z.enum(MARKET_EXCHANGES).optional(),
       defaultTf: z.enum(TIMEFRAMES).default('1h'),
+    })
+    .prefault({}),
+  /** Everyone's (the admin's to set): the exchange for those without one of their own, and the chart history. */
+  marketData: z
+    .object({
+      exchange: z.enum(MARKET_EXCHANGES).default('kucoin'),
       candles: z.union([z.literal(1500), z.literal(3000), z.literal(5000)]).default(1500),
     })
     .prefault({}),

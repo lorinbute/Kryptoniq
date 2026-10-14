@@ -55,51 +55,64 @@ export const nasdaqFeedUrl = (sym: string) => `https://www.nasdaq.com/feed/rssou
 const autoId = (sym: string) => `nasdaq-${sym.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
 
 /**
- * Keeps one Nasdaq feed per watchlist stock. `added` re-enables the feed of a stock the user has just added;
- * otherwise a feed the user disabled stays disabled. The feed of a stock that left the watchlist is deleted when
- * it has no news left (its news would go with it), or disabled until the retention job removes them.
+ * Keeps one Nasdaq feed per stock in anybody's watchlist. `added` re-enables the feed of a stock the user has just
+ * added; otherwise a feed the admin disabled stays disabled. The feed of a stock in nobody's watchlist is deleted
+ * at once, with the news that came only through it (FD-AUTOFEED). Returns the symbols whose feed was deleted.
  */
-export function syncStockSources(db: Db, added?: string): void {
-  db.tx(() => {
-    const stocks = new Set(db.all<{ coin: string }>("SELECT coin FROM watchlist WHERE kind = 'stock'").map((r) => r.coin));
+export async function syncStockSources(db: Db, added?: string): Promise<string[]> {
+  return db.tx(async () => {
+    const stocks = new Set((await db.all<{ coin: string }>("SELECT DISTINCT coin FROM watchlist WHERE kind = N'stock' ORDER BY coin")).map((r) => r.coin));
+    const sources = await db.all<{ id: string; url: string; auto: string | null }>('SELECT id, url, auto FROM sources');
+    const byAuto = new Map(sources.filter((s) => s.auto).map((s) => [s.auto as string, s.id]));
+    const urls = new Set(sources.map((s) => s.url));
+    const ids = new Set(sources.map((s) => s.id));
     for (const sym of stocks) {
       const auto = `nasdaq:${sym}`;
       const url = nasdaqFeedUrl(sym);
-      const own = db.get<{ id: string }>('SELECT id FROM sources WHERE auto = ?', [auto]);
+      const own = byAuto.get(auto);
       if (own) {
-        if (sym === added) db.run('UPDATE sources SET enabled = 1, next_fetch_at = 0 WHERE id = ?', [own.id]);
+        if (sym === added) await db.run('UPDATE sources SET enabled = 1, next_fetch_at = 0 WHERE id = ?', [own]);
         continue;
       }
       // A custom source with the same address already brings this feed.
-      if (db.get('SELECT id FROM sources WHERE url = ?', [url])) continue;
+      if (urls.has(url)) continue;
       let id = autoId(sym);
-      if (db.get('SELECT id FROM sources WHERE id = ?', [id])) id = `${id}-${Date.now().toString(36)}`;
-      db.run(`INSERT INTO sources(id, name, url, category, enabled, weight, builtin, auto) VALUES (?, ?, ?, 'stocks', 1, 1, 1, ?)`, [id, `Nasdaq: ${sym}`, url, auto]);
+      if (ids.has(id)) id = `${id}-${Date.now().toString(36)}`;
+      await db.run(`INSERT INTO sources(id, name, url, category, enabled, weight, builtin, auto) VALUES (?, ?, ?, N'stocks', 1, 1, 1, ?)`, [id, `Nasdaq: ${sym}`, url, auto]);
+      urls.add(url);
+      ids.add(id);
     }
-    for (const s of db.all<{ id: string; auto: string }>("SELECT id, auto FROM sources WHERE auto LIKE 'nasdaq:%'")) {
-      if (stocks.has(s.auto.slice('nasdaq:'.length))) continue;
-      if (db.get('SELECT 1 AS x FROM news WHERE source_id = ? LIMIT 1', [s.id])) db.run('UPDATE sources SET enabled = 0 WHERE id = ?', [s.id]);
-      else db.run('DELETE FROM sources WHERE id = ?', [s.id]);
+    const removed: string[] = [];
+    for (const s of sources) {
+      if (!s.auto?.startsWith('nasdaq:') || stocks.has(s.auto.slice('nasdaq:'.length))) continue;
+      // Its news go too (ON DELETE CASCADE): nobody follows the stock any more.
+      await db.run('DELETE FROM sources WHERE id = ?', [s.id]);
+      removed.push(s.auto.slice('nasdaq:'.length));
     }
+    return removed;
   });
 }
 
 /** Inserts missing built-in sources; never overrides the user's enable/weight choices. */
-export function seedSources(db: Db): void {
-  db.tx(() => {
+export async function seedSources(db: Db): Promise<void> {
+  await db.tx(async () => {
+    const byUrl = new Map((await db.all<{ id: string; url: string }>('SELECT id, url FROM sources')).map((r) => [r.url, r.id]));
     for (const s of BUILTIN_SOURCES) {
       // A custom source the user added earlier with the same URL keeps precedence.
-      const sameUrl = db.get<{ id: string }>('SELECT id FROM sources WHERE url = ?', [s.url]);
-      if (sameUrl && sameUrl.id !== s.id) continue;
-      db.run(
-        `INSERT INTO sources(id, name, url, category, enabled, weight, builtin)
-         VALUES (?, ?, ?, ?, ?, ?, 1)
-         ON CONFLICT(id) DO UPDATE SET name = excluded.name, url = excluded.url, category = excluded.category, builtin = 1`,
-        [s.id, s.name, s.url, s.category, s.enabled === false ? 0 : 1, s.weight],
+      const sameUrl = byUrl.get(s.url);
+      if (sameUrl !== undefined && sameUrl !== s.id) continue;
+      await db.run(
+        `UPDATE sources SET name = @name, url = @url, category = @category, builtin = 1 WHERE id = @id;
+         IF @@ROWCOUNT = 0 INSERT INTO sources(id, name, url, category, enabled, weight, builtin) VALUES (@id, @name, @url, @category, @enabled, @weight, 1)`,
+        { id: s.id, name: s.name, url: s.url, category: s.category, enabled: s.enabled === false ? 0 : 1, weight: s.weight },
       );
     }
   });
 }
+
+/** The columns of `SourceRow` (not the computed `url_hash`, TD-AZURE §3): use instead of `SELECT *`. */
+export const SOURCE_COLUMNS =
+  'id, name, url, category, enabled, weight, builtin, etag, last_modified, last_attempt_at, last_success_at, last_new_item_at, last_error, failures, next_fetch_at, item_count, auto';
 
 export interface SourceRow {
   id: string;

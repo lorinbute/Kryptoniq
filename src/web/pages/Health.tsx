@@ -7,6 +7,9 @@ import { useNow } from '../hooks.ts';
 import { ErrorNote, Loading, Panel } from '../components/ui.tsx';
 import { Clock, Database, Rss } from 'lucide-react';
 
+/** FD-AZURE §2: past 80% of the database's maximum size. */
+const dbNearlyFull = (db: Health['db']) => db.sizeBytes != null && !!db.maxSizeBytes && db.sizeBytes / db.maxSizeBytes > 0.8;
+
 const JOB_RO: Record<string, string> = {
   'news.fetch': 'Descărcare știri',
   'sentiment.score': 'Scorare sentiment',
@@ -62,10 +65,29 @@ export default function HealthPage() {
           </div>
           <div>
             <dt className="text-faint">Bază de date</dt>
-            <dd className="num">
-              {fmtBytes(h.db.sizeBytes)}, {h.db.news} știri
+            <dd>
+              {/* FD-AZURE §5: Azure SQL (`?.`: an older server sent only the size). */}
+              {h.db.database ? `Azure SQL ${h.db.server}/${h.db.database}` : 'SQLite'}
+              {h.db.objective ? ` · ${h.db.objective}` : ''}
+              <div className={clsx('num text-[12px]', dbNearlyFull(h.db) ? 'text-warn' : 'text-muted')}>
+                {h.db.sizeBytes != null ? fmtBytes(h.db.sizeBytes) : 'mărime necunoscută'}
+                {h.db.maxSizeBytes ? ` din ${fmtBytes(h.db.maxSizeBytes)}` : ''}, {h.db.news} știri
+                {dbNearlyFull(h.db) ? ' (aproape plină)' : ''}
+              </div>
             </dd>
           </div>
+          {h.jobsLeader && (
+            <div>
+              <dt className="text-faint">Joburi de fundal</dt>
+              <dd className={clsx(!h.jobsLeader.self && 'text-muted')}>
+                {h.jobsLeader.self
+                  ? `rulează aici (${h.jobsLeader.host})`
+                  : h.jobsLeader.host
+                    ? `rulează pe ${h.jobsLeader.host}, nu aici`
+                    : 'nu rulează nicăieri acum'}
+              </dd>
+            </div>
+          )}
           <div>
             <dt className="text-faint">Calendar ForexFactory</dt>
             <dd>{h.calendar.ff ? fmtAgo(h.calendar.ff, now) : 'niciodată'}</dd>
@@ -91,7 +113,7 @@ export default function HealthPage() {
             <div>
               <dt className="text-faint">Twelve Data (acțiuni)</dt>
               <dd className="num">
-                {h.twelveData.hasKey ? `${h.twelveData.used} / ${h.twelveData.perDay} cereri azi (UTC)` : 'fără cheie: grafice zilnice de la Nasdaq'}
+                {h.twelveData.hasKey ? `${h.twelveData.used}${h.twelveData.perDay === null ? '' : ` / ${h.twelveData.perDay}`} cereri azi (UTC)${h.twelveData.perDay === null ? ', fără limită zilnică' : ''}` : 'fără cheie: grafice zilnice de la Nasdaq'}
               </dd>
             </div>
           )}

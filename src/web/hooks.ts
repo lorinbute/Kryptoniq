@@ -1,11 +1,51 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SettingsView } from '../shared/settings.ts';
-import type { CalendarResponse, StocksInfo, WatchItem } from '../shared/api-types.ts';
+import type { CalendarResponse, MarketSourceInfo, StocksInfo, WatchItem } from '../shared/api-types.ts';
 import { api, qs } from './api.ts';
 
 export function useSettings() {
   return useQuery({ queryKey: ['settings'], queryFn: () => api.get<SettingsView>('/api/settings'), staleTime: 60_000 });
+}
+
+/** Saves a patch of the settings (the user's own, or the global ones for the admin) and refreshes what depends on them. */
+export function useSaveSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: unknown) => api.put<SettingsView>('/api/settings', patch),
+    onSuccess: (data) => {
+      qc.setQueryData(['settings'], data);
+      void qc.invalidateQueries({ queryKey: ['sentiment'] });
+      void qc.invalidateQueries({ queryKey: ['scanner'] });
+    },
+  });
+}
+
+/** Links such as /settings#market land on their section once the page has rendered (`ready`). */
+export function useHashScroll(ready: boolean) {
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (!ready || !hash) return;
+    document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView({ block: 'start' });
+  }, [ready, hash]);
+}
+
+/**
+ * Where the user's crypto prices come from (FD-MARKETSRC), for one pair when given. Accounts added or removed and the
+ * choice among several invalidate ['market-source'].
+ */
+export function useMarketSource(symbol?: string) {
+  return useQuery({
+    queryKey: ['market-source', symbol ?? ''],
+    queryFn: () => api.get<MarketSourceInfo>(`/api/market/source${qs({ symbol })}`),
+    staleTime: 30_000,
+  });
+}
+
+/** After an account is added or removed (FD-MARKETSRC §3): prices may now come from another exchange. */
+export function invalidatePriceSource(qc: ReturnType<typeof useQueryClient>) {
+  for (const key of ['market-source', 'spark', 'candles', 'scanner', 'symbols']) void qc.invalidateQueries({ queryKey: [key] });
 }
 
 /** The user's time zone (falls back to the browser's until settings load). */

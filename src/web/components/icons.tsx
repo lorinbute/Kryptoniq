@@ -57,6 +57,19 @@ export function CoinLogo({ coin, size = 20, className, badge = false, square = f
   const sym = coin.toUpperCase();
   const [failedNow, setFailedNow] = useState<string | null>(null);
   const valid = /^[A-Z0-9]{1,15}$/.test(sym);
+  // An index (FD-INDICES, id "^SPX"): a chart in a square, never initials that could pass for a coin or a share.
+  if (sym.startsWith('^')) {
+    const hue = coinHue(sym);
+    return (
+      <span
+        className={clsx('inline-flex shrink-0 items-center justify-center rounded-[28%]', className)}
+        style={{ width: size, height: size, background: `hsl(${hue} 40% 24%)`, color: `hsl(${hue} 75% 78%)` }}
+        aria-hidden
+      >
+        <ChartNoAxesCombined size={Math.round(size * 0.62)} strokeWidth={2.4} />
+      </span>
+    );
+  }
   if (badge || !valid || failedNow === sym || failedLogos.has(sym)) {
     const hue = coinHue(sym);
     return (
@@ -160,7 +173,7 @@ export function TopicIcon({
   const box = boxed ? Math.round(size * 1.9) : size;
   if (topic === 'coin' && list[0]) {
     return (
-      <span className="inline-flex shrink-0 items-center justify-center" style={{ width: box, height: box }} title={stocks?.has(list[0]) ? 'acțiune' : TOPIC_LABEL.coin} aria-hidden>
+      <span className="inline-flex shrink-0 items-center justify-center" style={{ width: box, height: box }} title={stocks?.has(list[0]) ? 'acțiune' : list[0].startsWith('^') ? 'indice' : TOPIC_LABEL.coin} aria-hidden>
         <CoinLogo coin={list[0]} size={boxed ? Math.round(size * 1.5) : size} badge={stocks?.has(list[0])} square={stocks?.has(list[0])} />
       </span>
     );

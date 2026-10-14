@@ -30,6 +30,8 @@ export interface ClaudeEngineOptions {
   apiKey: string;
   model: string;
   log: Logger;
+  /** Told after every answered call: the headlines sent and the tokens Anthropic counted (FD-AICLARITY). */
+  onUsage?: (use: { items: number; input: number; output: number }) => void;
   /** Test hook. */
   client?: Pick<Anthropic, 'beta'>;
 }
@@ -48,6 +50,7 @@ export class ClaudeEngine implements SentimentEngine {
   private readonly model: string;
   private readonly fallback: SentimentEngine;
   private readonly log: Logger;
+  private readonly onUsage: ClaudeEngineOptions['onUsage'];
   /** Circuit breaker: an invalid key stops Claude calls for good (until the key changes), other errors for 5 minutes. */
   private pausedUntil = 0;
   private lastError: ClaudeStatus['lastError'] = null;
@@ -56,6 +59,7 @@ export class ClaudeEngine implements SentimentEngine {
     this.model = opts.model;
     this.id = `claude:${opts.model}`;
     this.log = opts.log;
+    this.onUsage = opts.onUsage;
     this.fallback = fallback;
     this.client = opts.client ?? new Anthropic({ apiKey: opts.apiKey, maxRetries: 2, timeout: 60_000 });
   }
@@ -103,6 +107,8 @@ export class ClaudeEngine implements SentimentEngine {
       },
       { signal },
     );
+    // Billed whatever the answer: counted before it is read.
+    if (response.usage) this.onUsage?.({ items: batch.length, input: response.usage.input_tokens, output: response.usage.output_tokens });
     if (response.stop_reason === 'refusal') throw new Error('request declined (refusal)');
     const parsed = response.parsed_output;
     if (!parsed) throw new Error(`no structured output (stop_reason=${response.stop_reason})`);

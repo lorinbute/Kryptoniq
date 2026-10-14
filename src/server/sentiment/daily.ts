@@ -70,12 +70,13 @@ export class DailySentimentService {
     this.settings = settings;
   }
 
-  loadItems(start: number, end: number): IndexItem[] {
-    const rows = this.db.all<NewsRow>(
+  async loadItems(start: number, end: number): Promise<IndexItem[]> {
+    const rows = await this.db.all<NewsRow>(
       `SELECT n.id, n.title, n.url, n.source_id, s.name AS source_name, s.weight AS source_weight, n.category, n.published_at,
               n.relevance, COALESCE(n.sentiment_impact, n.impact) AS impact, n.flags, n.cluster_id, n.sentiment
        FROM news n JOIN sources s ON s.id = n.source_id
-       WHERE s.enabled = 1 AND n.published_at >= ? AND n.published_at < ?`,
+       WHERE s.enabled = 1 AND n.published_at >= ? AND n.published_at < ?
+       ORDER BY n.published_at, n.id`,
       [start, end],
     );
     return rows.map((r) => ({
@@ -95,12 +96,12 @@ export class DailySentimentService {
     }));
   }
 
-  computeDay(day: string, tz: string, now: number, withIntraday = true): DaySentiment {
+  async computeDay(day: string, tz: string, now: number, withIntraday = true): Promise<DaySentiment> {
     const window = dayBounds(day, tz);
     const asOf = Math.min(now, window.end);
-    const items = this.loadItems(window.start, window.end);
+    const items = await this.loadItems(window.start, window.end);
     const res = computeIndex(items, window, asOf, DEFAULT_INDEX_PARAMS);
-    this.attachCoins([...res.drivers.positive, ...res.drivers.negative]);
+    await this.attachCoins([...res.drivers.positive, ...res.drivers.negative]);
     return {
       ...res,
       day,
@@ -112,9 +113,9 @@ export class DailySentimentService {
   }
 
   /** Coins of the (at most ten) drivers, for their icon: one query instead of loading coins for every item. */
-  private attachCoins(drivers: Driver[]): void {
+  private async attachCoins(drivers: Driver[]): Promise<void> {
     if (drivers.length === 0) return;
-    const rows = this.db.all<{ news_id: string; coin: string }>(
+    const rows = await this.db.all<{ news_id: string; coin: string }>(
       `SELECT news_id, coin FROM news_coins WHERE news_id IN (${drivers.map(() => '?').join(',')}) ORDER BY coin`,
       drivers.map((d) => d.id),
     );
@@ -122,30 +123,42 @@ export class DailySentimentService {
   }
 
   /** Today in `tz` (every user sees the day of their own time zone, FD-USERS §2). */
-  today(tz: string, now = Date.now()): DaySentiment {
+  async today(tz: string, now = Date.now()): Promise<DaySentiment> {
     const day = dayKey(now, tz);
-    const res = this.computeDay(day, tz, now);
-    this.save(res, false);
+    const res = await this.computeDay(day, tz, now);
+    await this.save(res, false);
     return res;
   }
 
-  private save(r: DaySentiment, final: boolean): void {
+  /** A frozen (final) day is never overwritten by a provisional one. */
+  private async save(r: DaySentiment, final: boolean): Promise<void> {
     const count = r.counts.positive + r.counts.neutral + r.counts.negative;
-    this.db.run(
-      `INSERT INTO daily_sentiment(day, tz, value, raw, confidence, counts, breakdown, drivers, computed_at, final)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(day, tz) DO UPDATE SET value = excluded.value, raw = excluded.raw, confidence = excluded.confidence,
-         counts = excluded.counts, breakdown = excluded.breakdown, drivers = excluded.drivers,
-         computed_at = excluded.computed_at, final = excluded.final
-       WHERE daily_sentiment.final = 0 OR excluded.final = 1`,
-      [r.day, r.tz, r.index, r.raw, r.confidence, JSON.stringify({ ...r.counts, total: count }), JSON.stringify(r.breakdown), JSON.stringify(r.drivers), Date.now(), final ? 1 : 0],
+    await this.db.run(
+      `UPDATE daily_sentiment SET value = @value, raw = @raw, confidence = @confidence, counts = @counts, breakdown = @breakdown, drivers = @drivers,
+         computed_at = @computed_at, final = @final
+       WHERE day = @day AND tz = @tz AND (final = 0 OR @final = 1);
+       IF @@ROWCOUNT = 0 AND NOT EXISTS (SELECT 1 FROM daily_sentiment WHERE day = @day AND tz = @tz)
+         INSERT INTO daily_sentiment(day, tz, value, raw, confidence, counts, breakdown, drivers, computed_at, final)
+         VALUES (@day, @tz, @value, @raw, @confidence, @counts, @breakdown, @drivers, @computed_at, @final)`,
+      {
+        day: r.day,
+        tz: r.tz,
+        value: r.index,
+        raw: r.raw,
+        confidence: r.confidence,
+        counts: JSON.stringify({ ...r.counts, total: count }),
+        breakdown: JSON.stringify(r.breakdown),
+        drivers: JSON.stringify(r.drivers),
+        computed_at: Date.now(),
+        final: final ? 1 : 0,
+      },
     );
   }
 
   /** `refreshZone` for every time zone in use; the days frozen, without repeats. */
-  refresh(now = Date.now()): { finalized: string[] } {
+  async refresh(now = Date.now()): Promise<{ finalized: string[] }> {
     const finalized = new Set<string>();
-    for (const tz of this.settings.timezones()) for (const d of this.refreshZone(tz, now).finalized) finalized.add(d);
+    for (const tz of await this.settings.timezones()) for (const d of (await this.refreshZone(tz, now)).finalized) finalized.add(d);
     return { finalized: [...finalized].sort() };
   }
 
@@ -153,22 +166,22 @@ export class DailySentimentService {
    * Recomputes today and freezes every elapsed day that has news but no final snapshot yet — after the
    * grace period and once its news are all scored (days older than 3 days are frozen regardless).
    */
-  refreshZone(tz: string, now = Date.now()): { today: DaySentiment; finalized: string[] } {
+  async refreshZone(tz: string, now = Date.now()): Promise<{ today: DaySentiment; finalized: string[] }> {
     const todayKey = dayKey(now, tz);
     const finalized: string[] = [];
     // Days before Sentiq started collecting only hold the few items the feeds still carried (backlog):
     // they would enter the history as if complete, so history starts on the first collection day.
-    const span = this.db.get<{ t: number | null; f: number | null }>('SELECT min(published_at) AS t, min(fetched_at) AS f FROM news');
+    const span = await this.db.get<{ t: number | null; f: number | null }>('SELECT min(published_at) AS t, min(fetched_at) AS f FROM news');
     const oldest = span?.t ?? null;
     if (oldest !== null && span?.f !== null && span?.f !== undefined) {
       let day = dayKey(Math.max(oldest, span.f), tz);
       const floor = addDays(todayKey, -MAX_FINALIZE_DAYS);
       if (day < floor) day = floor;
-      const finals = new Set(this.db.all<{ day: string }>('SELECT day FROM daily_sentiment WHERE tz = ? AND final = 1', [tz]).map((r) => r.day));
+      const finals = new Set((await this.db.all<{ day: string }>('SELECT day FROM daily_sentiment WHERE tz = ? AND final = 1', [tz])).map((r) => r.day));
       const settledBefore = addDays(dayKey(now - MAX_ITEM_AGE_MS, tz), -1);
       for (; day < todayKey; day = addDays(day, 1)) {
         if (finals.has(day) || this.emptyDays.has(`${tz}|${day}`)) continue;
-        const r = this.computeDay(day, tz, now, false);
+        const r = await this.computeDay(day, tz, now, false);
         if (r.counts.positive + r.counts.neutral + r.counts.negative === 0 && r.counts.pending === 0) {
           if (day < settledBefore) this.emptyDays.add(`${tz}|${day}`);
           continue;
@@ -176,25 +189,25 @@ export class DailySentimentService {
         const settled = day < settledBefore;
         const ready = now >= dayBounds(day, tz).end + FINALIZE_GRACE_MS && r.counts.pending === 0;
         if (!ready && !settled) {
-          this.save(r, false); // provisional: still visible in the history, recomputed on the next refresh
+          await this.save(r, false); // provisional: still visible in the history, recomputed on the next refresh
           continue;
         }
-        this.save(r, true);
+        await this.save(r, true);
         finalized.push(day);
       }
     }
-    return { today: this.today(tz, now), finalized };
+    return { today: await this.today(tz, now), finalized };
   }
 
-  history(days: number, tz: string, now = Date.now()): HistoryPoint[] {
+  async history(days: number, tz: string, now = Date.now()): Promise<HistoryPoint[]> {
     const todayKey = dayKey(now, tz);
     const from = addDays(todayKey, -(days - 1));
-    return this.db
-      .all<{ day: string; value: number; confidence: string; counts: string; final: number }>(
+    return (
+      await this.db.all<{ day: string; value: number; confidence: string; counts: string; final: number }>(
         'SELECT day, value, confidence, counts, final FROM daily_sentiment WHERE tz = ? AND day >= ? AND day <= ? ORDER BY day',
         [tz, from, todayKey],
       )
-      .map((r) => {
+    ).map((r) => {
         let count = 0;
         try {
           count = (JSON.parse(r.counts) as { total?: number }).total ?? 0;
@@ -211,26 +224,26 @@ export class DailySentimentService {
    * Days the retention has already thinned out keep the value they had: their news are partly gone, so a new
    * computation would be wrong (FD-IMPACT §3).
    */
-  recomputeHistory(now = Date.now()): string[] {
-    const { retentionCutoff } = readJobData(this.db, MAINTENANCE_JOB, { retentionCutoff: 0 });
+  async recomputeHistory(now = Date.now()): Promise<string[]> {
+    const { retentionCutoff } = await readJobData(this.db, MAINTENANCE_JOB, { retentionCutoff: 0 });
     // Also the zones nobody uses now: whoever picks one again gets days computed the current way (refresh rebuilds
     // the missing ones), never an older weighing next to a newer one.
-    const stored = this.db.all<{ tz: string }>('SELECT DISTINCT tz FROM daily_sentiment').map((r) => r.tz);
-    for (const tz of new Set([...this.settings.timezones(), ...stored])) {
+    const stored = (await this.db.all<{ tz: string }>('SELECT DISTINCT tz FROM daily_sentiment')).map((r) => r.tz);
+    for (const tz of new Set([...(await this.settings.timezones()), ...stored])) {
       // The day holding the threshold lost its earlier news: the first complete day is the next one.
       const from = retentionCutoff > 0 ? addDays(dayKey(retentionCutoff, tz), 1) : '';
-      this.db.run('DELETE FROM daily_sentiment WHERE tz = ? AND day >= ?', [tz, from]);
+      await this.db.run('DELETE FROM daily_sentiment WHERE tz = ? AND day >= ?', [tz, from]);
     }
     this.emptyDays.clear();
-    return this.refresh(now).finalized;
+    return (await this.refresh(now)).finalized;
   }
 
   /** Recomputes the history once after the weighing changed (INDEX_VERSION); true when it did. */
-  upgradeHistory(now = Date.now()): boolean {
-    const state = readJobData(this.db, DAILY_JOB, { indexVersion: 1 });
+  async upgradeHistory(now = Date.now()): Promise<boolean> {
+    const state = await readJobData(this.db, DAILY_JOB, { indexVersion: 1 });
     if (state.indexVersion >= INDEX_VERSION) return false;
-    this.recomputeHistory(now);
-    writeJobData(this.db, DAILY_JOB, { ...state, indexVersion: INDEX_VERSION });
+    await this.recomputeHistory(now);
+    await writeJobData(this.db, DAILY_JOB, { ...state, indexVersion: INDEX_VERSION });
     return true;
   }
 }

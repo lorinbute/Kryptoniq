@@ -992,3 +992,429 @@ Verificări: `tsc` curat; 357 de teste; nicio mențiune „Kryptoniq” în păr
 
 ## Runda 2 — 0 probleme
 Recitite în forma finală: README (lista funcțiilor, cele 9 țări / zone ale paginii Economie, 7 exchange-uri și 4 brokeri, ancorele spre ghid), ghidul (părțile schimbate: lansatorul, „De la Kryptoniq la Sentiq”, asistentul în doi pași cu „Conectează”, Setări / Stare sistem cu „doar admin”, ordinea paginilor ca în meniu), FD și TD Partea I (nicio urmă a stării v1: meniu lateral, „fără login”, „doar KuCoin”, `brass`), notele despre ce a fost înlocuit în Partea a II-a, tabelele cu `|` escapat. `tsc` curat; 357 de teste.
+
+---
+
+# Review — FD-AZURE / TD-AZURE (Azure SQL Database; pregătit pentru App Service)
+
+Domeniu: `server/db/*` (config, database, schema, import, codul SQLite păstrat pentru import), toate serviciile devenite asincrone (`settings`, `auth/*`, `mcp/*`, `news/*`, `sentiment/*`, `calendar`, `economy`, `exchange/accounts`, `market/*`, `scanner`, `summary/*`, `jobs/*`), `http/*` (rute, autentificare, securitate / modul Azure, cookie-uri, erori 503), `config.ts`, `main.ts`, `context.ts`, `scripts/*` (admin, db-check, import-sqlite, smoke, sentiq.sh), `web/pages/Health.tsx`, `shared/api-types.ts`, testele (infrastructura de scheme `t_…`, toate fișierele convertite, testele noi), documentele (FD / TD Partea I și secțiunile noi, ghidul, README, `deploy-azure.md`, PROGRESS). Pe lângă recitire: un detector de promisiuni neașteptate (API-ul TypeScript 5, în scratchpad) peste `src/server` și `scripts`, și `tsc` și pe `scripts/` (care nu sunt în `tsconfig`).
+
+## Runda 1 — 15 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Teste (`test/schemas.ts`) | Schemele de test nu se ștergeau: `EXEC(N'…' + QUOTENAME(@s))` nu e voie (funcții în `EXEC(...)`), lotul nu se compila, iar eroarea era înghițită | comenzile se construiesc într-o variabilă și rulează cu `sp_executesql`; eroarea de la final e scrisă; resturile au fost șterse |
+| 2 | Teste (scanner) | `vi.useFakeTimers()` oprea și timerele driverului de bază de date → testele se blocau | se falsifică doar `Date` (`toFake: ['Date']`) |
+| 3 | Teste (MCP) | Știrea pusă „acum o oră” cădea în ziua de ieri dacă testul rula după miezul nopții (exista și înainte) | „acum o secundă” |
+| 4 | Teste (utilizatori) | Mailul pleacă în fundal și își citește setările din bază: linkul apare în jurnal după răspuns, iar `until` folosea `Date`, falsificat | testele așteaptă linkul (`until` cu `performance.now()`) sau un scurt răgaz înainte de a verifica că nu a plecat nimic |
+| 5 | Schema / import | SQL Server consumă un număr de identitate și la un `INSERT` respins: id-urile pot avea goluri (în SQLite nu) | testul verifică doar că id-urile continuă; TD-AZURE §3 o spune; nimic din aplicație nu presupune id-uri consecutive |
+| 6 | Securitate (login, 2FA, acțiunile cu parolă) | Încercările aceluiași apelant trimise în paralel treceau toate de verificare înainte să fie numărată vreuna (verificarea parolei era deja asincronă; drumurile la baza Azure lărgesc fereastra) | `Throttle.serial`: încercările unei chei rulează una după alta; test nou (5 în paralel → 2 × 400, 3 × 429) |
+| 7 | Cereri de cont | Mutarea numărării înaintea răspunsului bazei număra și cererile invalide | `checkRequest` validează întâi; se numără doar cele valide |
+| 8 | Pornire (`main.ts`) | O eroare în `createContext` / `buildApp` (o migrare, seed-ul) rămânea o promisiune respinsă, fără mesaj în jurnal | prinsă, scrisă în jurnal, ieșire cu cod 1 |
+| 9 | Teste | Numărul de scheme era fix (4); cu `--maxWorkers` mai mare, doi workeri ar fi folosit aceeași schemă | o schemă pentru fiecare worker posibil (`maxWorkers` din configurația Vitest) |
+| 10 | Import | Copia de rezervă (când `VACUUM INTO` nu merge) lua doar fișierul principal, nu și `-wal`: ultimele schimbări s-ar fi pierdut | se copiază și `-wal` / `-shm` |
+| 11 | `db-check` | „Utilizatorul nu vede alte baze” era fals liniștitor: în Azure SQL `sys.databases` arată mereu doar baza curentă (așa a apărut și pentru `serento_sa`) | detectează adminul serverului (`USER_NAME() = 'dbo'`) și avertizează |
+| 12 | Jurnal | Redactarea nu acoperea `pwd=` (din connection string-uri), cum spunea TD-AZURE §1 | adăugat |
+| 13 | Scanner pe instanța care nu rulează joburile | Rezultatele sunt în memoria fiecărui proces și niciun buton din interfață nu cere o scanare: pe acea instanță pagina Azi nu ar fi avut niciodată semnale | `GET /api/scanner` pornește o scanare în fundal pe un proces care nu e lider, cel mult o dată pe minut; FD / TD |
+| 14 | Teste (contractul joburilor) | Timpii ficși (900 / 1200 ms) cădeau cu suita completă în paralel | testul așteaptă condiția (până la 15 s) |
+| 15 | TD-AZURE | Textul nu spunea cum expiră cache-urile (30 s / 5 min), nici despre `Throttle.serial`, mailul în fundal, copia cu `-wal`, schemele per worker; „`@@SERVERNAME`” în loc de serverul din config | aliniat cu codul |
+
+Tot în această sesiune (nu e o problemă a codului): o redenumire făcută cu `git mv` a atins indexul git, pe care utilizatorul nu vrea să-l atingem; intrarea a fost pusă la loc cu `git update-index` (indexul arată ca înainte), iar fișierele se mută de acum doar cu `mv`.
+
+Verificări: nicio urmă de SQL SQLite în codul aplicației (`LIMIT`, `group_concat`, `json_each`, `INSERT OR`, `ON CONFLICT`, `PRAGMA`, `key` fără paranteze); `SELECT *` doar pe tabele ale căror rânduri nu ajung neprelucrate în API (hash-urile calculate nu ies); texte de 250.000 de caractere și 20.000 de rânduri JSON într-un parametru; `tsc` curat (și pe `scripts/`); nicio promisiune neașteptată în afara celor intenționate (verificări `if (pending)` de cache); 381 de teste pe Azure SQL; schemele de test șterse după fiecare rulare.
+
+## Runda 2 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Cheia master | Fără `SENTIQ_MASTER_KEY` pe Azure (sau fără `data/master.key` pe un alt calculator legat la aceeași bază), `SecretBox.load` făcea în tăcere o cheie nouă: cheile de exchange mutate n-ar mai fi putut fi citite, iar cele salvate de atunci ar fi fost criptate cu altă cheie | `SecretBox.available`; `createContext` refuză să pornească dacă lipsește cheia, dar baza are ceva criptat (conturi, cheile aplicației, TOTP), cu mesaj; o cheie nouă doar pe o bază fără nimic criptat; test; FD-AZURE §2, TD-AZURE §8 |
+| 2 | Import | Verificarea cheii la finalul importului folosea `SecretBox.load`, care face o cheie nouă dacă lipsește | verifică doar dacă există; altfel avertizează că Sentiq nu va porni fără ea |
+| 3 | Joburi | Un `stop()` venit cât o reînnoire a contractului era pe drum lăsa contractul ținut de un proces oprit până la 60 s | după reînnoire, un proces oprit eliberează imediat contractul (`release`) |
+
+Verificări: `tsc` curat, și pe `scripts/` (cu tipurile proiectului); promisiuni neașteptate: doar verificările intenționate de cache și `dummyHash ??=`; 382 de teste pe Azure SQL; schemele de test șterse.
+
+## Runda 3 — 5 probleme (reparate)
+Alte unghiuri: fiecare secvență citire → scriere a fiecărui serviciu (în tranzacție sau protejată de o condiție în `WHERE`), tipurile parametrilor față de coloane, booleenii (`INT` 0 / 1), ordinea rezultatelor folosită de cod, literali SQL cu diacritice fără `N`, concordanța FD-AZURE / TD-AZURE cu codul, pornirea pe **Node 24** (runtime-ul App Service), toate paginile în Chrome pe un server de test legat la o schemă de test cu o copie a datelor.
+
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | TD-AZURE §10 | Lista drepturilor refuzate utilizatorilor de test pe `dbo` era incompletă (codul refuză și `REFERENCES`, `EXECUTE`) | aliniată |
+| 2 | Stare sistem | „Joburi de fundal” venea din ce știa procesul la ultima reînnoire; pe un proces cu joburile oprite (`SENTIQ_DISABLE_JOBS`) arăta „nu rulează nicăieri” chiar dacă alt proces le rula | `Scheduler.currentLeader()` citește contractul din bază (cu ceasul bazei) |
+| 3 | Viteză (de pe Mac) | `/api/health` făcea ~10 interogări una după alta: 1,5–1,9 s de pe Mac (~50 ms pe drum până la Azure); setările ~0,7 s | citirile independente rulează deodată (`Promise.all`): 0,3 s fiecare |
+| 4 | Stare sistem | Limita bazei apărea „10240.0 MB”, iar mărimea necitibilă (utilizator fără `VIEW DATABASE STATE`) apărea „?” | `fmtBytes` ajunge la GB („10 GB”); „mărime necunoscută”; test |
+| 5 | Teste | Fără acces la bază (fără internet, sandbox) setup-ul global oprea toată suita, și testele care n-au nevoie de bază | setup-ul dă motivul (`missing`), doar testele cu bază îl raportează |
+
+Verificări: serverul pornit pe Node 24.21 cu datele de test (`/api/auth/state` OK, fără avertismente); toate paginile în Chrome, temă întunecată 1440 px și luminoasă 390 px, fără depășiri pe orizontală și fără erori în consolă; 383 de teste; `tsc` curat.
+
+**Incident în timpul verificării.** Serverul de test (Node 24) l-am oprit cu `pkill -f src/server/main.ts -n`, iar comanda a oprit aplicația utilizatorului de pe 4317 („SIGTERM received” la 01:12). Codul vechi (SQLite) nu mai era în folder, așa că am făcut mutarea planificată pentru final, cu aplicația oprită (deci fără scrieri pierdute):
+1. backup `data/backups/kryptoniq-before-azure-2026-10-14.db`;
+2. `scripts/sentiq.sh import-sqlite`: toate cele 17 tabele cu date, cheia master verificată;
+3. pornirea pe codul nou: contul de admin cu parola lui, joburile rulând cu succes pe Azure SQL.
+
+Serverele de test se opresc de acum doar prin lansator (`SENTIQ_PORT=4399 … stop`) sau după PID (notat în memorie).
+
+## Runda 4 — 3 probleme (reparate, toate în documentație)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Ghid | „Datele rămân în `data/`” la oprire: datele sunt acum în Azure SQL | în `data/` rămân conexiunea, cheia master, modelul și jurnalele |
+| 2 | TD §14 | Durata suitei (~4–5 min) și cazul „fără acces la bază” (runda 3) nu erau la zi | ~5–6 minute de pe Mac; doar testele cu bază eșuează, cu motivul |
+| 3 | FD-AZURE §1 | „Resturile … se șterg la rularea următoare” fără pragul de 3 ore din cod | pragul spus; și ce se întâmplă fără acces la bază |
+
+Codul recitit după runda 3 (citirile paralele din `/api/health` și din setări, `currentLeader`, `fmtBytes`, setup-ul global): fără probleme.
+
+## Runda 5 — 11 probleme (reparate, toate în TD-AZURE)
+TD-AZURE recitit integral față de codul final; textul rămăsese în urma schimbărilor din rundele 1–3:
+1. §1: `describe()` → `describeDb()`.
+2. §2: semnătura lui `Db.open` avea un `log` care nu există; lipsea `Db.shared`.
+3. §2: „listele mari se împart la apelant” → loturile merg ca un parametru JSON (`OPENJSON`); un `NULL` într-o coloană `VARBINARY` doar prin `CONVERT`.
+4. §2: lipsea apărarea față de o tranzacție rămasă deschisă după un timeout (`IF @@TRANCOUNT > 0 ROLLBACK`; reluarea unei tranzacții care găsește `@@TRANCOUNT > 1`).
+5. §3: migrările sunt sub lock-ul de scriere, nu sub un lock `sentiq:migrate`.
+6. §3: căutarea duplicatelor după adresă se face pe lot (hash-uri din JSON), nu cu `CAST(@p …)`.
+7. §6: `jobsLeader` vine din contract (`currentLeader`).
+8. §7: IP-ul din `X-Forwarded-For` e ultimul element, nu primul; numele reale (`req.clientIp`, `req.viaHttps`, `req.behindProxy`).
+9. §9: verificarea cheii nu mai folosește `SecretBox.load` (runda 2).
+10. §10 / §11: testele SQLite vechi rămân; `db-check` detectează adminul serverului, nu „ce alte baze vede”; `smoke.ts` rulează într-o schemă de test; regiunea = cea a serverului bazei.
+11. §12: latența măsurată (~40–60 ms de pe Mac), nivelul bazei (S0), pornirea verificată pe Node 24.
+
+## Runda 6 — 2 probleme (reparate, în FD-AZURE)
+1. §3: lipsea cazul „cheia master lipsește pe calculatorul care face mutarea” (runda 2): mutarea se face, avertizează, nu se face o cheie nouă.
+2. §7: planul „aplicația rulează codul vechi până la repornire” nu spunea că mutarea a fost făcută (14 oct, backup, `import-sqlite`, pornirea pe codul nou).
+
+Recitite fără probleme: `deploy-azure.md` (pașii, setările, variabilele, firewall-ul, publicarea, domeniul), README, ghidul (Pornire, comenzi, Backup, probleme frecvente), FD Partea I §0, §0.2, §9, §10, §14.
+
+## Runda 7 — 2 probleme (reparate)
+1. Teste (`global-setup.ts`): dacă o schemă veche rămasă nu se putea șterge (încă folosită de altă rulare), setup-ul se oprea și toate testele cu bază cădeau → eșecul e doar semnalat.
+2. FD-AZURE §3: un `import-sqlite --replace` făcut când Sentiq rulează deja pe Azure pe aceeași bază nu poate fi observat de pe Mac (verificarea e doar pe portul local) → cazul spus: App Service se oprește întâi din portal.
+
+Recitite fără probleme: `test/db.ts` (reset, identități, adminul), `test/schemas.ts`, `db/import-sqlite.ts`, `scripts/import-sqlite.ts`, `/api/health`, `Health.tsx`.
+
+## Runda 8 — 0 probleme
+Recitire completă a ce s-a schimbat după runda 7 și a pornirii (`main.ts`: configurația, conectarea, contextul, job-urile, oprirea), plus verificările automate: `tsc` curat (și pe `scripts/`); nicio promisiune neașteptată în afara celor intenționate; 383 de teste pe Azure SQL (35 de fișiere, ~4,5 min); schemele de test șterse la final.
+
+## Runda 9 — publicarea pe App Service, 3 probleme (reparate)
+Prima publicare pe App Service (`sentiq`, Austria East, B1) a scos la iveală:
+1. **Build-ul pica** cu „vite: not found”: cu `NODE_ENV=production` (setare din ghid), `npm install` al lui Oryx sare peste devDependencies.
+   - Reparat cu `scripts/azure-build.sh` (`npm ci --include=dev`, `npm run build`, `npm prune --omit=dev`, `ONNXRUNTIME_NODE_INSTALL=skip`), pornit prin `CUSTOM_BUILD_COMMAND`.
+   - Verificat local cu `NODE_ENV=production` pe o copie a zip-ului, apoi serverul pornit din copie pe o schemă de test.
+   - Verificat pe Azure: build în 147 s, 104 pachete de dev scoase.
+2. **Un login refuzat (firewall) apărea ca „serverul nu răspunde”.**
+   - tedious nu pune număr de eroare pe `ELOGIN`, deci pornirea îl reîncerca drept trecător, iar `explainConnectError` vedea doar `DbUnavailableError`.
+   - Reparat cu `connectRetryable` (un `ELOGIN` se reîncearcă doar dacă tedious l-a marcat `isTransient`) și cu citirea cauzei în `explainConnectError`. Erorile de rețea păstrează cuvintele driverului.
+   - 5 teste noi (`db/connect-errors.test.ts`). Pe Azure, jurnalul spune acum „nu acceptă conexiuni de la IP-ul 68.210.131.80”.
+3. **Ghidul** (`deploy-azure.md`) cerea IP-urile de ieșire fără să spună că trebuie **toate** (aplicația iese prin oricare). Apoi, `zip` fără `rm -f` adaugă la arhiva veche. Ambele sunt corectate, la fel și TD-AZURE §11.
+
+## Runda 10 — 1 problemă (reparată)
+1. Mesajul pentru utilizator / parolă greșite trimitea doar la `data/database.env`; pe Azure, valorile sunt în setările `SENTIQ_DB_*` ale aplicației. Codul și FD-AZURE §2 spun acum ambele.
+
+## Runda 11 — 0 probleme
+Recitite: `connectRetryable`, `explainConnectError`, `Db.open`, testul nou, `azure-build.sh`, `deploy-azure.md` §3–§5, TD-AZURE §2 și §11, FD-AZURE §2. `tsc` e curat, și pe `scripts/`. 388 de teste pe Azure SQL (36 de fișiere). Fișierele de diagnostic folosite pe Azure au fost șterse.
+
+# FD-ONLINE, FD-ADMINSET, FD-AUTOFEED, FD-TODAYGRID (14 oct 2026)
+
+Domeniu:
+- server: `settings.ts` (`public_instance`, `publishPublicInstance`, `publicInstance()`, `viewFor` fără Resend pentru utilizatori), `context.ts`, `http/auth-routes.ts` (`publicBase`, `linkBase`, `publicUrl` în starea de login), `mcp/routes.ts` (`registerMcpApi(app, ctx)`), `mcp/oauth.ts` (`listConnections`, `revokeGrantIn`), `news/sources.ts` (ștergerea feed-urilor automate), `jobs/register.ts`, `main.ts`;
+- interfață: `pages/Settings.tsx`, `pages/SettingsAdmin.tsx` (nou), `components/SettingsTabs.tsx` (nou), `hooks.ts`, `App.tsx`, `pages/Today.tsx`, `Auth.tsx`, `Security.tsx`, `DaySummary.tsx`, `Charts.tsx`, `AccountWizard.tsx`;
+- teste, FD / TD (Partea I și a II-a), ghidul, README, `deploy-azure.md`, PROGRESS.
+
+Verificat înainte de review:
+- connectorul pornit pe App Service (metadatele, 401, autorizarea cu documentul real al Claude);
+- 391 de teste pe Azure SQL;
+- Chrome pe o schemă de test, cu știrile și calendarul reale din ultimele 36 h (admin și utilizator, la 6 lățimi).
+
+## Runda 12 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | TD-ADMINSET §1 | filele erau descrise „în stilul `.seg`”; codul are file subliniate (`border-accent`) | TD corectat |
+| 2 | TD-ONLINE §5 | testul promis pentru cache-ul lui `publicInstance()` (30 s) lipsea | test nou: neschimbat în fereastră, citit din nou după `SETTINGS_TTL_MS` |
+| 3 | FD-ONLINE §3 | textul despre passkey din tabel nu era cel din aplicație („sentiq.money” față de „adresa publică”) | FD adus la textul din cod |
+
+Recitite fără alte probleme:
+- `syncStockSources` (cascada pe `news` / `news_coins`; grupurile de știri nu depind de rândul șters; o citire a feed-ului în paralel cu ștergerea se oprește cu un avertisment);
+- `publishPublicInstance` (loopback, App Service fără adresă, Mac);
+- `/api/mcp/status` și `DELETE` pe o instanță fără connector (doar conexiunile proprii; `verify` nu ține nimic în memorie, deci revocarea de pe Mac oprește imediat token-ul pe Azure);
+- `linkBase` (activare, cererea nouă; parola uitată rămâne pe adresa de pe care s-a cerut);
+- paginile de setări (ancorele după încărcarea listelor de deasupra, `/settings/admin` pentru un utilizator obișnuit, căutarea);
+- grila de pe Azi (containerul plăcii de sentiment).
+
+## Runda 13 — 1 problemă (reparată)
+1. FD-ONLINE §4: un server de test cu `SENTIQ_PUBLIC_URL=http://localhost:…` „scrie doar în schema lui”; de fapt `publishPublicInstance` nu scrie deloc o adresă loopback. FD corectat.
+
+Recitite fără probleme: `pages/Settings.tsx` întreg (secțiunile, ancorele, nota despre Twelve Data pentru admin și pentru ceilalți), `App.tsx` (ruta, căutarea, bannerul), `Auth.tsx`, `Today.tsx`, ghidul, README, `deploy-azure.md`. `tsc` curat, și pe `scripts/`; verificarea promisiunilor arată doar cazurile vechi, intenționate (cache-uri de cereri în curs), niciunul în fișierele schimbate.
+
+## Runda 14 — 8 probleme (reparate, în TD și un test)
+1. §2: „validat cu zod”; verificarea e în `parsePublicInstance` (`parsePublicUrl`, fără loopback, `mcp` doar pentru `true`).
+2. §3: `registerMcpApi(app, ctx)` descris de două ori.
+3. §4: `AuthState.publicUrl` e opțional (lipsește la un server mai vechi), nu `string | null`.
+4. §4: lista fișierelor cu texte schimbate nu avea `SettingsAdmin.tsx` și nota din jurnalul de pornire (`main.ts`).
+
+5. TD-ADMINSET §1: lista din căutare se numește `SEARCH_PAGES`, nu `PALETTE_PAGES`.
+6. TD-ADMINSET §1: `useHashScroll` nu spunea că așteaptă listele de deasupra ancorei.
+7. TD-AUTOFEED: jurnalul feed-urilor șterse îl scriu și schimbarea favoritelor și ștergerea unui utilizator; testele sunt doar în `news.test.ts`.
+8. TD-AUTOFEED: cazul „o sursă manuală cu aceeași adresă rămâne după ce acțiunea iese din favorite” nu era testat → test extins.
+
+Recitit fără probleme: FD-ONLINE întreg (cazurile limită față de cod: `SENTIQ_MCP` scos → Azure scrie `mcp: false`, deci panoul dispare și pe Mac).
+
+## Runda 15 — 1 problemă (reparată)
+1. FD-AUTOFEED §3: „feed-ul se citește imediat” la o acțiune adăugată din nou. Pe instanța fără joburi (`job_lease`), `nudge` nu face nimic, deci feed-ul se citește la următoarea rundă `news.fetch` (în cel mult un minut). FD corectat.
+
+Recitite fără probleme: FD-ADMINSET (cazurile limită față de pagini: eroarea cu „Reîncearcă”, Înapoi între file, nota Twelve Data pentru admin / ceilalți), FD-AUTOFEED (BSOL în copiile de siguranță: activ înainte de conturi, oprit după), FD-TODAYGRID (fără favorite: placa goală pe toată lățimea).
+
+## Runda 16 — 0 probleme
+Recitite după runda 15: rândul corectat din FD-AUTOFEED, secțiunea connectorului din ghid, README. `tsc` curat (și pe `scripts/`), build-ul trece, 391 de teste pe Azure SQL (36 de fișiere).
+
+## Publicarea (14 oct 2026) — un incident
+1. Primul deploy (`2b6506ab`, 12:09 UTC) a fost întrerupt: la 12:11 Azure a mutat aplicația pe alt worker (`…YC` → `…YB`), iar Kudu a repornit în mijlocul `npm ci`.
+2. Build-ul apucase să șteargă `oryx-manifest.toml`, deci aplicația, repornită pe noul worker, nu mai dezarhiva `node_modules`. Ieșea cu `exit code 1` după ~25 s, fără nimic în jurnalul Sentiq. sentiq.money a răspuns 503 între 12:11 și 12:27 UTC.
+3. Al doilea deploy a fost refuzat (409, „deployment in progress”) din cauza lacătului rămas (`/home/site/locks/deployment`, expira la 12:49).
+4. Reparat: am șters lacătul și am republicat aceeași arhivă. Deploy-ul `e246b51e` a reușit (12:27 UTC), cu „removed the automatic feed of BSOL” și „Claude connector on” în jurnal.
+5. Pașii au intrat în `deploy-azure.md` §5.
+
+Apoi am repornit aplicația de pe Mac pe codul nou. Ambele instanțe dau `publicUrl: https://sentiq.money`, iar sursa BSOL nu mai e în bază.
+
+# FD-MARKETSRC (14 oct 2026)
+
+Domeniu:
+- server: `shared/settings.ts` (`marketData`, `MARKET_EXCHANGES` cu Bitget, `SCANNER_TFS`, `market.exchange` opțional), `market/source.ts` (nou), `market/market.ts` (`lists`, `timeframes`), `settings.ts` (`migrateMarketData`), `context.ts`, `http/routes.ts` (sursa, lumânările, căutarea, scanner-ul, conturile), `scanner/scanner.ts`, `mcp/server.ts`; mesajele „Setări → Admin → …” din `stocks.ts` și `summary/service.ts`;
+- interfață: `hooks.ts`, `MarketStrip.tsx`, `CommandPalette.tsx`, `Charts.tsx`, `chart/paths.ts` (`nearestTimeframe`), `Settings.tsx`, `SettingsAdmin.tsx`, `Today.tsx`, `AccountWizard.tsx`;
+- teste, FD / TD (ambele părți), ghidul, PROGRESS.
+
+## Runda 17 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `market.exchange` | avea valoarea implicită `kucoin`: cu KuCoin și Binance conectate (Binance primul) și nicio alegere, ieșea KuCoin, nu „primul adăugat” (FD-MARKETSRC §2) | câmpul e opțional (lipsește până la o alegere); valorile salvate înainte contează ca alegere; test nou |
+| 2 | `Charts.tsx` | cererea pentru timeframe-ul mare (Market Structure) putea pleca înainte să se știe exchange-ul și timeframe-urile lui | pornește doar după ce sursa e cunoscută |
+
+Recitite fără alte probleme: `MarketSource` (cache-ul, „nu listează” față de „nu se poate citi”), migrarea `marketData`, rutele (un `exchange` explicit dintr-un tab vechi, căutarea unită), scanner-ul (cheia de memo cu exchange-ul), `get_chart`, invalidările din interfață după cont / alegere / Admin.
+
+## Runda 18 — 1 problemă (reparată)
+1. TD-MARKETSRC §1: `market.exchange` era descris cu valoare; acum e opțional (lipsește până la o alegere). TD corectat.
+
+Recitite fără probleme: FD-MARKETSRC §2–§3 față de cod (cazurile limită: contul ales șters, pana exchange-ului, timeframe-ul vechi al semnalelor, Market Structure), TD §2–§6.
+
+## Runda 19 — 0 probleme
+Recitit TD-MARKETSRC §1 după corectură. `tsc` curat (și cu `--noUnusedLocals` pe fișierele atinse), 397 de teste pe Azure SQL (37 de fișiere).
+
+# FD-TRADESTATS (14 oct 2026)
+
+Domeniu:
+- server: `exchange/trade-stats.ts` (nou), `exchange/accounts.ts` (`futuresAvailable`, `tradeStats`), `http/routes.ts` (`/api/portfolio/:id/stats`);
+- interfață: `shared/api-types.ts`, `pages/Trades.tsx` (cardurile, perioada, butonul mutat), `pages/Settings.tsx` (textul de la Favorite);
+- teste, FD / TD, ghidul, PROGRESS.
+
+Verificat înainte de review:
+- în citire, pe contul KuCoin real (clasic): soldul futures se citește; 1 / 3 / 3 / 3 poziții închise pe Azi / 7z / 30z / 90z;
+- Chrome pe o schemă de test, la 1440 și 390.
+
+## Runda 20 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Bitget | ccxt pune în `realizedPnl` câmpul `pnl` (înainte de comisioane), iar FD cere rezultatul net | `netResult` folosește `netProfit` al Bitget când există; test |
+| 2 | Teste | TD-TRADESTATS §6 promitea exchange fără istoric, eroarea, cache-ul și `force`, Kraken fără futures și eroarea soldului futures; lipseau | adăugate în `server.test.ts` |
+
+Recitite fără alte probleme:
+- ccxt pentru Bybit / OKX / Bitget: ora închiderii (`lastUpdateTimestamp`) și rezultatul sunt citite;
+- ferestrele, înjumătățirea și paginile OKX;
+- `futuresAvailable` (KuCoin `type: 'contract'` iese înainte de tratarea conturilor HF);
+- pagina: titlurile cardurilor cu „—”, perioada ținută minte, butonul mutat.
+
+## Runda 21 — 1 problemă (reparată)
+1. `Trades.tsx`: după o reîmprospătare eșuată, avertismentul rămânea și pe contul ales apoi → se șterge la schimbarea contului.
+
+Recitite fără alte probleme: `AccountsView`, `CryptoCards` (pe ce date se bazează fiecare card, „…” cât se încarcă, „—” cu motivul), FD-TRADESTATS §2–§4 față de pagină.
+
+## Runda 22 — 0 probleme
+`tsc` curat (și pe `scripts/`, și cu `--noUnusedLocals` pe fișierele atinse); verificarea promisiunilor arată doar cazurile vechi, intenționate (mutate la alte linii); 401 teste pe Azure SQL (38 de fișiere).
+
+## Publicarea FD-MARKETSRC + FD-TRADESTATS (14 oct 2026) — același incident
+1. Deploy-ul `05b181fd` (14:16 UTC) a fost întrerupt ca la prânz: instanța a repornit pe alt worker (`…RR`) la un minut după începutul build-ului, `oryx-manifest.toml` era deja șters, iar site-ul n-a mai pornit.
+2. În Kudu: 1,25 GB din 1,8 GB ocupați, plus 0,7 GB swap. Ambele deploy-uri reușite de azi au rulat cu aplicația deja oprită, deci cauza e memoria B1 (aplicația + build-ul).
+3. Reparat la fel: lacătul șters, deploy-ul `4cc0acb2` reușit la 14:24 UTC. Pe Mac, aplicația a fost repornită pe codul nou; `marketData` s-a mutat (KuCoin, 1500).
+4. `deploy-azure.md` §5 spune cauza și ce încercăm la următoarea publicare: aplicația oprită întâi.
+
+# FD-MCPMULTI + FD-DBHEAL (14 oct 2026)
+
+Domeniu:
+- `config.ts`, `mcp/oauth.ts`, `mcp/routes.ts` (`withClientId`), `Consent.tsx`, `Security.tsx`;
+- `db/database.ts` (`detached`, `healStuckLock`, `healing`, `beginLocked`), `jobs/scheduler.ts`, `context.ts`, `main.ts`;
+- teste noi (`mcp.test.ts`, `db/heal.test.ts`), FD / TD, ghidul, README, `deploy-azure.md`, PROGRESS.
+
+## Runda 23 — 1 problemă (reparată)
+1. README: „connector MCP pentru Claude” → Claude, ChatGPT și Gemini.
+
+Recitite fără alte probleme:
+- `withClientId`: formularul are întâietate; aserțiunea doar alege clientul, iar PKCE rămâne verificarea;
+- pagina de consimțământ (numele aplicației și hostul ei; ordinea hook-urilor neschimbată);
+- autovindecarea:
+  - pragul de 5 minute față de tranzacțiile Sentiq: Economie, știrile și calendarul scriu în bloc prin `OPENJSON`, deci durează secunde;
+  - verificarea dublă înainte de `KILL`; o dată pe minut;
+  - dreptul de `KILL` confirmat pentru `sentiq_app` (folosit la incident);
+- `detached` în scheduler: lease-ul și rulările joburilor.
+
+## Runda 24 — 1 problemă (reparată)
+1. `db/heal.test.ts`: tipul `Db & { pool … }` se reducea la `never` (`pool` e privat), deci `tsc` pica. Testul trecea, fiindcă vitest ignoră tipurile. Reparat cu un acces separat la câmpurile private; `tsc` e curat.
+
+Verificări: 408 teste pe Azure SQL (39 de fișiere); `tsc` curat (și pe `scripts/`, și fără nimic nefolosit în fișierele atinse).
+
+# FD-UIPOLISH (14 oct 2026)
+
+Domeniu:
+- `styles.css` (înălțimea minimă a câmpurilor și a dropdown-urilor), `Today.tsx` (`TrendArrow`), `Settings.tsx` (rândurile favoritelor, rândul de adăugare), `Trades.tsx` (perioada în bara de sus), `News.tsx`, `Security.tsx` (codul pentru Gemini CLI se rupe pe rânduri);
+- FD / TD, ghidul.
+
+Verificat înainte de review: Chrome pe o schemă de test, la 1440 și 390 (câmp + buton la 38 px în Admin, Securitate și Surse; săgețile pe fișe; perioada pe același rând cu butoanele).
+
+## Runda 25 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Știri | regula globală de 38 px făcea câmpul de căutare (fără chenar) mai înalt decât formularul lui de 32 px; ieșea din el, nevăzut, și pe ecranele tactile cu 6 px | `min-h-0` pe câmp; măsurat: 30 px în formularul de 32 |
+| 2 | Grafice → Indicatori | previzualizarea liniei (`h-8`, 32 px) stătea lângă dropdown-ul de stil, acum de 38 px | rândul e `items-stretch`, previzualizarea fără `h-8`; măsurat: 38 / 38 |
+| 3 | FD | „Telefon: două rânduri” în bara din Tranzacții; la 390 px sunt trei (titlul și conturile, perioada, butoanele) | FD corectat |
+
+Recitite fără alte probleme:
+- toate câmpurile și dropdown-urile din `src/web` față de regula nouă: paleta ⌘K (`h-14`), parolele, wizard-ul de conturi, calendarul, economia și prețul mediu din Tranzacții au deja 38 px sau mai mult; câmpurile de culoare sunt excluse;
+- `TrendArrow`: eticheta pentru cititoarele de ecran, numele care se taie cu „…”;
+- stratul regulii pentru ecranele tactile (`components`) față de excepțiile din Știri (`utilities`, câștigă).
+
+## Runda 26 — 1 problemă (reparată)
+1. Știri, pe ecranele tactile: dropdown-ul „Sursă” urca la 36 px, ca cipurile, dar căutarea rămânea la 32 px → formularul căutării are și el `pointer-coarse:h-9`.
+
+Recitite fără alte probleme: reparațiile din runda 25 (stratul `min-h-0` față de regula pentru ecranele tactile; rândul previzualizării, cu valoarea centrată), FD / TD față de cod.
+
+## Runda 27 — 0 probleme
+Recitite: toate fișierele din domeniu, după reparațiile din rundele 25–26; măsurat din nou în Chrome (Știri: căutarea 32 / 36 px ca dropdown-ul și cipurile, pe ecran obișnuit / tactil; favoritele: comutatorul și căutarea 48 / 48 pe tabletă; câmpurile din Admin și Securitate la 44 px pe ecran tactil, ca butoanele). `tsc` curat (și pe `scripts/`); 408 teste pe Azure SQL (39 de fișiere).
+
+# FD-MCPMULTI + FD-DBHEAL — runda de închidere (14 oct 2026)
+
+## Runda 28 — 0 probleme
+Rundele 23 și 24 au avut câte o problemă; aceasta e runda fără probleme, după ele. Recitite:
+- `withClientId` (antetul Basic, `client_assertion` neverificat, dar codul rămâne legat de client, de adresa de întoarcere și de PKCE), CIMD cu `none` printre metode, DCR cu metodă cu secret → client public, gazdele implicite;
+- autovindecarea: interogarea lacătului (resursa `sentiq:write:<schema>`, sub 32 de caractere și pe schemele de test), vârsta tranzacției (ora serverului, UTC pe Azure, ca `SYSDATETIME()`), verificarea dublă, `KILL` doar pentru sesiunile `Sentiq`, o dată pe minut; `detached` la lease și la rulările joburilor; oprirea forțată după 15 s.
+
+Verificat după publicare (deploy `608d7489`, 15:21 UTC): metadatele OAuth (`none`, CIMD), `authorize` cu documentul real ChatGPT și cu cel Claude ajung la consimțământ; niciun lacăt ținut în bază.
+
+## Publicarea FD-MCPMULTI + FD-DBHEAL + FD-UIPOLISH (14 oct 2026)
+1. Prima publicare după procedura nouă (`deploy-azure.md` §5): aplicația oprită la 15:10 UTC, arhiva urcată, build-ul terminat cu aplicația oprită, aplicația pornită la 15:20, site-ul răspunde din 15:21. Pauză planificată: ~11 minute; build-ul nu s-a mai întrerupt.
+2. `az webapp deploy --async true` așteaptă totuși pornirea site-ului (oprit), deci comanda nu se termină singură: pasul `az webapp start` se dă când `/api/deployments/latest` arată `status 4`, `complete true`.
+3. Pe Mac, aplicația repornită pe codul nou (18:22 ora României); joburile rulează pe Mac.
+
+# FD-INDICES (14 oct 2026)
+
+Domeniu:
+- comune: `shared/indices.ts` (nou), `shared/settings.ts` (`CHART_SYMBOL_RE`), `shared/api-types.ts`;
+- server: `market/indices.ts` (nou), `market/stocks.ts` (clasa Nasdaq fixă, rutarea în `StockData`), `http/routes.ts`, `scanner/scanner.ts`, `exchange/accounts.ts`, `news/coin-registry.ts`, `news/coins.ts`, `news/query.ts`, `mcp/server.ts`, `summary/context.ts`;
+- interfață: `Settings.tsx` (`IndexPicker`, schimbările în curs), `Today.tsx`, `MarketStrip.tsx`, `Charts.tsx`, `CommandPalette.tsx`, `News.tsx`, `icons.tsx`, `chart/paths.ts`, `App.tsx`;
+- teste noi, FD / TD, ghidul, README, PROGRESS.
+
+Verificat înainte de review: Chrome pe o schemă de test, cu date reale de la Cboe și Nasdaq (toți 7 indici, 1440 și 390 px); a găsit o problemă veche din Setări (răspunsurile la adăugări rapide, în altă ordine), reparată și trecută în FD.
+
+## Runda 29 — 4 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `listWatchlist` | tipul se citea dintr-un obiect (`KINDS[w.kind]`), deci un text ca `toString` ar fi întors o funcție din prototip | comparație directă cu `stock` / `index`, altfel `crypto` |
+| 2 | Cboe | un 403 (Cloudflare blochează uneori centrele de date) devenea „indice necunoscut”, deși se cer doar codurile din catalog | orice răspuns în afară de 200 e eroarea sursei („Cboe: HTTP 403”); rândul nou în FD §3 |
+| 3 | FD | pomenea căutarea „Altă pereche sau acțiune”; textul nou e „Pereche, acțiune sau indice” | FD corectat |
+| 4 | FD | lipsea cazul unei pagini deschise de dinainte de publicare | rând nou în FD §3 |
+
+Recitite fără alte probleme:
+- `StockData`: excepția din `indexCandles` ajunge ca respingere (apelată din `candles`, care e `async`); cache-ul lumânărilor și ultimele lumânări bune la o eroare; `quote` / `spark` după `^`;
+- `IndexData`: lumânarea zilei nu se dublează (seara, în weekend, cu istoricul deja publicat), `DJX × 100` și pe cotație, cererile simultane unite;
+- scanner-ul (cheia rândului, timeframe-ul indicelui, piața închisă), `accounts.ts`, știrile (aliasurile cu prioritate, filtrul „doar favorite” citește `^SPX` din favorite), MCP (`timeframesFor`, HTF), Rezumatul;
+- interfața: id-urile cipurilor din Grafice și din ⌘K, `savedSymbol` / `rememberedPath`, insigna (după `useState`), titlul cu întârzierea.
+
+## Runda 30 — 1 problemă (reparată)
+1. Rândul nou din FD §3 (Cboe refuză → eroarea sursei) nu avea test → `CboeClient` în `market/indices.test.ts`: 403 → „Cboe: HTTP 403”, un răspuns care nu e JSON → „Cboe: răspuns neașteptat”, adresa CDN-ului.
+
+Verificat și: Cboe și Nasdaq răspund de pe Azure (din Kudu, aceleași IP-uri de ieșire ca aplicația): 200 pentru cotația SPX, istoricul VIX și NDX.
+
+Recitite fără alte probleme: reparațiile din runda 29; `IndexPicker` și numărarea schimbărilor în curs (`onSettled` vine și după o eroare); scanner-ul cu Market Structure pe un timeframe pe care indicii nu-l au; promptul `analyze_symbol`.
+
+## Runda 31 — 0 probleme
+Recitit testul nou și FD / TD / ghidul față de cod. `tsc` curat (și pe `scripts/`, și fără nimic nefolosit în fișierele atinse).
+
+Suita: prima rulare a avut un singur eșec, în pregătirea primului test din `server.test.ts`: SQL Server a ales tranzacția testului ca victimă a unui deadlock (1205) în schema de test, nelegat de indici; fișierul a trecut singur, iar a doua rulare a întregii suite a trecut: 428 de teste pe Azure SQL (41 de fișiere). E primul deadlock din toate rulările de azi; dacă revine, se cercetează separat.
+
+## Publicarea FD-INDICES (14 oct 2026)
+Procedura din `deploy-azure.md` §5, a doua oară: aplicația oprită la 16:11 UTC, build-ul `6330eb3b` gata în 3,5 minute, site-ul răspunde din 16:16. Niciun lacăt ținut în bază după pornire. Pe Mac, aplicația repornită pe codul nou (19:16 ora României); fără migrare de schemă, deci fără backup.
+
+# FD-ROWCENTER + FD-SELECTSAFARI + FD-AICLARITY (14 oct 2026, seara)
+
+Domeniu:
+- `Settings.tsx` (rândurile favoritelor, panoul connectorului), `styles.css` (dropdown-urile), `News.tsx`, `Charts.tsx`;
+- `components/AiConnector.tsx` (nou, mutat din `Security.tsx`), `Security.tsx`, `SettingsAdmin.tsx` (`KeyUse`), `DaySummary.tsx`, `App.tsx` (⌘K);
+- server: `sentiment/usage.ts` (nou), `sentiment/claude.ts` (`onUsage`), `sentiment/service.ts`, `summary/service.ts`, `context.ts`, `http/routes.ts` (`claudeUsage` în `/api/health`), `shared/api-types.ts`;
+- `deploy-azure.md` (planul B2, publicarea fără oprire), FD / TD, ghidul, teste noi (`usage.test.ts`, motorul Claude, Rezumatul, `/api/health`).
+
+Verificat înainte de review:
+- rândurile favoritelor, măsurate față de mijlocul rândului: −2,9 px înainte, 0 după (1440 și 390);
+- auditul controalelor (`wk/audit.mjs`) în WebKit și Chrome, pe toate paginile, la 1440 și la 390 cu ecran tactil: dropdown-urile au 38 / 44 px și în WebKit (erau 22);
+- panoul connectorului, blocul de consum și Securitate, în WebKit.
+
+Găsite și reparate pe drum, înainte de review:
+1. Adresa connectorului (31 px) lângă „Copiază” (38 px) → `min-h-[38px]`.
+2. Cu un server mai vechi, consumul ar fi rămas „…” la nesfârșit → „consumul nu e disponibil”.
+3. Un link spre `/settings#ai` derula înainte să apară panoul (care își încarcă starea) → pagina așteaptă și starea connectorului.
+4. Rezumatul număra tokenii abia după ce citea răspunsul: unul refuzat sau tăiat, deși plătit, nu se număra → numărat imediat după răspuns (și testat).
+
+## Runda 32 — 0 probleme
+Recitite:
+- CSS-ul dropdown-urilor: niciun `select` nu are padding orizontal propriu care să acopere săgeata; săgeata ia `--color-muted` în ambele teme; lista deschisă rămâne a sistemului;
+- `ClaudeUsage`: tranzacția (doi scriitori, Mac și Azure; testat), ziua UTC, valori negative sau nefinite numărate ca zero, nicio eroare propagată;
+- `onUsage` apelat fără `await` în scorare (nu o încetinește), cu `await` la Rezumat; `/api/health` rămâne doar pentru admin;
+- textele: connectorul (ce face, ce nu face, starea „oprit”), blocul din Admin (motor Local, fără cheie, consumul), subsolul Rezumatului, trimiterea din Securitate.
+
+Verificări: `tsc` curat (și pe `scripts/`); 433 de teste pe Azure SQL (42 de fișiere).
+
+## Publicarea FD-ROWCENTER + FD-SELECTSAFARI + FD-AICLARITY (14 oct 2026)
+Prima publicare pe B2, fără oprirea aplicației: deploy `d6965246`, build în 1,7 minute, `/api/ping` 200 pe toată durata, codul nou pornit la 17:01:34 UTC; `az webapp deploy` s-a terminat singur. Niciun lacăt rămas. Pe Mac, aplicația repornită la 20:02 ora României.
+
+# FD-MCPREMOVE (14 oct 2026, seara)
+
+Domeniu:
+- șterse: `src/server/mcp/` (cu `mcp.test.ts`), `Consent.tsx`, `AiConnector.tsx`, dependențele `@modelcontextprotocol/server` și `/client`;
+- server: `config.ts`, `context.ts`, `http/app.ts`, `http/security.ts`, `http/auth-routes.ts`, `jobs/register.ts`, `main.ts`, `settings.ts`, `summary/context.ts` (fără `forTools`), `db/schema.ts` (migrarea 2), `shared/api-types.ts`;
+- interfață: `App.tsx`, `Settings.tsx`, `Security.tsx`, `DaySummary.tsx`, `SettingsAdmin.tsx`;
+- teste: `public-instance.test.ts` (nou: testele FD-ONLINE, care erau în `mcp.test.ts`), linkul de activare spre adresa publică (`users.test.ts`), adresele fostului connector (`server.test.ts`);
+- FD / TD (Partea I și secțiunile noi), ghidul, README, `deploy-azure.md`.
+
+Înainte: `SENTIQ_MCP` scos din App Service (la cererea utilizatorului); backup al celor 4 tabele în `data/backups/sentiq-mcp-tables-2026-10-14.json` (o conexiune Claude, făcută de utilizator la 16:34 UTC și ștearsă de el din Claude).
+
+## Runda 33 — 0 probleme
+Recitite:
+- ordinea din migrarea 2 (`mcp_tokens` și `mcp_codes` înaintea `mcp_grants`, apoi `mcp_clients`; `IF EXISTS`); `TABLES` / `IDENTITY_TABLES` (testul schemei compară lista cu baza; importul SQLite sare tabelele care nu mai sunt în listă);
+- CSRF-ul: fără excepția pentru rutele Bearer, orice cerere ne-GET cere din nou `X-Sentiq`; adresele vechi răspund 404 JSON, nu cu pagina;
+- `public_instance` fără `mcp` (un rând vechi se citește la fel); linkurile de activare de pe Mac (testate);
+- nicio altă referință la connector în cod (`tsc` curat și cu `--noUnusedLocals` pe fișierele atinse);
+- ordinea publicării: întâi Mac-ul (migrează baza la 2 și ține joburile), apoi Azure. Versiunea veche de pe Azure nu mai atinge tabelele: connectorul e oprit acolo din 17:34 UTC.
+
+Verificări: `tsc` curat (și pe `scripts/`); 422 de teste pe Azure SQL (42 de fișiere).
+
+## Publicarea FD-MCPREMOVE (14 oct 2026)
+Întâi Mac-ul: repornit la 20:46 ora României; baza e la versiunea 2, fără tabelele `mcp_*`. Apoi Azure: deploy `3c6e980b`, codul nou pornit la 17:48:33 UTC, fără oprire. `/api/ping` 200, `/mcp` și `/.well-known/oauth-authorization-server` 404. Niciun lacăt rămas.
+
+# FD-TDPLAN + FD-INDEXINTRA (14 oct 2026, seara)
+
+Domeniu:
+- server: `market/stocks.ts` (`CreditBudget` pe planul cheii, `TwelveDataClient.plan`, `StockData.refreshPlan`, indicii intraday în `load`), `market/cnbc.ts` (nou), `market/indices.ts` (CNBC întâi, rezerva, `mergeNy`, `intraday`), `jobs/register.ts` (`twelvedata.plan`), `http/routes.ts` (planul la salvarea cheii, `POST /api/settings/twelvedata-plan`), `http/auth.ts`;
+- comune: `shared/indices.ts` (`INDEX_TIMEFRAMES`, nota); interfață: `SettingsAdmin.tsx` (`TdPlanLine`), `Health.tsx`, `Charts.tsx`, `Today.tsx`, `MarketStrip.tsx`;
+- teste: `cnbc.test.ts` (nou), `indices.test.ts`, `stocks.test.ts`, `server.test.ts`, `scanner.test.ts`; FD / TD, ghidul.
+
+Cercetare: CNBC (cotații în timp real, zilnic din 2010, intraday ~100 de zile; răspunde de pe Azure), Massive / Polygon (oficial, 49 $ / 99 $), Twelve Data (fără indici americani în catalog), FMP / EODHD (intraday doar plătit), Yahoo / Stooq (refuză). `/api_usage` din specificația OpenAPI Twelve Data (1 credit; `plan_daily_limit` doar pe planurile cu limită).
+
+Verificat înainte de review: WebKit pe o schemă de test, cu date CNBC reale (SPX pe 1h, cu Slingshot; 6h / 8h / 12h dezactivate; fișele de pe Azi pe 1h).
+
+## Runda 34 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Nota de întârziere | o cotație CNBC nemarcată „în timp real” ar fi primit nota „(sursa de rezervă)”, care nu era adevărată | nota spune doar „până la 15 minute întârziere”; FD menționează ambele cazuri |
+| 2 | TD-TDPLAN | promitea că un plan citit pentru altă cheie e ignorat, dar limitele nu verificau asta (la schimbarea cheii, planul se recitește sau se șterge oricum imediat) | TD corectat: `keyHint` e pentru diagnostic |
+
+Recitite fără alte probleme:
+- bugetul (limitele fixe din teste față de cele din plan, fără limită zilnică, recitirea la 5 minute, ștergerea cheii);
+- `plan()` (1 credit, eroare la un răspuns fără `plan_limit`); jobul la 6 ore pe instanța cu joburile; ruta doar pentru admin;
+- CNBC: sfârșitul exclusiv al intervalului, filtrul ședinței (bara de 9:00 pe 1h, cea de 16:00 sărită), comasările pe ceasul New York;
+- cache-ul intraday pe index și interval (o citire mai lungă servește și cererile mai scurte), cererile simultane unite;
+- rezerva (cotații și zilnic), sursa numită pe grafic; scanner-ul pe timeframe-ul ales.
+
+## Runda 35 — 0 probleme
+Recitite reparațiile din runda 34 și FD / TD / ghidul față de cod. Verificat în WebKit: planul Grow citit din bază apare în Admin („55 cereri pe minut, fără limită zilnică”, consumul fără „/ 800”) după recitirea de 5 minute. `tsc` curat (și pe `scripts/`); 434 de teste pe Azure SQL (43 de fișiere).
+
+## Publicarea FD-TDPLAN + FD-INDEXINTRA (14 oct 2026)
+Azure: deploy `19c474cd`, codul nou pornit la 18:26:15 UTC, fără oprire. Mac: repornit la 21:26 ora României; ține joburile și a citit planul cheii reale: „twelvedata: plan basic, 8 credits a minute, 800 a day” (înainte de upgrade). Niciun lacăt rămas.

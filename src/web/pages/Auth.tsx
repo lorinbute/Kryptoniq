@@ -236,7 +236,14 @@ function LoginPage({ state }: { state: AuthState }) {
       ) : (
         !state.passkeys && (
           <p className="text-[12.5px] text-faint">
-            Passkey-urile merg doar când Sentiq e deschis la <span className="num">http://localhost:{window.location.port || '4317'}</span> pe Mac-ul care îl rulează.
+            {/* FD-ONLINE §3: the public address when the server knows it, and this Mac's. */}
+            Passkey-urile nu merg pe o adresă IP. Deschide Sentiq{' '}
+            {state.publicUrl && (
+              <>
+                la <span className="num">{state.publicUrl}</span> sau{' '}
+              </>
+            )}
+            la <span className="num">http://localhost:{window.location.port || '4317'}</span> pe Mac-ul care îl rulează.
           </p>
         )
       )}

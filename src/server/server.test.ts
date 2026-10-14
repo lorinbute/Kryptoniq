@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { createContext, type AppContext } from './context.ts';
+import { testDb } from './test/db.ts';
 import { loadConfig } from './config.ts';
 import { buildApp } from './http/app.ts';
 import { silentLogger } from './log.ts';
@@ -12,7 +13,6 @@ import { setFetchImpl } from './net/http.ts';
 import { SecretBox, secretHint } from './secrets/crypto.ts';
 import { hostnameOf, isLocalHost, isLocalOrigin } from './http/security.ts';
 import { Scheduler } from './jobs/scheduler.ts';
-import { Db } from './db/database.ts';
 import type { NliScorer } from './sentiment/local.ts';
 import { costBasis } from './exchange/cost-basis.ts';
 import { hasRiskyPermissions, keyPermissions, mapExchangeError, stopDirection, type ClientFactory } from './exchange/accounts.ts';
@@ -39,6 +39,9 @@ const fakeNli: NliScorer = {
   onReady: () => {},
 };
 
+/** Calls to the fake closed-position history, and switches for its failures (FD-TRADESTATS). */
+const history = { calls: 0, fail: false, futuresFail: false };
+
 /** Minimal fake of the ccxt calls used by the portfolio. */
 function fakeClients(): ClientFactory {
   const spot = {
@@ -49,7 +52,25 @@ function fakeClients(): ClientFactory {
       this.options.hf = false;
     },
     fetchBalance: async (params?: { type?: string }) =>
-      params?.type === 'main' ? { total: { USDT: 100 }, free: { USDT: 100 }, used: {} } : { total: { BTC: 0.5, USDT: 0 }, free: { BTC: 0.4 }, used: { BTC: 0.1 } },
+      params?.type === 'main'
+        ? { total: { USDT: 100 }, free: { USDT: 100 }, used: {} }
+        : params?.type === 'contract'
+          ? history.futuresFail
+            ? Promise.reject(new ccxt.PermissionDenied('kucoin {"code":"400007","msg":"Access denied, require more permission."}'))
+            : { total: { USDT: 300 }, free: { USDT: 250 }, used: { USDT: 50 } }
+          : { total: { BTC: 0.5, USDT: 0 }, free: { BTC: 0.4 }, used: { BTC: 0.1 } },
+    // FD-TRADESTATS: two wins (one in BTC), one loss, one at zero, all closed an hour ago.
+    fetchPositionsHistory: async () => {
+      history.calls++;
+      if (history.fail) throw new ccxt.NetworkError('kucoin ETIMEDOUT');
+      return [
+      { id: 'c1', symbol: 'ETH/USDT:USDT', realizedPnl: 12.5, lastUpdateTimestamp: Date.now() - 3_600_000 },
+      { id: 'c2', symbol: 'XRP/USDT:USDT', realizedPnl: -4, lastUpdateTimestamp: Date.now() - 3_600_000 },
+      { id: 'c3', symbol: 'SOL/USDT:USDT', realizedPnl: 0, lastUpdateTimestamp: Date.now() - 3_600_000 },
+      { id: 'c4', symbol: 'BTC/USD:BTC', realizedPnl: 0.001, lastUpdateTimestamp: Date.now() - 3_600_000 },
+      ];
+    },
+    fetchTicker: async (symbol: string) => ({ symbol, last: symbol === 'BTC/USDT' ? 82000 : undefined }),
     fetchPositions: async () => [
       { symbol: 'ETH/USDT:USDT', side: 'long', contracts: 2, contractSize: 0.01, entryPrice: 2500, markPrice: 2600, unrealizedPnl: 2, percentage: 4, liquidationPrice: 2000, leverage: 5, marginMode: 'isolated', notional: 52 },
       { symbol: 'XRP/USDT:USDT', side: 'long', contracts: 0 },
@@ -74,16 +95,15 @@ let app: FastifyInstance;
 beforeEach(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'kq-test-'));
   const config = { ...loadConfig({ KRYPTONIQ_DATA_DIR: dir } as NodeJS.ProcessEnv), webDist: path.join(dir, 'no-web') };
-  ctx = createContext(config, silentLogger, { nli: fakeNli, clientFactory: fakeClients(), box: new SecretBox(Buffer.alloc(32, 7)), retryDelaysMs: [0, 0] });
+  ctx = await createContext(config, silentLogger, { nli: fakeNli, clientFactory: fakeClients(), box: new SecretBox(Buffer.alloc(32, 7)), retryDelaysMs: [0, 0], db: await testDb() });
   app = await buildApp(ctx);
-  ctx.db.run('UPDATE users SET email = ?, name = ?, password_hash = ? WHERE id = 1', [ADMIN_EMAIL, 'Admin', adminHash]);
-  H.cookie = M.cookie = `sentiq_session=${ctx.sessions.create(1, 'full')}`;
+  await ctx.db.run('UPDATE users SET email = ?, name = ?, password_hash = ? WHERE id = 1', [ADMIN_EMAIL, 'Admin', adminHash]);
+  H.cookie = M.cookie = `sentiq_session=${await ctx.sessions.create(1, 'full')}`;
 });
 
 afterEach(async () => {
   setFetchImpl(null);
   await app.close();
-  ctx.db.close();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -102,7 +122,10 @@ describe('security', () => {
   it('rejects foreign Host headers (DNS rebinding) and foreign origins', async () => {
     expect((await app.inject({ method: 'GET', url: '/api/health', headers: { host: 'evil.com' } })).statusCode).toBe(403);
     expect((await app.inject({ method: 'GET', url: '/api/health', headers: { ...H, origin: 'https://evil.com' } })).statusCode).toBe(403);
-    expect((await app.inject({ method: 'GET', url: '/api/health', headers: H })).statusCode).toBe(200);
+    const health = await app.inject({ method: 'GET', url: '/api/health', headers: H });
+    expect(health.statusCode).toBe(200);
+    // FD-AICLARITY: what the Claude key was used for today, with the models.
+    expect(health.json().claudeUsage).toMatchObject({ sentiment: { calls: 0 }, summary: { calls: 0 }, sentimentModel: expect.any(String), summaryModel: 'claude-opus-5-5' });
   });
   it('requires the CSRF header and JSON for mutations', async () => {
     expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: { ...H, 'content-type': 'application/json' }, payload: {} })).statusCode).toBe(403);
@@ -118,9 +141,9 @@ describe('security', () => {
     expect(loadConfig({ SENTIQ_PORT: '5000', KRYPTONIQ_PORT: '5001' } as NodeJS.ProcessEnv).port).toBe(5000);
     const d = mkdtempSync(path.join(tmpdir(), 'sq-cfg-'));
     try {
-      expect(path.basename(loadConfig({ SENTIQ_DATA_DIR: d } as NodeJS.ProcessEnv).dbPath)).toBe('sentiq.db');
+      expect(path.basename(loadConfig({ SENTIQ_DATA_DIR: d } as NodeJS.ProcessEnv).legacyDbPath)).toBe('sentiq.db');
       writeFileSync(path.join(d, 'kryptoniq.db'), '');
-      expect(path.basename(loadConfig({ SENTIQ_DATA_DIR: d } as NodeJS.ProcessEnv).dbPath)).toBe('kryptoniq.db');
+      expect(path.basename(loadConfig({ SENTIQ_DATA_DIR: d } as NodeJS.ProcessEnv).legacyDbPath)).toBe('kryptoniq.db');
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
@@ -141,6 +164,20 @@ describe('security', () => {
       if (!statSync(p).isFile() || f.endsWith('.test.ts')) continue;
       expect(readFileSync(p, 'utf8')).not.toMatch(/\b(createOrder|cancelOrder|cancelAllOrders|editOrder|withdraw|transfer|setLeverage|setMarginMode)\s*\(/);
     }
+  });
+});
+
+describe('the removed AI connector (FD-MCPREMOVE)', () => {
+  it('its addresses no longer exist: a plain 404, never the page, and no token', async () => {
+    for (const url of ['/mcp', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource/mcp', '/oauth/consent', '/oauth/authorize?client_id=x']) {
+      const r = await app.inject({ method: 'GET', url, headers: H });
+      expect(r.statusCode, url).toBe(404);
+      expect(r.json().error.code, url).toBe('NOT_FOUND');
+    }
+    const token = await app.inject({ method: 'POST', url: '/oauth/token', headers: { ...H, 'content-type': 'application/x-www-form-urlencoded' }, payload: 'grant_type=refresh_token&refresh_token=x' });
+    expect([403, 404]).toContain(token.statusCode);
+    expect(JSON.stringify(token.json())).not.toContain('access_token');
+    expect((await app.inject({ method: 'GET', url: '/api/mcp/status', headers: H })).statusCode).toBe(404);
   });
 });
 
@@ -189,11 +226,11 @@ describe('settings API', () => {
     const r = await app.inject({ method: 'PUT', url: '/api/settings/claude-key', headers: M, payload: { key } });
     expect(r.json()).toMatchObject({ claudeKeySet: true, claudeKeyHint: 'sk-a…wxyz' });
     expect(JSON.stringify(r.json())).not.toContain(key);
-    const raw = ctx.db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'claude_key'");
+    const raw = await ctx.db.get<{ value: string }>("SELECT value FROM settings WHERE [key] = 'claude_key'");
     expect(raw?.value).not.toContain('abcdefghij');
-    expect(ctx.settings.getClaudeKey()).toBe(key);
+    expect(await ctx.settings.getClaudeKey()).toBe(key);
     await app.inject({ method: 'PUT', url: '/api/settings/claude-key', headers: M, payload: { key: null } });
-    expect(ctx.settings.getClaudeKey()).toBeNull();
+    expect(await ctx.settings.getClaudeKey()).toBeNull();
   });
   it('remembers the chart settings and the LMA inputs (FD-CHARTUX)', async () => {
     const s = (await app.inject({ method: 'GET', url: '/api/settings', headers: H })).json();
@@ -223,7 +260,7 @@ describe('settings API', () => {
     }
     expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { charts: { symbol: '' } } })).json().charts.symbol).toBe('');
     // Settings saved by an older version (without charts / lma) still load, with the defaults for the new groups.
-    ctx.db.run('UPDATE user_settings SET value = ? WHERE user_id = 1', [JSON.stringify({ timezone: 'UTC', market: { defaultTf: '15m' }, charts: { symbol: 42 } })]);
+    await ctx.db.run('UPDATE user_settings SET value = ? WHERE user_id = 1', [JSON.stringify({ timezone: 'UTC', market: { defaultTf: '15m' }, charts: { symbol: 42 } })]);
     ctx.settings.forget();
     const old = (await app.inject({ method: 'GET', url: '/api/settings', headers: H })).json();
     expect(old.market.defaultTf).toBe('15m');
@@ -262,14 +299,47 @@ describe('watchlist & sources API', () => {
     expect((await add({ kind: 'stock', coin: 'BTC' })).statusCode).toBe(409);
     expect((await add({ kind: 'stock', coin: '1ABC' })).statusCode).toBe(400);
     expect((await add({ kind: 'bond', coin: 'X' })).statusCode).toBe(400);
-    const feeds = ctx.db.all<{ id: string; auto: string }>("SELECT id, auto FROM sources WHERE auto IS NOT NULL");
+    const feeds = await ctx.db.all<{ id: string; auto: string }>("SELECT id, auto FROM sources WHERE auto IS NOT NULL");
     expect(feeds).toEqual([{ id: 'nasdaq-brk-b', auto: 'nasdaq:BRK.B' }]);
     // Dotted tickers work in the addresses of the other routes too.
     expect((await app.inject({ method: 'PUT', url: '/api/watchlist/BRK.B', headers: M, payload: { aliases: ['Buffett'] } })).json().at(-1).aliases).toEqual(['Buffett']);
     expect((await app.inject({ method: 'PUT', url: '/api/watchlist/BRK.B', headers: M, payload: { quote: 'EUR' } })).statusCode).toBe(400);
     expect((await app.inject({ method: 'PUT', url: '/api/watchlist/order', headers: M, payload: { coins: ['BRK.B', 'BTC', 'ETH', 'SOL'] } })).json()[0].coin).toBe('BRK.B');
     expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/BRK.B', headers: M })).statusCode).toBe(200);
-    expect(ctx.db.all('SELECT id FROM sources WHERE auto IS NOT NULL')).toEqual([]);
+    expect(await ctx.db.all('SELECT id FROM sources WHERE auto IS NOT NULL')).toEqual([]);
+  });
+
+  it('adds indices (FD-INDICES): by symbol or id, kept under the id, next to a coin of the same ticker', async () => {
+    const add = (payload: object) => app.inject({ method: 'POST', url: '/api/watchlist', headers: M, payload });
+    await ctx.db.run(
+      `INSERT INTO news(id, source_id, title, published_at, fetched_at, category, relevance, impact, cluster_id) VALUES ('n-spx', 'coindesk', 'S&P 500 closes at a record', ?, ?, 'macro', 1, 1, 'c-spx')`,
+      [Date.now() - 60_000, Date.now()],
+    );
+    const r = await add({ kind: 'index', coin: 'spx' });
+    expect(r.statusCode).toBe(200);
+    // The recent news are tagged again with the new favourite's aliases.
+    expect(await ctx.db.all("SELECT coin FROM news_coins WHERE news_id = 'n-spx'")).toEqual([{ coin: '^SPX' }]);
+    expect(r.json().at(-1)).toMatchObject({ coin: '^SPX', quote: 'USD', aliases: ['S&P 500', 'S&P500', 'SPX'], kind: 'index', name: 'S&P 500', exchange: null });
+    expect((await add({ kind: 'index', coin: '^SPX' })).json().error.message).toBe('SPX este deja în favorite (ca indice)');
+    // SPX6900, the coin, is another symbol for Sentiq.
+    expect((await add({ kind: 'crypto', coin: 'SPX' })).statusCode).toBe(200);
+    const unknown = await add({ kind: 'index', coin: 'DAX' });
+    expect(unknown.statusCode).toBe(400);
+    expect(unknown.json().error.message).toMatch(/Indice necunoscut/);
+    // An index has no feed of its own (FD-AUTOFEED is for shares).
+    expect(await ctx.db.all('SELECT id FROM sources WHERE auto IS NOT NULL')).toEqual([]);
+    // The "^" in the addresses of the other routes.
+    const aliased = await app.inject({ method: 'PUT', url: '/api/watchlist/%5ESPX', headers: M, payload: { aliases: ['S&P 500', 'Wall Street'] } });
+    expect(aliased.json().find((w: { coin: string }) => w.coin === '^SPX').aliases).toEqual(['S&P 500', 'Wall Street']);
+    const quote = await app.inject({ method: 'PUT', url: '/api/watchlist/%5ESPX', headers: M, payload: { quote: 'EUR' } });
+    expect(quote.json().error.message).toBe('Indicii sunt cotați în USD');
+    const ordered = await app.inject({ method: 'PUT', url: '/api/watchlist/order', headers: M, payload: { coins: ['^SPX', 'SPX', 'BTC', 'ETH', 'SOL'] } });
+    expect(ordered.json().map((w: { coin: string; kind: string }) => `${w.kind}:${w.coin}`).slice(0, 2)).toEqual(['index:^SPX', 'crypto:SPX']);
+    expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/%5ESPX', headers: M })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/%5ESPX', headers: M })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/SPX', headers: M })).statusCode).toBe(200);
+    expect(await ctx.db.all("SELECT coin FROM news_coins WHERE news_id = 'n-spx'")).toEqual([]);
+    await ctx.db.run("DELETE FROM news WHERE id = 'n-spx'");
   });
 
   it('lists sources, protects built-ins and adds a tested custom feed', async () => {
@@ -304,9 +374,9 @@ describe('news & sentiment API', () => {
     );
     const { fetchDueSources } = await import('./news/fetcher.ts');
     await fetchDueSources(ctx.db, ctx.coins, silentLogger);
-    expect(ctx.sentiment.pendingCount()).toBe(2);
+    expect(await ctx.sentiment.pendingCount()).toBe(2);
     await ctx.sentiment.scorePending();
-    expect(ctx.sentiment.pendingCount()).toBe(0);
+    expect(await ctx.sentiment.pendingCount()).toBe(0);
 
     const all = (await app.inject({ method: 'GET', url: '/api/news?range=24h', headers: H })).json();
     expect(all.items).toHaveLength(2);
@@ -336,9 +406,9 @@ describe('news & sentiment API', () => {
 
   it('pagination with cursor returns disjoint pages', async () => {
     const now = Date.now();
-    ctx.db.tx(() => {
+    await ctx.db.tx(async () => {
       for (let i = 0; i < 7; i++) {
-        ctx.db.run(
+        await ctx.db.run(
           `INSERT INTO news(id, source_id, title, published_at, fetched_at, category, relevance, impact, cluster_id) VALUES (?, 'coindesk', ?, ?, ?, 'crypto', 1, 1, ?)`,
           [`${String(i).padStart(40, '0')}`, `Story ${i}`, now - i * 1000, now, `c${i}`],
         );
@@ -353,30 +423,30 @@ describe('news & sentiment API', () => {
 
 describe('daily snapshots', () => {
   it('freezes a day only after the grace period and once its news are scored', async () => {
-    const tz = ctx.settings.get().timezone;
+    const tz = (await ctx.settings.get()).timezone;
     const { dayBounds, dayKey, addDays } = await import('../shared/time.ts');
     const now = Date.now();
     const yesterday = addDays(dayKey(now, tz), -1);
     const { start, end } = dayBounds(yesterday, tz);
     // Collection started yesterday; the feeds' backlog also carried one item from the day before.
-    ctx.db.run(
+    await ctx.db.run(
       `INSERT INTO news(id, source_id, title, published_at, fetched_at, category, relevance, impact, cluster_id) VALUES (?, 'coindesk', 'Bitcoin surges', ?, ?, 'crypto', 1, 1, 'c1')`,
       ['a'.repeat(40), start + 3_600_000, start + 3_600_000],
     );
-    ctx.db.run(
+    await ctx.db.run(
       `INSERT INTO news(id, source_id, title, published_at, fetched_at, category, relevance, impact, cluster_id) VALUES (?, 'coindesk', 'Solana rallies', ?, ?, 'crypto', 1, 1, 'c2')`,
       ['b'.repeat(40), start - 5 * 3_600_000, start + 3_600_000],
     );
-    const final = () => ctx.db.get<{ final: number }>('SELECT final FROM daily_sentiment WHERE day = ? AND tz = ?', [yesterday, tz])?.final;
+    const final = async () => (await ctx.db.get<{ final: number }>('SELECT final FROM daily_sentiment WHERE day = ? AND tz = ?', [yesterday, tz]))?.final;
     const backlogDay = () => ctx.db.get('SELECT day FROM daily_sentiment WHERE day = ? AND tz = ?', [addDays(yesterday, -1), tz]);
-    ctx.daily.refresh(end + 3 * 3_600_000);
-    expect(final()).toBe(0); // the only news is still pending
+    await ctx.daily.refresh(end + 3 * 3_600_000);
+    expect(await final()).toBe(0); // the only news is still pending
     await ctx.sentiment.scorePending();
-    ctx.daily.refresh(end + 30 * 60_000);
-    expect(final()).toBe(0); // inside the 2 h grace period
-    ctx.daily.refresh(end + 3 * 3_600_000);
-    expect(final()).toBe(1);
-    expect(backlogDay()).toBeUndefined(); // before the first collection day: not part of the history
+    await ctx.daily.refresh(end + 30 * 60_000);
+    expect(await final()).toBe(0); // inside the 2 h grace period
+    await ctx.daily.refresh(end + 3 * 3_600_000);
+    expect(await final()).toBe(1);
+    expect(await backlogDay()).toBeUndefined(); // before the first collection day: not part of the history
   });
 });
 
@@ -403,7 +473,7 @@ describe('accounts & portfolio', () => {
     const acc = r.json();
     expect(acc).toMatchObject({ label: 'Main', keyHint: 'key-…6789', permissions: 'General,Spot', permissionWarning: true });
     expect(JSON.stringify(acc)).not.toContain('secret-123456789');
-    const row = ctx.db.get<{ api_key: string; secret: string }>('SELECT api_key, secret FROM exchange_accounts');
+    const row = await ctx.db.get<{ api_key: string; secret: string }>('SELECT api_key, secret FROM exchange_accounts');
     expect(row?.secret).not.toContain('secret-123');
 
     const p = (await app.inject({ method: 'GET', url: `/api/portfolio/${acc.id}`, headers: H })).json();
@@ -416,6 +486,34 @@ describe('accounts & portfolio', () => {
     expect(p.positions[0]).toMatchObject({ symbol: 'ETH/USDT:USDT', size: 0.02, leverage: 5 });
     expect(p.orders).toHaveLength(1); // the same order from the normal and the trigger listing counts once
     expect(p.totals.spotValue).toBeCloseTo(0.5 * 82000 + 100, 6);
+    // FD-TRADESTATS: the free USDT of the futures account.
+    expect(p.totals.futuresAvailable).toBe(250);
+    const stats = (await app.inject({ method: 'GET', url: `/api/portfolio/${acc.id}/stats?period=7d`, headers: H })).json();
+    expect(stats).toMatchObject({ period: '7d', supported: true, wins: 2, losses: 1, breakeven: 1, successRate: 66.7, netPartial: false, error: null });
+    expect(stats.net).toBeCloseTo(12.5 - 4 + 0.001 * 82000, 6);
+    expect((await app.inject({ method: 'GET', url: `/api/portfolio/${acc.id}/stats?period=1y`, headers: H })).statusCode).toBe(400);
+    // Kept 5 minutes; "force" (Reîmprospătează) reads again; a failure is shown, not kept.
+    const calls = history.calls;
+    await app.inject({ method: 'GET', url: `/api/portfolio/${acc.id}/stats?period=7d`, headers: H });
+    expect(history.calls).toBe(calls);
+    history.fail = true;
+    const failed = (await app.inject({ method: 'GET', url: `/api/portfolio/${acc.id}/stats?period=7d&force=1`, headers: H })).json();
+    expect(failed).toMatchObject({ supported: true, wins: null, net: null, error: { code: 'NETWORK' } });
+    history.fail = false;
+    expect((await app.inject({ method: 'GET', url: `/api/portfolio/${acc.id}/stats?period=7d`, headers: H })).json()).toMatchObject({ wins: 2, error: null });
+    // The futures account unreadable: no number, the error kept apart from the sections' warnings.
+    history.futuresFail = true;
+    const pf = (await app.inject({ method: 'GET', url: `/api/portfolio/${acc.id}?force=1`, headers: H })).json();
+    expect(pf.totals.futuresAvailable).toBeNull();
+    // ccxt's PermissionDenied is an AuthenticationError: shown as a key problem.
+    expect(pf.errors.futures).toMatchObject({ code: 'AUTH' });
+    history.futuresFail = false;
+    // Kraken: no futures here, no closed-position history.
+    const kr = (await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: { exchange: 'kraken', label: 'K', apiKey: 'key-123456789', secret: 'secret-123456789' } })).json();
+    expect((await app.inject({ method: 'GET', url: `/api/portfolio/${kr.id}`, headers: H })).json().totals.futuresAvailable).toBeNull();
+    expect((await app.inject({ method: 'GET', url: `/api/portfolio/${kr.id}/stats`, headers: H })).json()).toMatchObject({ period: '30d', supported: false, wins: null });
+    expect((await app.inject({ method: 'DELETE', url: `/api/accounts/${kr.id}`, headers: M })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/api/portfolio/999/stats', headers: H })).statusCode).toBe(404);
 
     expect((await app.inject({ method: 'PUT', url: `/api/portfolio/${acc.id}/cost-basis/BTC`, headers: M, payload: { avgPrice: 50000 } })).statusCode).toBe(200);
     const p2 = (await app.inject({ method: 'GET', url: `/api/portfolio/${acc.id}`, headers: H })).json();
@@ -423,7 +521,7 @@ describe('accounts & portfolio', () => {
     expect((await app.inject({ method: 'PUT', url: `/api/portfolio/${acc.id}/cost-basis/BTC`, headers: M, payload: { avgPrice: -1 } })).statusCode).toBe(400);
     expect((await app.inject({ method: 'GET', url: '/api/portfolio/999', headers: H })).statusCode).toBe(404);
     expect((await app.inject({ method: 'DELETE', url: `/api/accounts/${acc.id}`, headers: M })).statusCode).toBe(200);
-    expect(ctx.db.get<{ n: number }>('SELECT count(*) AS n FROM cost_basis')?.n).toBe(0);
+    expect((await ctx.db.get<{ n: number }>('SELECT count(*) AS n FROM cost_basis'))?.n).toBe(0);
   });
 
   it('keeps the last good section data (marked stale) when a refresh of that section fails', async () => {
@@ -740,7 +838,7 @@ describe('accounts through the wizard (FD-SENTIQ §2)', () => {
     expect((await post({ exchange: 'coinbase', label: 'CB', credentials: { apiKey: 'not-a-cdp-name', secret: 'x'.repeat(40) } })).json().error.message).toContain('organizations/');
     expect((await post({ ...t212, env: 'paper' })).statusCode).toBe(400);
     expect((await post({ exchange: 'okx', label: 'OKX', credentials: { apiKey: 'k1234567', secret: 's1234567' } })).json().error.message).toContain('Passphrase');
-    expect(ctx.db.get<{ n: number }>('SELECT count(*) AS n FROM exchange_accounts')?.n).toBe(0);
+    expect((await ctx.db.get<{ n: number }>('SELECT count(*) AS n FROM exchange_accounts'))?.n).toBe(0);
   });
 
   it('keeps an account only when the first read works, and stores its fields encrypted', async () => {
@@ -748,7 +846,7 @@ describe('accounts through the wizard (FD-SENTIQ §2)', () => {
     const bad = await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: t212 });
     expect(bad.statusCode).toBe(400);
     expect(bad.json().error.message).toContain('Trading 212');
-    expect(ctx.db.get<{ n: number }>('SELECT count(*) AS n FROM exchange_accounts')?.n).toBe(0);
+    expect((await ctx.db.get<{ n: number }>('SELECT count(*) AS n FROM exchange_accounts'))?.n).toBe(0);
 
     route((u) => {
       if (u.pathname.endsWith('/account/summary')) return { body: { currency: 'EUR', cash: { availableToTrade: 50 } } };
@@ -760,7 +858,7 @@ describe('accounts through the wizard (FD-SENTIQ §2)', () => {
     const ok = await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: t212 });
     expect(ok.statusCode).toBe(200);
     expect(ok.json()).toMatchObject({ exchange: 'trading212', kind: 'stocks', env: 'demo', label: 'T212', keyHint: 'KEY1…7890', lastError: null });
-    const row = ctx.db.get<{ credentials: string; api_key: string }>('SELECT credentials, api_key FROM exchange_accounts');
+    const row = await ctx.db.get<{ credentials: string; api_key: string }>('SELECT credentials, api_key FROM exchange_accounts');
     expect(row?.credentials).not.toContain('SECRET12345');
     expect(row?.api_key).toBe('');
     const p = (await app.inject({ method: 'GET', url: `/api/portfolio/${ok.json().id}`, headers: H })).json();
@@ -902,7 +1000,7 @@ describe('web build serving (TD-STATIC)', () => {
     writeFileSync(path.join(web, 'index.html'), '<!doctype html><div id="root"></div>');
     writeFileSync(path.join(web, 'assets', 'old-1.js'), 'export const a = 1;');
     const config = { ...loadConfig({ KRYPTONIQ_DATA_DIR: dir } as NodeJS.ProcessEnv), webDist: web };
-    const c2 = createContext(config, silentLogger, { nli: fakeNli, clientFactory: fakeClients(), box: new SecretBox(Buffer.alloc(32, 7)), retryDelaysMs: [0, 0] });
+    const c2 = await createContext(config, silentLogger, { nli: fakeNli, clientFactory: fakeClients(), box: new SecretBox(Buffer.alloc(32, 7)), retryDelaysMs: [0, 0], db: ctx.db });
     const a2 = await buildApp(c2);
     try {
       const old = await a2.inject({ url: '/assets/old-1.js', headers: { host: '127.0.0.1:4317' } });
@@ -933,7 +1031,6 @@ describe('web build serving (TD-STATIC)', () => {
       expect(api.json().error.code).toBe('NOT_FOUND');
     } finally {
       await a2.close();
-      c2.db.close();
     }
   });
 });
@@ -966,7 +1063,7 @@ describe('background launcher (TD-LAUNCH)', () => {
 
 describe('scheduler', () => {
   it('never overlaps runs, records errors and honours nudges made while running', async () => {
-    const db = new Db(':memory:');
+    const db = await testDb();
     const s = new Scheduler(db, silentLogger);
     let running = 0;
     let maxConcurrent = 0;
@@ -987,10 +1084,61 @@ describe('scheduler', () => {
     expect(maxConcurrent).toBe(1);
     expect(calls).toBe(1);
     await s.trigger('boom');
-    const st = s.status().find((j) => j.name === 'boom');
+    const st = (await s.status()).find((j) => j.name === 'boom');
     expect(st?.lastError).toBe('kaput');
     await s.stop();
-    db.close();
+  });
+});
+
+describe('the master key (FD-AZURE §2)', () => {
+  it('is never made anew next to secrets saved with another one', async () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'sq-key-'));
+    try {
+      const config = { ...loadConfig({ SENTIQ_DATA_DIR: d } as NodeJS.ProcessEnv), webDist: path.join(d, 'x') };
+      const db = await testDb();
+      await db.run("INSERT INTO exchange_accounts(user_id, exchange, label, api_key, secret, key_hint, created_at, credentials) VALUES (1, 'kucoin', 'Main', '', '', 'k', 1, 'v1:x')");
+      await expect(createContext(config, silentLogger, { nli: fakeNli, db })).rejects.toThrow(/Cheia master lipsește/);
+      expect(readdirSync(d)).not.toContain('master.key');
+      // Nothing encrypted yet (a new database): the key is made, as before.
+      await db.run('DELETE FROM exchange_accounts');
+      await createContext(config, silentLogger, { nli: fakeNli, db });
+      expect(readdirSync(d)).toContain('master.key');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the jobs on one instance (TD-AZURE §6)', () => {
+  it('only the holder of the lease runs them; another takes over when it stops', async () => {
+    const db = await testDb();
+    let runs: string[] = [];
+    const make = (host: string) => {
+      const s = new Scheduler(db, silentLogger, { host, leaseTtlMs: 1500, renewMs: 300 });
+      s.add({ name: 'tick', everyMs: 100, runOnStart: true, run: async () => void runs.push(host) });
+      return s;
+    };
+    const a = make('mac');
+    const b = make('azure');
+    await a.start();
+    await b.start();
+    expect(a.leaderInfo()).toEqual({ host: 'mac', self: true });
+    expect(b.leaderInfo()).toEqual({ host: 'mac', self: false });
+    const waitFor = async (cond: () => boolean) => {
+      for (const end = performance.now() + 15_000; !cond(); ) {
+        if (performance.now() > end) throw new Error('timed out');
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    await waitFor(() => runs.length >= 2);
+    expect(new Set(runs)).toEqual(new Set(['mac']));
+    // Stopping hands the lease over at once (expires_at = 0): the other takes it at its next renewal.
+    await a.stop();
+    runs = [];
+    await waitFor(() => b.leaderInfo().self && runs.length >= 2);
+    expect(b.leaderInfo()).toEqual({ host: 'azure', self: true });
+    expect(new Set(runs)).toEqual(new Set(['azure']));
+    await b.stop();
   });
 });
 
@@ -1051,14 +1199,79 @@ describe('stocks API (FD-SENTIQ §4)', () => {
     const bad = await app.inject({ method: 'PUT', url: '/api/settings/twelvedata-key', headers: M, payload: { key: 'a'.repeat(32) } });
     expect(bad.statusCode).toBe(400);
     expect(bad.json().error.message).toMatch(/cheia nu e validă/);
-    serveJson(td(true), nasdaq);
+    // FD-TDPLAN: the saved key's plan is read at once (Grow: 55 a minute, no daily limit).
+    const grow = (u: URL) => (u.hostname === 'api.twelvedata.com' && u.pathname === '/api_usage' ? { timestamp: 'x', current_usage: 0, plan_limit: 55, plan_category: 'grow' } : null);
+    serveJson(grow, td(true), nasdaq);
     const ok = await app.inject({ method: 'PUT', url: '/api/settings/twelvedata-key', headers: M, payload: { key: 'b'.repeat(32) } });
     expect(ok.json()).toMatchObject({ twelveDataKeySet: true });
     expect(JSON.stringify(ok.json())).not.toContain('b'.repeat(32));
-    expect((await app.inject({ method: 'GET', url: '/api/stocks/info', headers: H })).json().timeframes).toContain('1h');
-    expect((await app.inject({ method: 'GET', url: '/api/health', headers: H })).json().twelveData).toMatchObject({ hasKey: true, used: 2 });
+    const info = (await app.inject({ method: 'GET', url: '/api/stocks/info', headers: H })).json();
+    expect(info.timeframes).toContain('1h');
+    expect(info.budget).toMatchObject({ perMinute: 55, perDay: null, plan: { category: 'grow', assumed: false } });
+    expect((await app.inject({ method: 'GET', url: '/api/health', headers: H })).json().twelveData).toMatchObject({ hasKey: true, used: 3, perDay: null });
+    // Read again on request (after an upgrade): the admin only.
+    serveJson((u) => (u.pathname === '/api_usage' ? { timestamp: 'x', current_usage: 0, plan_limit: 610, plan_category: 'pro' } : null));
+    const reread = await app.inject({ method: 'POST', url: '/api/settings/twelvedata-plan', headers: M });
+    expect(reread.json().budget).toMatchObject({ perMinute: 610, plan: { category: 'pro' } });
     const cleared = await app.inject({ method: 'PUT', url: '/api/settings/twelvedata-key', headers: M, payload: { key: null } });
     expect(cleared.json()).toMatchObject({ twelveDataKeySet: false });
+    expect((await app.inject({ method: 'GET', url: '/api/stocks/info', headers: H })).json().budget).toMatchObject({ perMinute: 8, perDay: 800, plan: { assumed: true } });
+    expect((await app.inject({ method: 'POST', url: '/api/settings/twelvedata-plan', headers: M })).json().error.message).toBe('Cheia Twelve Data lipsește');
+  });
+
+  it('serves an index: daily candles, quotes and the spark line (FD-INDICES)', async () => {
+    const cboe = (u: URL) => {
+      if (u.hostname !== 'cdn-api.cboe.com') return null;
+      if (u.pathname === '/api/global/delayed_quotes/charts/historical/_SPX.json')
+        return { data: Array.from({ length: 120 }, (_, i) => ({ date: new Date(Date.UTC(2026, 4, 1) + i * 86_400_000).toISOString().slice(0, 10), open: '7000', high: '7100', low: '6900', close: '7050', volume: '0.0' })) };
+      if (u.pathname === '/api/global/delayed_quotes/quotes/_SPX.json')
+        return { data: { current_price: 7752.88, price_change: -52.57, price_change_percent: -0.67, open: 7774.18, high: 7789.15, low: 7747.46, last_trade_time: '2026-10-14T10:48:27' } };
+      return null;
+    };
+    // CNBC down (every other address answers 404 here): the daily bars and the quote come from Cboe.
+    serveJson(cboe, nasdaq);
+    const d = await app.inject({ method: 'GET', url: '/api/market/candles?asset=index&symbol=spx&tf=1d&limit=100', headers: H });
+    expect(d.statusCode).toBe(200);
+    expect(d.json()).toMatchObject({ exchange: 'cboe', symbol: '^SPX', tf: '1d' });
+    expect(d.json().candles).toHaveLength(100);
+    expect(d.json().candles.at(-1)).toMatchObject({ o: 7774.18, c: 7752.88 });
+    const h = await app.inject({ method: 'GET', url: '/api/market/candles?asset=index&symbol=%5ESPX&tf=6h&limit=100', headers: H });
+    expect(h.statusCode).toBe(400);
+    expect(h.json().error.message).toBe('Indicii nu au 6h');
+    expect((await app.inject({ method: 'GET', url: '/api/market/candles?asset=index&symbol=DAX&tf=1d', headers: H })).statusCode).toBe(400);
+    const q = (await app.inject({ method: 'GET', url: '/api/stocks/quotes?symbols=%5Espx,AAPL,%5EDAX', headers: H })).json();
+    expect(q[0]).toMatchObject({ symbol: '^SPX', name: 'S&P 500', last: 7752.88, changePct: -0.67, delayed: true });
+    expect(q[1]).toMatchObject({ symbol: 'AAPL', last: 340.97 });
+    expect(q[2]).toMatchObject({ symbol: '^DAX', last: null, error: 'Indice necunoscut: DAX' });
+    expect((await app.inject({ method: 'GET', url: '/api/stocks/spark?symbol=%5ESPX', headers: H })).json().closes).toHaveLength(60);
+    const put = (payload: object) => app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload });
+    expect((await put({ charts: { symbol: 'index:SPX' } })).json().charts.symbol).toBe('index:SPX');
+    expect((await put({ charts: { symbol: 'index:spx' } })).statusCode).toBe(400);
+  });
+
+  it('serves an index on 1h from CNBC, with its real-time quote (FD-INDEXINTRA)', async () => {
+    const cnbc = (u: URL) => {
+      if (u.hostname === 'quote.cnbc.com')
+        return { FormattedQuoteResult: { FormattedQuote: [{ symbol: '.NDX', last: '29,919.56', change: '-649.92', change_pct: '-2.13%', open: '30,316.03', high: '30,436.60', low: '29,900.10', last_time: '2026-10-14T14:00:00.000-0400', realTime: 'true' }] } };
+      if (u.hostname === 'ts-api.cnbc.com' && u.pathname.startsWith('/harmony/app/bars/.NDX/1H/')) {
+        const priceBars = [];
+        for (let d = 0; d < 20; d++)
+          for (const h of [9, 10, 11, 12, 13, 14, 15, 16]) {
+            const day = new Date(Date.UTC(2026, 8, 14 + d)).toISOString().slice(0, 10);
+            priceBars.push({ open: '30000', high: '30100', low: '29900', close: '30050', tradeTime: `${day.replace(/-/g, '')}${String(h).padStart(2, '0')}0000`, tradeTimeinMills: Date.parse(`${day}T${String(h + 4).padStart(2, '0')}:00:00Z`) });
+          }
+        return { barData: { priceBars } };
+      }
+      return null;
+    };
+    serveJson(cnbc, nasdaq);
+    const r = await app.inject({ method: 'GET', url: '/api/market/candles?asset=index&symbol=NDX&tf=1h&limit=100', headers: H });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ exchange: 'cnbc', symbol: '^NDX', tf: '1h' });
+    // 7 session bars a day (the 16:00 print is after the close): 140, the last 100 asked.
+    expect(r.json().candles).toHaveLength(100);
+    const q = (await app.inject({ method: 'GET', url: '/api/stocks/quotes?symbols=%5ENDX', headers: H })).json();
+    expect(q[0]).toMatchObject({ symbol: '^NDX', last: 29919.56, changePct: -2.13, delayed: false });
   });
 
   it('accepts a stock as the remembered chart and the earnings switch of the calendar', async () => {

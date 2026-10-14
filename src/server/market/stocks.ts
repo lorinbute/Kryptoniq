@@ -1,9 +1,12 @@
 // Stock market data (FD-SENTIQ §4, TD-SENTIQ §5): candles from Twelve Data (free key) or Nasdaq (no key),
 // quotes / search / earnings / market status from Nasdaq, and a local budget for Twelve Data's free plan.
 import type { Candle } from '../../shared/indicator/slingshot.ts';
+import { INDEX_TIMEFRAMES, isIndexId } from '../../shared/indices.ts';
 import { tfSeconds, type Timeframe } from '../../shared/time.ts';
 import type { Db } from '../db/database.ts';
 import { HttpError, httpRequest } from '../net/http.ts';
+import type { CnbcClient } from './cnbc.ts';
+import { type CboeClient, IndexData, sourceOf } from './indices.ts';
 import { MarketError, type CandlesResult } from './market.ts';
 
 export const STOCK_SYMBOL_RE = /^[A-Z][A-Z0-9.-]{0,9}$/;
@@ -87,44 +90,174 @@ export function nasdaqNumber(v: unknown): number | null {
 
 // ---------------------------------------------------------------- Twelve Data budget
 
-/** Twelve Data's free plan: 8 credits a minute and 800 a day (UTC). Persisted so a restart does not reset the day. */
+/** A Twelve Data plan's limits (FD-TDPLAN): read from the key at `/api_usage`; `perDay` null = no daily limit. */
+export interface TdPlan {
+  /** basic, grow, pro, ultra, enterprise… as Twelve Data names it. */
+  category: string;
+  perMinute: number;
+  perDay: number | null;
+}
+
+/** The job that reads the plan (FD-TDPLAN). */
+export const TD_PLAN_JOB = 'twelvedata.plan';
+
+/** The free plan's limits: what Sentiq assumes until the key's plan was read. */
+export const TD_BASIC_PLAN: TdPlan = { category: 'basic', perMinute: 8, perDay: 800 };
+/** The plan another instance read is picked up this often. */
+const PLAN_RELOAD_MS = 5 * 60_000;
+
+interface StoredPlan extends TdPlan {
+  /** When it was read. */
+  at: number;
+  /** The last four characters of the key it was read for: a plan read for another key is ignored. */
+  keyHint: string;
+}
+
+const parseStoredPlan = (raw: string | undefined): StoredPlan | null => {
+  try {
+    const v = JSON.parse(raw ?? '') as Partial<StoredPlan>;
+    if (typeof v.perMinute !== 'number' || !(v.perMinute > 0) || (v.perDay !== null && !(typeof v.perDay === 'number' && v.perDay > 0))) return null;
+    return { category: String(v.category ?? 'unknown'), perMinute: v.perMinute, perDay: v.perDay ?? null, at: Number(v.at) || 0, keyHint: String(v.keyHint ?? '') };
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Twelve Data credits: per minute and, on plans that have one, per day (UTC). The limits are the key's plan, read from
+ * Twelve Data (FD-TDPLAN), the free plan's until then. The day's count and the plan are persisted: a restart does not
+ * reset the day, and the Mac and Azure use the same plan.
+ */
 export class CreditBudget {
   private minute: number[] = [];
   private day = '';
   private used = 0;
   private readonly db: Db | null;
   private readonly now: () => number;
-  readonly perMinute: number;
-  readonly perDay: number;
-  constructor(opts: { db?: Db | null; now?: () => number; perMinute?: number; perDay?: number } = {}) {
+  private plan: StoredPlan | null = null;
+  private readonly fixed: TdPlan | null;
+  private planReadAt = 0;
+  private planReading: Promise<void> | null = null;
+
+  /** `perMinute` / `perDay`: fixed limits (tests); otherwise the plan's. */
+  constructor(opts: { db?: Db | null; now?: () => number; perMinute?: number; perDay?: number | null } = {}) {
     this.db = opts.db ?? null;
     this.now = opts.now ?? Date.now;
-    this.perMinute = opts.perMinute ?? 8;
-    this.perDay = opts.perDay ?? 800;
-    const row = this.db?.get<{ value: string }>("SELECT value FROM market_cache WHERE key = 'td:usage'");
-    if (row) {
-      try {
+    this.fixed = opts.perMinute !== undefined || opts.perDay !== undefined ? { category: 'fixed', perMinute: opts.perMinute ?? 8, perDay: opts.perDay === undefined ? 800 : opts.perDay } : null;
+    this.ready = this.load();
+  }
+
+  /** The limits in force. */
+  get perMinute(): number {
+    return (this.fixed ?? this.plan ?? TD_BASIC_PLAN).perMinute;
+  }
+
+  get perDay(): number | null {
+    return (this.fixed ?? this.plan ?? TD_BASIC_PLAN).perDay;
+  }
+
+  /** Read once at start: the credits already used today (taken meanwhile are kept: the larger count wins), and the plan. */
+  readonly ready: Promise<void>;
+  private saving: Promise<void> = Promise.resolve();
+
+  private async load(): Promise<void> {
+    if (!this.db) return;
+    try {
+      const row = await this.db.get<{ value: string }>("SELECT value FROM market_cache WHERE [key] = N'td:usage'");
+      if (row) {
         const v = JSON.parse(row.value) as { day: string; used: number };
-        this.day = v.day;
-        this.used = v.used;
-      } catch {
-        // start fresh
+        if (this.day === '' || this.day === v.day) {
+          this.day = v.day;
+          this.used = Math.max(this.used, v.used);
+        }
       }
+    } catch {
+      // start fresh
     }
+    await this.reloadPlan();
+  }
+
+  /** The plan as stored (by this instance or the other one). */
+  private async reloadPlan(): Promise<void> {
+    if (!this.db) return;
+    this.planReadAt = this.now();
+    try {
+      const row = await this.db.get<{ value: string }>("SELECT value FROM market_cache WHERE [key] = N'td:plan'");
+      this.plan = parseStoredPlan(row?.value);
+    } catch {
+      // keep the last one
+    }
+  }
+
+  /** Picks up, in the background, a plan the other instance read meanwhile. */
+  private maybeReloadPlan(): void {
+    if (!this.db || this.planReading || this.now() - this.planReadAt < PLAN_RELOAD_MS) return;
+    this.planReading = this.reloadPlan().finally(() => (this.planReading = null));
+  }
+
+  /** The plan read for the key ending in `keyHint` (FD-TDPLAN): its limits apply from now on. */
+  async setPlan(p: TdPlan, keyHint: string): Promise<void> {
+    this.plan = { category: p.category, perMinute: p.perMinute, perDay: p.perDay, at: this.now(), keyHint };
+    this.planReadAt = this.now();
+    if (this.db) {
+      await this.db.run(`UPDATE market_cache SET value = @v, fetched_at = @t WHERE [key] = N'td:plan'; IF @@ROWCOUNT = 0 INSERT INTO market_cache([key], value, fetched_at) VALUES (N'td:plan', @v, @t)`, {
+        v: JSON.stringify(this.plan),
+        t: this.now(),
+      });
+    }
+  }
+
+  /** The key was removed or replaced: back to the free plan's limits until the new key's plan is read. */
+  async clearPlan(): Promise<void> {
+    this.plan = null;
+    this.planReadAt = this.now();
+    if (this.db) await this.db.run("DELETE FROM market_cache WHERE [key] = N'td:plan'");
+  }
+
+  /** The stored plan, when it belongs to the key ending in `keyHint`. */
+  planFor(keyHint: string): StoredPlan | null {
+    return this.plan && this.plan.keyHint === keyHint ? this.plan : null;
+  }
+
+  /** Resolves once the count was read and every write so far has finished (tests, shutdown). */
+  async settled(): Promise<void> {
+    await this.ready;
+    await this.saving;
+  }
+
+  /** Writes the latest count, one write at a time (a slow one never overwrites a newer count). */
+  private persist(): void {
+    const db = this.db;
+    if (!db) return;
+    this.saving = this.saving
+      .then(() =>
+        db.run(`UPDATE market_cache SET value = @v, fetched_at = @t WHERE [key] = N'td:usage'; IF @@ROWCOUNT = 0 INSERT INTO market_cache([key], value, fetched_at) VALUES (N'td:usage', @v, @t)`, {
+          v: JSON.stringify({ day: this.day, used: this.used }),
+          t: this.now(),
+        }),
+      )
+      .then(
+        () => undefined,
+        () => undefined,
+      );
   }
 
   private today(): string {
     return new Date(this.now()).toISOString().slice(0, 10);
   }
 
-  status(): { used: number; perDay: number; minuteUsed: number; perMinute: number; day: string } {
+  status(): { used: number; perDay: number | null; minuteUsed: number; perMinute: number; day: string; plan: { category: string; at: number | null; assumed: boolean } } {
+    this.maybeReloadPlan();
     const now = this.now();
-    if (this.day !== this.today()) return { used: 0, perDay: this.perDay, minuteUsed: 0, perMinute: this.perMinute, day: this.today() };
-    return { used: this.used, perDay: this.perDay, minuteUsed: this.minute.filter((t) => now - t < 60_000).length, perMinute: this.perMinute, day: this.day };
+    const current = this.fixed ?? this.plan ?? TD_BASIC_PLAN;
+    const plan = { category: current.category, at: this.plan && !this.fixed ? this.plan.at : null, assumed: !this.fixed && !this.plan };
+    if (this.day !== this.today()) return { used: 0, perDay: this.perDay, minuteUsed: 0, perMinute: this.perMinute, day: this.today(), plan };
+    return { used: this.used, perDay: this.perDay, minuteUsed: this.minute.filter((t) => now - t < 60_000).length, perMinute: this.perMinute, day: this.day, plan };
   }
 
   /** Takes credits, or throws with the moment they are available again. */
   take(n = 1): void {
+    this.maybeReloadPlan();
     const now = this.now();
     const today = this.today();
     if (this.day !== today) {
@@ -132,9 +265,10 @@ export class CreditBudget {
       this.used = 0;
     }
     this.minute = this.minute.filter((t) => now - t < 60_000);
-    if (this.used + n > this.perDay) {
+    const perDay = this.perDay;
+    if (perDay !== null && this.used + n > perDay) {
       const tomorrow = Date.UTC(+today.slice(0, 4), +today.slice(5, 7) - 1, +today.slice(8, 10) + 1);
-      throw new MarketError('EXCHANGE_ERROR', `limita zilnică Twelve Data (${this.perDay} cereri) a fost atinsă; revine la ${new Date(tomorrow).toISOString().slice(11, 16)} UTC`);
+      throw new MarketError('EXCHANGE_ERROR', `limita zilnică Twelve Data (${perDay} cereri) a fost atinsă; revine la ${new Date(tomorrow).toISOString().slice(11, 16)} UTC`);
     }
     if (this.minute.length + n > this.perMinute) {
       const free = (this.minute[0] as number) + 60_000;
@@ -142,10 +276,7 @@ export class CreditBudget {
     }
     for (let i = 0; i < n; i++) this.minute.push(now);
     this.used += n;
-    this.db?.run("INSERT INTO market_cache(key, value, fetched_at) VALUES ('td:usage', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, fetched_at = excluded.fetched_at", [
-      JSON.stringify({ day: this.day, used: this.used }),
-      now,
-    ]);
+    this.persist();
   }
 
   /** The server told us we are over its limit: no more requests for the rest of this minute. */
@@ -177,6 +308,8 @@ export interface StockQuote {
   /** "Market Open", "Market Closed", "Pre-Market", "After-Hours" (as Nasdaq says it). */
   status: string | null;
   fetchedAt: number;
+  /** An index's quote from a delayed source (Cboe, up to 15 minutes; FD-INDEXINTRA). */
+  delayed?: boolean;
 }
 
 export interface StockSearchHit {
@@ -219,17 +352,22 @@ export function parseNasdaqEt(s: unknown): number | null {
   return zonedToUtc(+m[3]!, month, +m[2]!, h, +m[5]!, 0, NY);
 }
 
+/** Nasdaq's asset classes: shares, funds and (for its own indices) index. */
+export type NasdaqClass = 'stocks' | 'etf' | 'index';
+
 export class NasdaqClient {
   private readonly headers = { 'User-Agent': BROWSER_UA, Accept: 'application/json, text/plain, */*', Origin: 'https://www.nasdaq.com', Referer: 'https://www.nasdaq.com/' };
   /** stocks / etf per symbol (the history endpoint needs the right asset class). */
-  private readonly assetClass = new Map<string, 'stocks' | 'etf'>();
+  private readonly assetClass = new Map<string, NasdaqClass>();
 
   private async get(path: string): Promise<Record<string, unknown> | null> {
     const j = (await getJson(`https://api.nasdaq.com${path}`, this.headers, 'Nasdaq')) as { data?: unknown; status?: { rCode?: number } };
     return j && typeof j.data === 'object' && j.data !== null ? (j.data as Record<string, unknown>) : null;
   }
 
-  private async withClass<T>(sym: string, fn: (cls: 'stocks' | 'etf') => Promise<T | null>): Promise<T | null> {
+  /** `fixed`: the class is known (an index, FD-INDICES); otherwise stocks, then etf, remembered per symbol. */
+  private async withClass<T>(sym: string, fn: (cls: NasdaqClass) => Promise<T | null>, fixed?: NasdaqClass): Promise<T | null> {
+    if (fixed) return fn(fixed);
     const known = this.assetClass.get(sym);
     for (const cls of known ? [known] : (['stocks', 'etf'] as const)) {
       const r = await fn(cls);
@@ -241,8 +379,8 @@ export class NasdaqClient {
     return null;
   }
 
-  async quote(sym: string, now: number): Promise<StockQuote> {
-    const d = await this.withClass(sym, (cls) => this.get(`/api/quote/${encodeURIComponent(sym)}/info?assetclass=${cls}`));
+  async quote(sym: string, now: number, cls?: NasdaqClass): Promise<StockQuote> {
+    const d = await this.withClass(sym, (c) => this.get(`/api/quote/${encodeURIComponent(sym)}/info?assetclass=${c}`), cls);
     if (!d) throw new MarketError('UNKNOWN_SYMBOL', `${sym} nu e listat la Nasdaq / NYSE`);
     const p = (d.primaryData ?? {}) as Record<string, unknown>;
     return {
@@ -257,12 +395,16 @@ export class NasdaqClient {
   }
 
   /** Daily bars between two dates (newest last); Nasdaq keeps about 10 years. */
-  async daily(sym: string, fromDay: string, toDay: string, limit: number): Promise<Candle[]> {
-    const d = await this.withClass(sym, async (cls) => {
-      const data = await this.get(`/api/quote/${encodeURIComponent(sym)}/historical?assetclass=${cls}&fromdate=${fromDay}&todate=${toDay}&limit=${limit}`);
-      const rows = (data?.tradesTable as { rows?: unknown[] } | undefined)?.rows;
-      return Array.isArray(rows) ? rows : null;
-    });
+  async daily(sym: string, fromDay: string, toDay: string, limit: number, cls?: NasdaqClass): Promise<Candle[]> {
+    const d = await this.withClass(
+      sym,
+      async (c) => {
+        const data = await this.get(`/api/quote/${encodeURIComponent(sym)}/historical?assetclass=${c}&fromdate=${fromDay}&todate=${toDay}&limit=${limit}`);
+        const rows = (data?.tradesTable as { rows?: unknown[] } | undefined)?.rows;
+        return Array.isArray(rows) ? rows : null;
+      },
+      cls,
+    );
     if (!d) throw new MarketError('UNKNOWN_SYMBOL', `${sym} nu are istoric la Nasdaq`);
     const out: Candle[] = [];
     for (const r of d as Record<string, unknown>[]) {
@@ -278,8 +420,8 @@ export class NasdaqClient {
   }
 
   /** Today's minute prices → one daily bar (open, high, low, last), when the market traded today. */
-  async today(sym: string): Promise<Candle | null> {
-    const d = await this.withClass(sym, (cls) => this.get(`/api/quote/${encodeURIComponent(sym)}/chart?assetclass=${cls}`));
+  async today(sym: string, cls?: NasdaqClass): Promise<Candle | null> {
+    const d = await this.withClass(sym, (c) => this.get(`/api/quote/${encodeURIComponent(sym)}/chart?assetclass=${c}`), cls);
     const pts = (d?.chart as { x?: number; y?: number }[] | undefined) ?? [];
     const prices = pts.map((p) => ({ t: Number(p.x), p: nasdaqNumber(p.y) })).filter((x): x is { t: number; p: number } => Number.isFinite(x.t) && x.p !== null);
     if (prices.length === 0) return null;
@@ -332,19 +474,19 @@ export class NasdaqClient {
 
 export class TwelveDataClient {
   private readonly budget: CreditBudget;
-  private readonly key: () => string | null;
-  constructor(key: () => string | null, budget: CreditBudget) {
+  private readonly key: () => Promise<string | null>;
+  constructor(key: () => Promise<string | null>, budget: CreditBudget) {
     this.key = key;
     this.budget = budget;
   }
 
-  hasKey(): boolean {
-    return Boolean(this.key());
+  async hasKey(): Promise<boolean> {
+    return Boolean(await this.key());
   }
 
   private async get(path: string, params: Record<string, string>, credits: number, keyOverride?: string): Promise<Record<string, unknown>> {
-    const key = keyOverride ?? this.key();
-    if (!key) throw new MarketError('UNSUPPORTED_TIMEFRAME', 'Cheia Twelve Data lipsește (Setări → Date de piață)');
+    const key = keyOverride ?? (await this.key());
+    if (!key) throw new MarketError('UNSUPPORTED_TIMEFRAME', 'Cheia Twelve Data lipsește (Setări → Admin → Date de piață)');
     if (credits > 0) this.budget.take(credits);
     const qs = new URLSearchParams({ ...params, apikey: key }).toString();
     let r;
@@ -398,6 +540,18 @@ export class TwelveDataClient {
       .map((r) => ({ symbol: String(r.symbol), name: String(r.instrument_name ?? r.symbol), exchange: String(r.exchange ?? ''), type: /ETF/i.test(String(r.instrument_type)) ? 'ETF' : 'Acțiune' }));
   }
 
+  /**
+   * The key's plan (FD-TDPLAN, one credit): `plan_limit` a minute and, only on plans that have one, `plan_daily_limit`.
+   * `keyOverride`: a key not saved yet.
+   */
+  async plan(keyOverride?: string): Promise<TdPlan> {
+    const j = await this.get('/api_usage', {}, 1, keyOverride);
+    const perMinute = Number(j.plan_limit);
+    if (!Number.isFinite(perMinute) || perMinute <= 0) throw new MarketError('EXCHANGE_ERROR', 'Twelve Data: răspuns neașteptat la citirea planului');
+    const daily = j.plan_daily_limit === undefined || j.plan_daily_limit === null ? null : Number(j.plan_daily_limit);
+    return { category: String(j.plan_category ?? 'unknown').toLowerCase(), perMinute, perDay: daily !== null && Number.isFinite(daily) && daily > 0 ? daily : null };
+  }
+
   /** Checks a key before it is saved (one credit). */
   async verify(key: string): Promise<void> {
     const j = await this.get('/time_series', { symbol: 'AAPL', interval: '1day', outputsize: '1' }, 1, key);
@@ -420,6 +574,7 @@ interface CacheEntry {
 }
 
 const dayKey = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+const SOURCE_NAME: Record<string, string> = { twelvedata: 'Twelve Data', nasdaq: 'Nasdaq', cboe: 'Cboe', cnbc: 'CNBC' };
 /** Known to be outside the regular session (an unknown state counts as open: the short TTL then applies). */
 const outsideSession = (status: MarketStatus | null): boolean => status !== null && status.state !== 'open';
 
@@ -445,18 +600,23 @@ export class StockData {
   readonly nasdaq: NasdaqClient;
   readonly td: TwelveDataClient;
   readonly budget: CreditBudget;
+  /** US indices (FD-INDICES): an id with "^" in front is served from here. */
+  readonly indices: IndexData;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inflight = new Map<string, Promise<CandlesResult>>();
   private readonly quotes = new Map<string, StockQuote>();
   private readonly sparks = new Map<string, { symbol: string; closes: number[]; fetchedAt: number }>();
   private status: MarketStatus | null = null;
   private readonly now: () => number;
+  private readonly key: () => Promise<string | null>;
 
-  constructor(opts: { db?: Db | null; key: () => string | null; now?: () => number; nasdaq?: NasdaqClient; budget?: CreditBudget }) {
+  constructor(opts: { db?: Db | null; key: () => Promise<string | null>; now?: () => number; nasdaq?: NasdaqClient; budget?: CreditBudget; cboe?: CboeClient; cnbc?: CnbcClient }) {
     this.now = opts.now ?? Date.now;
     this.budget = opts.budget ?? new CreditBudget({ db: opts.db, now: this.now });
     this.nasdaq = opts.nasdaq ?? new NasdaqClient();
     this.td = new TwelveDataClient(opts.key, this.budget);
+    this.key = opts.key;
+    this.indices = new IndexData({ nasdaq: this.nasdaq, cboe: opts.cboe, cnbc: opts.cnbc, now: this.now, status: () => this.confirmedStatus() });
   }
 
   /** US market state, re-read at most every 5 minutes. */
@@ -477,8 +637,28 @@ export class StockData {
     return last && this.now() - last.fetchedAt < 15 * 60_000 ? last : null;
   }
 
-  timeframes(): Timeframe[] {
-    return stockTimeframes(this.td.hasKey());
+  async timeframes(): Promise<Timeframe[]> {
+    return stockTimeframes(await this.td.hasKey());
+  }
+
+  /**
+   * Reads the Twelve Data key's plan and applies its limits (FD-TDPLAN): after a key is saved, at start-up, every 6 hours
+   * and on request. Without a key, the plan is forgotten. A failed read keeps the last plan (and throws).
+   */
+  async refreshPlan(key: string | null = null): Promise<TdPlan | null> {
+    const k = key ?? (await this.key());
+    if (!k) {
+      await this.budget.clearPlan();
+      return null;
+    }
+    const p = await this.td.plan(k);
+    await this.budget.setPlan(p, k.slice(-4));
+    return p;
+  }
+
+  /** The timeframes of one symbol: an index has 1d and 1w only (FD-INDICES), a share what the source has. */
+  async timeframesFor(sym: string): Promise<Timeframe[]> {
+    return isIndexId(sym) ? [...INDEX_TIMEFRAMES] : this.timeframes();
   }
 
   /**
@@ -493,17 +673,31 @@ export class StockData {
 
   async candles(symbol: string, tf: Timeframe, count: number): Promise<CandlesResult> {
     const sym = symbol.toUpperCase();
+    if (isIndexId(sym)) return this.indexCandles(sym, tf, count);
     if (!STOCK_SYMBOL_RE.test(sym)) throw new MarketError('UNKNOWN_SYMBOL', `Simbol invalid: ${symbol}`);
-    const useTd = this.td.hasKey() && TD_INTERVALS[tf] !== undefined;
+    const hasKey = await this.td.hasKey();
+    const useTd = hasKey && TD_INTERVALS[tf] !== undefined;
     if (!useTd && !NASDAQ_TIMEFRAMES.includes(tf)) {
-      throw new MarketError('UNSUPPORTED_TIMEFRAME', this.td.hasKey() ? `Timeframe-ul ${tf} nu există la Twelve Data (alege 1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d sau 1w)` : `Timeframe-ul ${tf} are nevoie de cheia gratuită Twelve Data (Setări → Date de piață); fără ea sunt disponibile 1d și 1w`);
+      throw new MarketError('UNSUPPORTED_TIMEFRAME', hasKey ? `Timeframe-ul ${tf} nu există la Twelve Data (alege 1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d sau 1w)` : `Timeframe-ul ${tf} are nevoie de cheia gratuită Twelve Data (Setări → Admin → Date de piață); fără ea sunt disponibile 1d și 1w`);
     }
     const key = `${useTd ? 'td' : 'nq'}|${sym}|${tf}`;
     const pending = this.inflight.get(key);
     if (pending) return pending;
-    const p = this.load(sym, tf, count, key, useTd)
+    const p = this.load(sym, tf, count, key, useTd ? 'td' : 'nq')
       .catch((err: unknown) => this.withSuggestions(sym, err))
       .finally(() => this.inflight.delete(key));
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  /** An index's candles (FD-INDICES, FD-INDEXINTRA): daily / weekly from its daily history, intraday from CNBC. */
+  private indexCandles(id: string, tf: Timeframe, count: number): Promise<CandlesResult> {
+    sourceOf(id);
+    if (!INDEX_TIMEFRAMES.includes(tf)) return Promise.reject(new MarketError('UNSUPPORTED_TIMEFRAME', `Indicii nu au ${tf}`));
+    const key = `ix|${id}|${tf}`;
+    const pending = this.inflight.get(key);
+    if (pending) return pending;
+    const p = this.load(id, tf, count, key, 'ix').finally(() => this.inflight.delete(key));
     this.inflight.set(key, p);
     return p;
   }
@@ -524,7 +718,7 @@ export class StockData {
     throw new MarketError('UNKNOWN_SYMBOL', `${err.message}; încearcă ${suggestions.join(', ')}`, suggestions);
   }
 
-  private async load(sym: string, tf: Timeframe, count: number, key: string, useTd: boolean): Promise<CandlesResult> {
+  private async load(sym: string, tf: Timeframe, count: number, key: string, mode: 'td' | 'nq' | 'ix'): Promise<CandlesResult> {
     const now = this.now();
     const cached = this.cache.get(key);
     // A state Nasdaq could not confirm for a while is not trusted (a Friday "closed" must not freeze Monday's chart).
@@ -535,9 +729,17 @@ export class StockData {
       entry = cached;
     } else {
       try {
-        if (useTd) {
+        if (mode === 'td') {
           const r = await this.td.timeSeries(sym, TD_INTERVALS[tf] as string, count);
           entry = { candles: r.candles, fetchedAt: now, count, exchange: 'twelvedata', closedAt: outsideSession(status) };
+        } else if (mode === 'ix') {
+          // Daily and weekly from the index's daily history; intraday from CNBC (FD-INDEXINTRA).
+          if (tf === '1d' || tf === '1w') {
+            const daily = await this.indices.history(sym);
+            entry = { candles: (tf === '1w' ? weeklyFromDaily(daily.candles) : daily.candles).slice(-count), fetchedAt: now, count, exchange: daily.from, closedAt: outsideSession(status) };
+          } else {
+            entry = { candles: await this.indices.intraday(sym, tf, count), fetchedAt: now, count, exchange: 'cnbc', closedAt: outsideSession(status) };
+          }
         } else {
           const days = tf === '1w' ? count * 7 + 7 : Math.ceil(count * 1.5) + 10;
           let daily = await this.nasdaq.daily(sym, dayKey(now - days * 86_400_000), dayKey(now), Math.min(10_000, days));
@@ -550,7 +752,7 @@ export class StockData {
           }
           entry = { candles: (tf === '1w' ? weeklyFromDaily(daily) : daily).slice(-count), fetchedAt: now, count, exchange: 'nasdaq', closedAt: outsideSession(status) };
         }
-        if (entry.candles.length === 0) throw new MarketError('UNKNOWN_SYMBOL', `${sym}: nicio lumânare de la ${useTd ? 'Twelve Data' : 'Nasdaq'}`);
+        if (entry.candles.length === 0) throw new MarketError('UNKNOWN_SYMBOL', `${sym.replace(/^\^/, '')}: nicio lumânare de la ${SOURCE_NAME[entry.exchange] ?? entry.exchange}`);
         this.cache.set(key, entry);
         while (this.cache.size > 100) this.cache.delete(this.cache.keys().next().value as string);
       } catch (err) {
@@ -569,14 +771,14 @@ export class StockData {
     return { exchange: entry.exchange, symbol: sym, tf, candles, pricePrecision: lastPrice < 1 ? 4 : 2, lastClosedIndex, fetchedAt: entry.fetchedAt, ...(notice ? { notice } : {}) };
   }
 
-  /** Last price and day change from Nasdaq: a minute per symbol, 15 minutes while the market is closed (no trading). */
+  /** Last price and day change (Nasdaq; an index from its source): a minute per symbol, 15 minutes while the market is closed. */
   async quote(sym: string): Promise<StockQuote> {
     const now = this.now();
     const c = this.quotes.get(sym);
     const ttl = this.status?.state === 'closed' && now - this.status.fetchedAt < 10 * 60_000 ? 15 * 60_000 : 60_000;
     if (c && now - c.fetchedAt < ttl) return c;
     try {
-      const q = await this.nasdaq.quote(sym, now);
+      const q = isIndexId(sym) ? await this.indices.quote(sym) : await this.nasdaq.quote(sym, now);
       this.quotes.set(sym, q);
       return q;
     } catch (err) {
@@ -586,7 +788,7 @@ export class StockData {
   }
 
   async search(q: string): Promise<StockSearchHit[]> {
-    if (this.td.hasKey()) {
+    if (await this.td.hasKey()) {
       try {
         const hits = await this.td.search(q);
         if (hits.length) return dedupe(hits);
@@ -597,13 +799,13 @@ export class StockData {
     return dedupe(await this.nasdaq.search(q));
   }
 
-  /** 60 daily closes for the small chart in the strip and the Today cards: always Nasdaq, so no Twelve Data credits. */
+  /** 60 daily closes for the small chart in the strip and the Today cards: Nasdaq (an index: its history), never Twelve Data. */
   async spark(sym: string): Promise<{ symbol: string; closes: number[]; fetchedAt: number }> {
     const now = this.now();
     const c = this.sparks.get(sym);
     if (c && now - c.fetchedAt < 3_600_000) return c;
     try {
-      const daily = await this.nasdaq.daily(sym, dayKey(now - 100 * 86_400_000), dayKey(now), 100);
+      const daily = isIndexId(sym) ? (await this.indices.history(sym)).candles : await this.nasdaq.daily(sym, dayKey(now - 100 * 86_400_000), dayKey(now), 100);
       const out = { symbol: sym, closes: daily.slice(-60).map((d) => d.c), fetchedAt: now };
       this.sparks.set(sym, out);
       return out;
