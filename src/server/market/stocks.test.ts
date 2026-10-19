@@ -163,16 +163,61 @@ describe('Twelve Data plan (FD-TDPLAN)', () => {
     let key: string | null = 'a'.repeat(28) + 'wxyz';
     // Another day than the test above, whose thousands of credits are still in this schema's count.
     const s = new StockData({ db, key: async () => key, now: () => Date.parse('2026-10-20T15:00:00Z') });
-    await s.budget.ready;
+    await s.budget(1).ready;
     serve((u) => (u.pathname === '/api_usage' ? { body: { current_usage: 0, plan_limit: 55, plan_category: 'grow', timestamp: 'x' } } : undefined));
-    expect(await s.refreshPlan()).toEqual({ category: 'grow', perMinute: 55, perDay: null });
-    expect(s.budget.planFor('wxyz')).toMatchObject({ perMinute: 55 });
+    expect(await s.refreshPlan(1)).toEqual({ category: 'grow', perMinute: 55, perDay: null });
+    expect(s.budget(1).planFor('wxyz')).toMatchObject({ perMinute: 55 });
     serve(() => ({ status: 500, body: { status: 'error', code: 500, message: 'down' } }));
-    await expect(s.refreshPlan()).rejects.toThrow();
-    expect(s.budget.status().perMinute).toBe(55);
+    await expect(s.refreshPlan(1)).rejects.toThrow();
+    expect(s.budget(1).status().perMinute).toBe(55);
     key = null;
-    expect(await s.refreshPlan()).toBeNull();
-    expect(s.budget.status()).toMatchObject({ perMinute: 8, perDay: 800 });
+    expect(await s.refreshPlan(1)).toBeNull();
+    expect(s.budget(1).status()).toMatchObject({ perMinute: 8, perDay: 800 });
+  });
+
+  it("FD-TDKEYS: each user's key has its own credits, plan, candles and timeframes; without a key, Nasdaq for everyone", async () => {
+    const db = await testDb();
+    const keys: Record<number, string | null> = { 1: 'a'.repeat(28) + 'aaaa', 2: 'b'.repeat(28) + 'bbbb', 3: null };
+    const now = Date.parse('2026-10-21T15:00:00Z');
+    const f = fakeNasdaq();
+    const s = new StockData({ db, key: async (u) => keys[u] ?? null, now: () => now, nasdaq: f.n });
+    const used: string[] = [];
+    serve((u) => {
+      if (u.pathname === '/api_usage') return { body: { plan_limit: u.searchParams.get('apikey')?.startsWith('a') ? 55 : 8, plan_daily_limit: u.searchParams.get('apikey')?.startsWith('a') ? null : 800, plan_category: 'x' } };
+      if (u.pathname === '/time_series') {
+        used.push(u.searchParams.get('apikey')!.slice(0, 1));
+        return { body: { meta: { exchange: 'NASDAQ', exchange_timezone: 'America/New_York' }, values: [{ datetime: '2026-10-21 10:00:00', open: '1', high: '2', low: '1', close: '2', volume: '5' }], status: 'ok' } };
+      }
+      return undefined;
+    });
+    await s.refreshPlan(1);
+    await s.refreshPlan(2);
+    expect(s.budget(1).status()).toMatchObject({ perMinute: 55, perDay: null });
+    expect(s.budget(2).status()).toMatchObject({ perMinute: 8, perDay: 800 });
+    expect(await s.timeframes(1)).toContain('1h');
+    expect(await s.timeframes(3)).toEqual(['1d', '1w']);
+    // The same share for two users with keys: each with their own key and credits, no candles shared.
+    await s.candles('AAPL', '1h', 50, 1);
+    await s.candles('AAPL', '1h', 50, 2);
+    await s.candles('AAPL', '1h', 50, 1);
+    expect(used).toEqual(['a', 'b']);
+    expect(s.budget(1).status().used).toBe(2);
+    expect(s.budget(2).status().used).toBe(2);
+    // Without a key: 1h is not there, the daily is Nasdaq's.
+    await expect(s.candles('AAPL', '1h', 50, 3)).rejects.toMatchObject({ code: 'UNSUPPORTED_TIMEFRAME', message: expect.stringContaining('Setări → Ale mele → Date pentru acțiuni') });
+    expect((await s.candles('AAPL', '1d', 50, 3)).exchange).toBe('nasdaq');
+    // Persisted apart; a new key starts the day from nothing; a forgotten user leaves memory.
+    await s.budget(1).settled();
+    await s.budget(2).settled();
+    expect(await db.get("SELECT 1 AS x FROM market_cache WHERE [key] = N'td:usage:2'")).toBeDefined();
+    await s.budget(2).reset();
+    expect(s.budget(2).status().used).toBe(0);
+    expect(new CreditBudget({ db, now: () => now, scope: '1' }).perMinute).toBe(8);
+    const again = new CreditBudget({ db, now: () => now, scope: '1' });
+    await again.ready;
+    expect(again.status()).toMatchObject({ used: 2, perMinute: 55 });
+    s.forget(1);
+    expect(s.budget(1)).not.toBe(again);
   });
 });
 
@@ -206,7 +251,7 @@ describe('Twelve Data client', () => {
     await expect(td().timeSeries('AAPL', '1h', 2)).rejects.toThrow(/cheia nu e validă/);
     serve(() => ({ body: { code: 400, message: 'symbol not found', status: 'error' } }));
     await expect(td().timeSeries('ZZZZ', '1h', 2)).rejects.toMatchObject({ code: 'UNKNOWN_SYMBOL' });
-    await expect(td(null).timeSeries('AAPL', '1h', 2)).rejects.toThrow(/Cheia Twelve Data lipsește/);
+    await expect(td(null).timeSeries('AAPL', '1h', 2)).rejects.toThrow(/Cheia ta Twelve Data lipsește \(Setări → Ale mele → Date pentru acțiuni\)/);
   });
 
   it('pauses for the rest of the minute after a 429', async () => {
@@ -269,8 +314,8 @@ describe('StockData', () => {
 
   it('asks for the key on intraday timeframes', async () => {
     const s = new StockData({ key: async () => null, nasdaq: fakeNasdaq().n });
-    await expect(s.candles('AAPL', '1h', 100)).rejects.toMatchObject({ code: 'UNSUPPORTED_TIMEFRAME' });
-    await expect(s.candles('aapl!', '1d', 100)).rejects.toMatchObject({ code: 'UNKNOWN_SYMBOL' });
+    await expect(s.candles('AAPL', '1h', 100, 1)).rejects.toMatchObject({ code: 'UNSUPPORTED_TIMEFRAME' });
+    await expect(s.candles('aapl!', '1d', 100, 1)).rejects.toMatchObject({ code: 'UNKNOWN_SYMBOL' });
   });
 
   it('suggests listed symbols for one the source does not know', async () => {
@@ -282,10 +327,10 @@ describe('StockData', () => {
       { symbol: 'META', name: 'Meta Platforms, Inc. Class A Common Stock', exchange: 'NASDAQ-GS', type: 'Acțiune' },
     ];
     const s = new StockData({ key: async () => null, nasdaq: f.n });
-    await expect(s.candles('FB', '1d', 50)).rejects.toMatchObject({ code: 'UNKNOWN_SYMBOL', message: 'FB nu are istoric la Nasdaq; încearcă META', suggestions: ['META'] });
+    await expect(s.candles('FB', '1d', 50, 1)).rejects.toMatchObject({ code: 'UNKNOWN_SYMBOL', message: 'FB nu are istoric la Nasdaq; încearcă META', suggestions: ['META'] });
     // The closest spelling first.
     n.search = async () => ['AADX', 'AAOI', 'AAPL', 'APLE'].map((symbol) => ({ symbol, name: symbol, exchange: '', type: 'Acțiune' }));
-    await expect(s.candles('APPL', '1d', 50)).rejects.toMatchObject({ suggestions: ['AAPL', 'APLE', 'AADX'] });
+    await expect(s.candles('APPL', '1d', 50, 1)).rejects.toMatchObject({ suggestions: ['AAPL', 'APLE', 'AADX'] });
     expect(editDistance('APPL', 'AAPL')).toBe(1);
     expect(editDistance('BRK.B', 'BRKB')).toBe(1);
   });
@@ -294,17 +339,17 @@ describe('StockData', () => {
     let now = Date.parse('2026-10-13T15:00:00Z');
     const f = fakeNasdaq();
     const s = new StockData({ key: async () => null, nasdaq: f.n, now: () => now });
-    const a = await s.candles('AAPL', '1d', 100);
+    const a = await s.candles('AAPL', '1d', 100, 1);
     expect(a).toMatchObject({ exchange: 'nasdaq', symbol: 'AAPL', tf: '1d', pricePrecision: 2 });
     expect(a.candles).toHaveLength(100);
-    await s.candles('AAPL', '1d', 100);
+    await s.candles('AAPL', '1d', 100, 1);
     expect(f.calls.daily).toBe(1);
     // Weekly bars come from the same daily history.
-    const w = await s.candles('AAPL', '1w', 20);
+    const w = await s.candles('AAPL', '1w', 20, 1);
     expect(w.candles.length).toBeLessThanOrEqual(20);
     now += 16 * 60_000;
     f.opts.fail = true;
-    const stale = await s.candles('AAPL', '1d', 100);
+    const stale = await s.candles('AAPL', '1d', 100, 1);
     expect(stale.fetchedAt).toBeLessThan(now);
     expect(stale.candles).toHaveLength(100);
     expect(stale.notice).toBe('Nasdaq: HTTP 503');
@@ -318,22 +363,22 @@ describe('StockData', () => {
     // On weekends the "opening time" Nasdaq reports can be in the past: it must not matter.
     n.marketStatus = async (t) => ({ state, label: '', opensAt: Date.parse('2026-10-16T13:30:00Z'), closesAt: null, fetchedAt: t });
     const s = new StockData({ key: async () => null, nasdaq: f.n, now: () => now });
-    await s.candles('AAPL', '1d', 50);
+    await s.candles('AAPL', '1d', 50, 1);
     now += 30 * 3_600_000;
-    await s.candles('AAPL', '1d', 50);
+    await s.candles('AAPL', '1d', 50, 1);
     expect(f.calls.daily).toBe(1);
     // Monday's pre-market is still outside the session; the open brings fresh candles.
     state = 'pre';
     now = Date.parse('2026-10-19T12:00:00Z');
-    await s.candles('AAPL', '1d', 50);
+    await s.candles('AAPL', '1d', 50, 1);
     expect(f.calls.daily).toBe(1);
     state = 'open';
     now = Date.parse('2026-10-19T13:40:00Z');
-    await s.candles('AAPL', '1d', 50);
+    await s.candles('AAPL', '1d', 50, 1);
     expect(f.calls.daily).toBe(2);
     // Read during the session: the short TTL applies, then one more read after the close.
     now += 16 * 60_000;
-    await s.candles('AAPL', '1d', 50);
+    await s.candles('AAPL', '1d', 50, 1);
     expect(f.calls.daily).toBe(3);
   });
 
@@ -347,11 +392,11 @@ describe('StockData', () => {
       return { state: 'closed', label: '', opensAt: null, closesAt: null, fetchedAt: t };
     };
     const s = new StockData({ key: async () => null, nasdaq: f.n, now: () => now });
-    await s.candles('AAPL', '1d', 50);
+    await s.candles('AAPL', '1d', 50, 1);
     // Nasdaq's state stops answering over the weekend; on Monday the chart refreshes on its normal TTL.
     down = true;
     now = Date.parse('2026-10-19T14:00:00Z');
-    await s.candles('AAPL', '1d', 50);
+    await s.candles('AAPL', '1d', 50, 1);
     expect(f.calls.daily).toBe(2);
   });
 

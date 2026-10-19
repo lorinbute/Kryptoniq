@@ -9,7 +9,7 @@ import type { StockData } from '../market/stocks.ts';
 import type { Settings } from '../../shared/settings.ts';
 import type { SettingsService } from '../settings.ts';
 
-/** Stocks are re-scanned at most this often, to stay inside Twelve Data's free plan (FD-SENTIQ §4.6). */
+/** Stocks are re-scanned at most this often, to stay inside the free Twelve Data plan of each key (FD-SENTIQ §4.6). */
 const STOCK_SCAN_EVERY_MS = 30 * 60_000;
 
 export interface ScanRow {
@@ -95,20 +95,24 @@ export class Scanner {
     this.source = source ?? new MarketSource(db, settings, market);
   }
 
-  /** A stock's or an index's row: recomputed every 30 min while the market trades, once after it closes, otherwise reused. */
-  private async stockRow(coin: string, kind: 'stock' | 'index', tfWanted: Timeframe, s: Settings, count: number, signal?: AbortSignal): Promise<ScanRow> {
+  /**
+   * A stock's or an index's row for the user: recomputed every 30 min while the market trades, once after it closes,
+   * otherwise reused. A share's timeframes and candles depend on the user's own Twelve Data key (FD-TDKEYS).
+   */
+  private async stockRow(userId: number, coin: string, kind: 'stock' | 'index', tfWanted: Timeframe, s: Settings, count: number, signal?: AbortSignal): Promise<ScanRow> {
     const stocks = this.stocks;
     const symbol = `${coin}/USD`;
     if (!stocks) return { coin, kind, symbol, tf: tfWanted, ok: false, error: 'datele pentru acțiuni nu sunt disponibile' };
-    // An index has 1d and 1w only (FD-INDICES).
-    const allowed = await stocks.timeframesFor(coin);
+    const allowed = await stocks.timeframesFor(coin, userId);
     const tf = allowed.includes(tfWanted) ? tfWanted : '1d';
     const status = await stocks.confirmedStatus();
     const closed = status?.state === 'closed';
     const p = s.indicator;
     // Keyed by the settings too: two users with different indicator settings get their own rows, and new settings
-    // or history length recompute at once, even with the market closed.
-    const key = JSON.stringify([coin, p, count]);
+    // or history length recompute at once, even with the market closed. A share read with a user's Twelve Data key
+    // is that user's row; Nasdaq's and the indices' are shared.
+    const own = kind === 'stock' && (await stocks.hasKey(userId)) ? userId : null;
+    const key = JSON.stringify([coin, p, count, own]);
     const prev = this.stockRows.get(key);
     const now = Date.now();
     if (prev && prev.tf === tf && (closed ? prev.closed : now - prev.at < STOCK_SCAN_EVERY_MS)) return prev.row;
@@ -117,11 +121,11 @@ export class Scanner {
     const msSec = p.msTf ? tfSeconds(p.msTf) : chartSec;
     let row: ScanRow;
     try {
-      const c = await stocks.candles(coin, tf, count);
+      const c = await stocks.candles(coin, tf, count, userId);
       let htf = null;
       if (msSec > chartSec && p.msTf && allowed.includes(p.msTf as Timeframe)) {
         try {
-          htf = (await stocks.candles(coin, p.msTf as Timeframe, htfCandleCount(count, chartSec, msSec, p.msSwing))).candles;
+          htf = (await stocks.candles(coin, p.msTf as Timeframe, htfCandleCount(count, chartSec, msSec, p.msSwing), userId)).candles;
         } catch (err) {
           this.log.warn(`scanner HTF ${coin}: ${(err as Error).message}`);
         }
@@ -176,7 +180,7 @@ export class Scanner {
     for (const w of coins) {
       if (signal?.aborted) return null;
       if (w.kind === 'stock' || w.kind === 'index') {
-        rows.push(await this.stockRow(w.coin, w.kind, tf, s, count, signal));
+        rows.push(await this.stockRow(userId, w.coin, w.kind, tf, s, count, signal));
         continue;
       }
       const symbol = `${w.coin}/${w.quote}`;

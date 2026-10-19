@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { AiClient, AiRequest } from '../ai/types.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dayBounds } from '../../shared/time.ts';
@@ -193,59 +194,79 @@ describe('daily index', () => {
   });
 });
 
-describe('ClaudeEngine circuit breaker', () => {
-  it('stops calling Claude after an invalid key and falls back to the local engine', async () => {
-    const Anthropic = (await import('@anthropic-ai/sdk')).default;
-    const { ClaudeEngine } = await import('./claude.ts');
+describe('a user\'s own AI scoring the news (FD-AIKEYS)', () => {
+  const fakeClient = (generate: AiClient['generate'], provider: AiClient['provider'] = 'openai', model = 'gpt-6.1-sol'): AiClient => ({ provider, model, generate });
+  const items = [
+    { id: 'a', title: 'Fed cuts rates', summary: '' },
+    { id: 'b', title: 'Exchange hacked', summary: '' },
+  ];
+
+  it('stops calling after a refused key, until the key changes (a new scorer)', async () => {
+    const { AiScorer } = await import('./ai-scorer.ts');
+    const { AiError } = await import('../ai/types.ts');
     const { silentLogger } = await import('../log.ts');
     let calls = 0;
-    const client = {
-      beta: {
-        messages: {
-          parse: async () => {
-            calls++;
-            throw new Anthropic.AuthenticationError(401, { type: 'error' }, 'invalid x-api-key', new Headers());
-          },
-        },
-      },
-    };
-    const local = new LocalEngine({ status: () => ({ state: 'failed', progress: null, error: null, model: 'x' }), warmUp: () => {}, score: async () => null, onReady: () => {} });
-    const engine = new ClaudeEngine({ apiKey: 'k', model: 'claude-opus-5-5', log: silentLogger, client: client as never }, local);
-    const items = [{ id: 'a', title: 'Exchange hacked', summary: '' }];
-    const r1 = await engine.score(items);
-    const r2 = await engine.score(items);
+    const scorer = new AiScorer({
+      client: fakeClient(async () => {
+        calls++;
+        throw new AiError('openai', 'auth', 401, 'Incorrect API key');
+      }),
+      log: silentLogger,
+    });
+    expect(await scorer.score(items)).toEqual([]);
+    expect(await scorer.score(items)).toEqual([]);
     expect(calls).toBe(1);
-    expect(r1[0]).toMatchObject({ engine: 'rules', label: 'negative' });
-    expect(r2[0]).toMatchObject({ engine: 'rules' });
-    expect(engine.status().lastError).toMatchObject({ permanent: true });
+    expect(scorer.paused()).toBe(true);
+    expect(scorer.status().lastError).toMatchObject({ permanent: true, message: 'cheia API OpenAI nu este validă' });
   });
 
-  it('tells what each answered call cost: headlines and tokens (FD-AICLARITY)', async () => {
-    const { ClaudeEngine } = await import('./claude.ts');
+  it('pauses a while on a passing error and half an hour on an empty account', async () => {
+    const { AiScorer } = await import('./ai-scorer.ts');
+    const { AiError } = await import('../ai/types.ts');
     const { silentLogger } = await import('../log.ts');
-    const client = { beta: { messages: { parse: async () => ({ stop_reason: 'end_turn', usage: { input_tokens: 640, output_tokens: 120 }, parsed_output: { results: [{ n: 1, score: 0.5, impact: 1 }] } }) } } };
-    const local = new LocalEngine({ status: () => ({ state: 'failed', progress: null, error: null, model: 'x' }), warmUp: () => {}, score: async () => null, onReady: () => {} });
+    let now = 1_000_000;
+    let kind: 'overloaded' | 'quota' = 'overloaded';
+    const scorer = new AiScorer({ client: fakeClient(async () => Promise.reject(new AiError('gemini', kind, 503, ''))), log: silentLogger, now: () => now });
+    await scorer.score(items);
+    expect(scorer.status()).toMatchObject({ pausedUntil: now + 5 * 60_000, lastError: { permanent: false } });
+    now += 5 * 60_000;
+    kind = 'quota';
+    await scorer.score(items);
+    expect(scorer.status().pausedUntil).toBe(now + 30 * 60_000);
+  });
+
+  it('tells what each answered call cost, keeps the importance in 1–3, and leaves out-of-answer items to the local score', async () => {
+    const { AiScorer } = await import('./ai-scorer.ts');
+    const { silentLogger } = await import('../log.ts');
     const seen: unknown[] = [];
-    const engine = new ClaudeEngine({ apiKey: 'k', model: 'claude-opus-5-5', log: silentLogger, client: client as never, onUsage: (u) => seen.push(u) }, local);
-    await engine.score([
-      { id: 'a', title: 'Fed cuts rates', summary: '' },
-      { id: 'b', title: 'Exchange hacked', summary: '' },
-    ]);
+    const asked: AiRequest<unknown>[] = [];
+    const scorer = new AiScorer({
+      client: fakeClient(async (req) => {
+        asked.push(req as AiRequest<unknown>);
+        return { parsed: { results: [{ n: 1, score: 0.9, impact: 2.6 }, { n: 7, score: 1, impact: 1 }] } as never, stop: 'done', usage: { input: 640, output: 120 } };
+      }),
+      log: silentLogger,
+      onUsage: (u) => seen.push(u),
+    });
+    const out = await scorer.score(items);
     expect(seen).toEqual([{ items: 2, input: 640, output: 120 }]);
+    expect(asked[0]).toMatchObject({ effort: 'low', prompt: 'Headlines:\n1. Fed cuts rates\n2. Exchange hacked' });
+    expect(out).toEqual([
+      { id: 'a', score: 0.9, label: 'positive', impact: 3, engine: 'openai:gpt-6.1-sol' },
+      { id: 'b', score: null, label: null, impact: null, engine: 'openai:gpt-6.1-sol' },
+    ]);
   });
 
-  it('uses Claude scores when available and fills missing ones locally', async () => {
-    const { ClaudeEngine } = await import('./claude.ts');
+  it('a refused or unreadable answer is not asked again: the local score stands', async () => {
+    const { AiScorer } = await import('./ai-scorer.ts');
     const { silentLogger } = await import('../log.ts');
-    const client = { beta: { messages: { parse: async () => ({ stop_reason: 'end_turn', parsed_output: { results: [{ n: 1, score: 0.9, impact: 3 }] } }) } } };
-    const local = new LocalEngine({ status: () => ({ state: 'failed', progress: null, error: null, model: 'x' }), warmUp: () => {}, score: async () => null, onReady: () => {} });
-    const engine = new ClaudeEngine({ apiKey: 'k', model: 'claude-haiku-5-5', log: silentLogger, client: client as never }, local);
-    const out = await engine.score([
-      { id: 'a', title: 'Fed cuts rates', summary: '' },
-      { id: 'b', title: 'Exchange hacked', summary: '' },
+    const scorer = new AiScorer({ client: fakeClient(async () => ({ parsed: null, stop: 'refusal', usage: null }), 'anthropic', 'claude-haiku-5-5'), log: silentLogger });
+    const out = await scorer.score(items);
+    expect(out.map((o) => [o.id, o.score, o.engine])).toEqual([
+      ['a', null, 'claude:claude-haiku-5-5'],
+      ['b', null, 'claude:claude-haiku-5-5'],
     ]);
-    expect(out.find((o) => o.id === 'a')).toMatchObject({ engine: 'claude:claude-haiku-5-5', score: 0.9, label: 'positive' });
-    expect(out.find((o) => o.id === 'b')).toMatchObject({ engine: 'rules', label: 'negative' });
+    expect(scorer.paused()).toBe(false);
   });
 });
 

@@ -2,8 +2,8 @@
 // - discoverable credentials and user verification REQUIRED: a passkey replaces the password AND the second factor,
 //   so it must prove the device and a PIN / fingerprint / face (two factors in one gesture, phishing-proof);
 // - no attestation (no policy about authenticator models to enforce);
-// - the challenge is single-use, bound to its ceremony (create / get), consumed before anything is judged, 5 min;
-// - a registration challenge is also bound to the signed-in user who asked for it.
+// - the challenge is single-use, bound to its ceremony (create / get / stepup), consumed before anything is judged, 5 min;
+// - a registration challenge, and a step-up one (FD-TRADEUNLOCK), is also bound to the signed-in user who asked for it.
 // Several accounts: the credential found by its ID must belong to the user its userHandle names.
 import { randomBytes } from 'node:crypto';
 import {
@@ -39,7 +39,7 @@ export interface RelyingParty {
 
 interface Challenge {
   challenge: string;
-  purpose: 'create' | 'get';
+  purpose: 'create' | 'get' | 'stepup';
   userId: number | null;
   expiresAt: number;
 }
@@ -171,10 +171,37 @@ export class PasskeyService {
   /** The user a verified assertion signs in. */
   async completeAuthentication(challengeId: string | undefined, response: unknown, rp: RelyingParty): Promise<number> {
     const challenge = this.consume(challengeId, 'get', null);
+    return (await this.verifyAssertion(challenge, response, rp, null)).user_id;
+  }
+
+  // ── Step-up (signed in): both factors again for a sensitive action (FD-TRADEUNLOCK) ──────────────────
+
+  /** Only the user's own passkeys are offered: the browser asks for one of them, never another account's. */
+  async stepUpOptions(userId: number, rp: RelyingParty) {
+    const own = await this.db.all<{ credential_id: string; transports: string | null }>('SELECT credential_id, transports FROM passkeys WHERE user_id = ?', [userId]);
+    if (own.length === 0) throw new PasskeyError('Contul nu are niciun passkey. Adaugă unul din Securitate sau confirmă cu parola și codul.');
+    const options = await generateAuthenticationOptions({
+      rpID: rp.id,
+      allowCredentials: own.map((p) => ({ id: p.credential_id, transports: (p.transports?.split(',') ?? []) as AuthenticatorTransportFuture[] })),
+      userVerification: 'required',
+      timeout: TIMEOUT_MS,
+    });
+    return { options, challengeId: this.issue(options.challenge, 'stepup', userId) };
+  }
+
+  /** Throws unless one of the user's own passkeys answered the challenge issued to them. */
+  async completeStepUp(userId: number, challengeId: string | undefined, response: unknown, rp: RelyingParty): Promise<void> {
+    const challenge = this.consume(challengeId, 'stepup', userId);
+    await this.verifyAssertion(challenge, response, rp, userId);
+  }
+
+  /** The passkey that signed the challenge (for `userId` when given; checked before its counter is touched). */
+  private async verifyAssertion(challenge: string, response: unknown, rp: RelyingParty, userId: number | null): Promise<PasskeyRow> {
     const r = response as AuthenticationResponseJSON;
     const credId = typeof r?.id === 'string' ? r.id : '';
     const row = credId ? await this.byCredential(credId) : undefined;
     if (!row) throw new PasskeyError('Passkey-ul nu este înregistrat aici.');
+    if (userId !== null && row.user_id !== userId) throw new PasskeyError('Passkey-ul aparține altui cont.');
     const handle = r.response?.userHandle;
     if (typeof handle === 'string' && handle.length) {
       const own = Buffer.from(await this.users.userHandle(row.user_id)).toString('base64url');
@@ -197,7 +224,7 @@ export class PasskeyService {
     }
     if (!result.verified) throw new PasskeyError('Semnătura passkey-ului nu a putut fi verificată.');
     await this.db.run('UPDATE passkeys SET counter = ?, backed_up = ?, last_used_at = ? WHERE id = ?', [result.authenticationInfo.newCounter, result.authenticationInfo.credentialBackedUp ? 1 : 0, this.now(), row.id]);
-    return row.user_id;
+    return row;
   }
 
   // ── Management ───────────────────────────────────────────────────────────────────────────────────────

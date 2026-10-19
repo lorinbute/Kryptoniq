@@ -74,11 +74,6 @@ export class Sessions {
     return (await this.db.run('DELETE FROM sessions WHERE user_id = ?', [userId])).changes;
   }
 
-  /** Pending sessions of a user (2FA turned off elsewhere invalidates them). */
-  async destroyPending(userId: number): Promise<void> {
-    await this.db.run("DELETE FROM sessions WHERE user_id = ? AND kind = N'pending'", [userId]);
-  }
-
   async purgeExpired(): Promise<number> {
     return (await this.db.run('DELETE FROM sessions WHERE expires_at <= ?', [this.now()])).changes;
   }

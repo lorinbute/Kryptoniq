@@ -47,8 +47,8 @@ beforeEach(async () => {
   calls = [];
   dir = mkdtempSync(path.join(tmpdir(), 'sq-src-'));
   ctx = await createContext(loadConfig({ SENTIQ_DATA_DIR: dir } as NodeJS.ProcessEnv), silentLogger, { db: await testDb(), nli: fakeNli, box: new SecretBox(Buffer.alloc(32, 5)), market: fakeMarket });
-  // A signed-in admin needs an address and a password (an account without them cannot sign in).
-  await ctx.db.run('UPDATE users SET email = ?, name = ?, password_hash = ? WHERE id = 1', ['admin@example.com', 'Admin', await hashPassword('Admin-password-1')]);
+  // A signed-in admin needs an address and a password (an account without them cannot sign in), and two-factor (FD-2FA).
+  await ctx.db.run('UPDATE users SET email = ?, name = ?, password_hash = ?, totp_confirmed_at = 1 WHERE id = 1', ['admin@example.com', 'Admin', await hashPassword('Admin-password-1')]);
   app = await buildApp(ctx);
 });
 afterEach(async () => {

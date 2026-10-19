@@ -1,7 +1,8 @@
 // Stock brokers with an API key (FD-SENTIQ §3, TD-SENTIQ §4): Trading 212, eToro, Interactive Brokers (Flex Web
-// Service) and Alpaca. Read-only: every request here is a GET. The rows use the same shapes as the crypto portfolio.
+// Service) and Alpaca. Read-only: every request here is a GET (orders are in exchange/trading/, FD-TRADING). The rows use the same shapes as the crypto portfolio.
 import { randomUUID } from 'node:crypto';
 import { HttpError, httpRequest, type HttpResponse } from '../net/http.ts';
+import { addDays, DAY_MS, dayKey, zonedTimeToUtc } from '../../shared/time.ts';
 import type { BalanceRow, ErrorCode, FillRow, OrderRow, PositionRow } from './accounts.ts';
 
 export type BrokerId = 'trading212' | 'etoro' | 'ibkr' | 'alpaca';
@@ -35,6 +36,28 @@ export interface BrokerAdapter {
   /** Throws BrokerError when the key cannot read the account. */
   test(): Promise<void>;
   load(): Promise<BrokerSnapshot>;
+  /** FD-BROKERSTATS: the trades closed since `from` (without it, the account has no closed-trade stats). */
+  closedTrades?(from: number): Promise<ClosedTrades>;
+}
+
+/** FD-BROKERSTATS: one closed trade (a closed position, or an order that closed or reduced one). */
+export interface ClosedTrade {
+  id: string;
+  closedAt: number;
+  /** Its result; null when it cannot be known (not counted). */
+  pnl: number | null;
+  /** The result in the account's currency; null without an exchange rate (counted, not summed). */
+  net: number | null;
+}
+
+export interface ClosedTrades {
+  /** The account's currency; null when no trade said it (the portfolio's is used). */
+  currency: string | null;
+  trades: ClosedTrade[];
+  /** Every trade closed from this moment on is in `trades` (0: the whole history; +Infinity: nothing is sure). */
+  coveredFrom: number;
+  /** IBKR Flex: the data ends at the close of this day. */
+  asOf: number | null;
 }
 
 export interface BrokerOptions {
@@ -49,6 +72,14 @@ const num = (v: unknown): number | null => {
   const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
   return Number.isFinite(n) ? n : null;
 };
+/** An ISO time; one written without a zone is UTC. */
+export function utcTime(v: unknown): number | null {
+  const s = typeof v === 'string' ? v.trim() : '';
+  if (!s) return null;
+  const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(s) || !/T\d{2}:\d{2}/.test(s);
+  const t = Date.parse(zoned ? s : `${s}Z`);
+  return Number.isFinite(t) ? t : null;
+}
 const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : typeof v === 'number' ? String(v) : null);
 /** The first of several spellings a broker uses for the same field (eToro mixes `positionID` and `positionId`). */
 const pick = (o: Record<string, unknown> | undefined, ...keys: string[]): unknown => {
@@ -108,6 +139,23 @@ async function section<T>(errors: BrokerSnapshot['errors'], name: Section, fn: (
 const pct = (pnl: number | null, cost: number | null) => (pnl !== null && cost !== null && cost > 0 ? (pnl / cost) * 100 : null);
 
 // ---------------------------------------------------------------- Trading 212
+
+/** History pages read for the closed-trade stats (50 orders each; Trading 212 allows 20 requests a minute there). */
+const T212_HISTORY_PAGES = 10;
+
+/** `walletImpact.taxes`: a list of charges (each a `quantity`) in the documented API, a number in older answers. */
+function t212Taxes(w: Record<string, unknown>): number | null {
+  if (Array.isArray(w.taxes)) {
+    const own = str(w.currency);
+    const list = arr(w.taxes)
+      .filter((t) => !own || !str(t.currency) || str(t.currency) === own)
+      .map((t) => num(t.quantity))
+      .filter((q): q is number => q !== null);
+    return list.length ? list.reduce((a, q) => a + Math.abs(q), 0) : null;
+  }
+  const n = num(w.taxes);
+  return n !== null ? Math.abs(n) : null;
+}
 
 /** `AAPL_US_EQ` → AAPL, `VUSAl_EQ` (London) → VUSA. */
 export function t212Symbol(ticker: string): string {
@@ -179,6 +227,8 @@ class Trading212 implements BrokerAdapter {
           currency: str(w.currency) ?? currency,
           priceCurrency: str(ins.currency) ?? undefined,
           name: str(ins.name) ?? undefined,
+          // FD-TRADING: the exact instrument, for "Vinde".
+          ref: { ticker },
         };
       });
     }, []);
@@ -239,7 +289,7 @@ class Trading212 implements BrokerAdapter {
             price,
             amount: Math.abs(qty),
             cost: price * Math.abs(qty),
-            fee: num(w.taxes) !== null ? Math.abs(num(w.taxes) as number) : null,
+            fee: t212Taxes(w),
             feeCurrency: str(w.currency),
             timestamp: ts,
           });
@@ -251,6 +301,45 @@ class Trading212 implements BrokerAdapter {
       return out;
     }, []);
     return { currency, balances, positions: [], orders, fills, cash, errors };
+  }
+
+  /**
+   * FD-BROKERSTATS: the executed sells since `from`, one per order, with the realised result Trading 212 gives
+   * (`walletImpact.realisedProfitLoss`, in the account's currency). The history is newest first.
+   */
+  async closedTrades(from: number): Promise<ClosedTrades> {
+    const byOrder = new Map<string, ClosedTrade>();
+    let currency: string | null = null;
+    let path: string | null = '/equity/history/orders?limit=50';
+    let oldest = Number.POSITIVE_INFINITY;
+    let reached = false;
+    for (let page = 0; path && page < T212_HISTORY_PAGES; page++) {
+      const resp = obj(await this.get(path)) ?? {};
+      for (const it of arr(resp.items)) {
+        const o = obj(it.order) ?? {};
+        const f = obj(it.fill);
+        const t = utcTime(f?.filledAt) ?? utcTime(o.createdAt);
+        if (t === null) continue;
+        oldest = Math.min(oldest, t);
+        if (t < from) reached = true;
+        // Buys, cancelled orders and corporate events (splits, distributions) close nothing.
+        if (!f || t < from || (str(f.type) ?? 'TRADE') !== 'TRADE') continue;
+        const qty = num(f.quantity);
+        if ((str(o.side) ?? (qty !== null && qty < 0 ? 'SELL' : 'BUY')).toUpperCase() !== 'SELL') continue;
+        const w = obj(f.walletImpact) ?? {};
+        currency ??= str(w.currency);
+        const id = str(o.id) ?? str(f.id) ?? String(t);
+        const pnl = num(w.realisedProfitLoss);
+        const prev = byOrder.get(id);
+        const sum = prev ? (prev.pnl === null || pnl === null ? null : prev.pnl + pnl) : pnl;
+        byOrder.set(id, { id, closedAt: Math.max(prev?.closedAt ?? t, t), pnl: sum, net: sum });
+      }
+      const next = str(resp.nextPagePath);
+      path = reached || !next ? null : next.replace(/^\/api\/v0/, '');
+    }
+    // Stopped at the period's start, at the end of the history, or at the page limit (then complete only back to the oldest seen).
+    const coveredFrom = path === null ? (reached ? from : 0) : oldest;
+    return { currency, trades: [...byOrder.values()], coveredFrom, asOf: null };
   }
 }
 
@@ -264,6 +353,9 @@ interface EtoroInstrument {
 /** Instrument id → symbol, shared by the eToro accounts (metadata rarely changes). */
 const etoroInstruments = new Map<number, { info: EtoroInstrument; at: number }>();
 const ETORO_META_TTL = 24 * 3_600_000;
+/** Trade history pages: 100 trades each (the page size eToro allows elsewhere), at most 20 (2 000 trades). */
+const ETORO_PAGE_SIZE = 100;
+const ETORO_HISTORY_PAGES = 20;
 
 class Etoro implements BrokerAdapter {
   private readonly headers: Record<string, string>;
@@ -334,7 +426,7 @@ class Etoro implements BrokerAdapter {
     const meta = await this.instruments(ids);
 
     // Unleveraged buys are holdings (summed per instrument); leveraged or short ones are positions.
-    const holdings = new Map<string, { units: number; cost: number; pnl: number; value: number; avgSum: number; price: number | null; name: string; crypto: boolean; notes: Set<string> }>();
+    const holdings = new Map<string, { units: number; cost: number; pnl: number; value: number; avgSum: number; price: number | null; name: string; crypto: boolean; notes: Set<string>; ids: string[]; instrumentId: number | null }>();
     const positions: PositionRow[] = [];
     const orders: OrderRow[] = [];
     for (const { p, copiedFrom } of all) {
@@ -351,7 +443,9 @@ class Etoro implements BrokerAdapter {
       const holding = lev === 1 && isBuy;
       const symbol = `${info.symbol}/USD`;
       if (holding) {
-        const h = holdings.get(info.symbol) ?? { units: 0, cost: 0, pnl: 0, value: 0, avgSum: 0, price: close, name: info.name, crypto: /crypto/i.test(info.type), notes: new Set<string>() };
+        const h = holdings.get(info.symbol) ?? { units: 0, cost: 0, pnl: 0, value: 0, avgSum: 0, price: close, name: info.name, crypto: /crypto/i.test(info.type), notes: new Set<string>(), ids: [], instrumentId: id };
+        // FD-TRADING: a holding is closed position by position (copied ones belong to the copy, not to the user).
+        if (!copiedFrom) h.ids.push(posId);
         // `amount` (invested) and the PnL are in USD; rates are in the instrument's currency (EUR for a German share).
         const invested = num(p.amount);
         h.units += units;
@@ -376,6 +470,7 @@ class Etoro implements BrokerAdapter {
           leverage: lev,
           marginMode: copiedFrom ? `copiat de la ${copiedFrom}` : null,
           notional: close !== null ? close * units : null,
+          ...(copiedFrom || id === null ? {} : { ref: { positionIds: [posId], instrumentId: id } }),
         });
       }
       // The position's stop-loss / take-profit become orders, so the chart can show them with their PnL (FD-PNL).
@@ -384,10 +479,10 @@ class Etoro implements BrokerAdapter {
       const sl = num(p.stopLossRate);
       const tp = num(p.takeProfitRate);
       if (sl !== null && sl > 0 && p.isNoStopLoss !== true) {
-        orders.push({ id: `sl-${posId}`, market, symbol, type: 'stop', side: closing, price: null, triggerPrice: sl, amount: units, filled: null, status: 'open', timestamp: null, reduceOnly: true, stop: isBuy ? 'down' : 'up' });
+        orders.push({ id: `sl-${posId}`, market, symbol, type: 'stop', side: closing, price: null, triggerPrice: sl, amount: units, filled: null, status: 'open', timestamp: null, reduceOnly: true, stop: isBuy ? 'down' : 'up', cancellable: false });
       }
       if (tp !== null && tp > 0 && p.isNoTakeProfit !== true) {
-        orders.push({ id: `tp-${posId}`, market, symbol, type: 'limit', side: closing, price: tp, triggerPrice: null, amount: units, filled: null, status: 'open', timestamp: null, reduceOnly: true, stop: null });
+        orders.push({ id: `tp-${posId}`, market, symbol, type: 'limit', side: closing, price: tp, triggerPrice: null, amount: units, filled: null, status: 'open', timestamp: null, reduceOnly: true, stop: null, cancellable: false });
       }
     }
     for (const o of entry) {
@@ -426,8 +521,53 @@ class Etoro implements BrokerAdapter {
       name: h.name,
       note: h.notes.size ? [...h.notes].join(', ') : undefined,
       ...(h.crypto ? { crypto: true } : {}),
+      ...(h.ids.length && h.instrumentId !== null ? { ref: { positionIds: h.ids, instrumentId: h.instrumentId } } : {}),
     }));
     return { currency: 'USD', balances, positions, orders, fills: [], cash: num(pf.credit), errors };
+  }
+
+  /**
+   * FD-BROKERSTATS: the positions closed since `from` (a partial close is one of them), each with eToro's `netProfit`
+   * in USD. Pages are numbered from 1, as everywhere in eToro's API; the order of the rows is not documented.
+   */
+  async closedTrades(from: number): Promise<ClosedTrades> {
+    const path = this.env === 'demo' ? '/api/v1/trading/info/trade/demo/history' : '/api/v1/trading/info/trade/history';
+    // A date without a zone: a day earlier, so the period's first hours are surely in; the rows are filtered below.
+    const minDate = new Date(from - DAY_MS).toISOString().slice(0, 10);
+    const byId = new Map<string, ClosedTrade>();
+    const seen = new Set<string>();
+    const times: number[] = [];
+    let capped = false;
+    for (let page = 1; ; page++) {
+      if (page > ETORO_HISTORY_PAGES) {
+        capped = true;
+        break;
+      }
+      const body = await this.get(`${path}?minDate=${minDate}&page=${page}&pageSize=${ETORO_PAGE_SIZE}`);
+      const rows = Array.isArray(body) ? arr(body) : arr(pick(obj(body), 'trades', 'items', 'results', 'data'));
+      let fresh = 0;
+      for (const r of rows) {
+        const id = str(pick(r, 'positionId', 'positionID'));
+        const closedAt = utcTime(pick(r, 'closeTimestamp', 'closeDateTime'));
+        if (!id || closedAt === null || seen.has(id)) continue;
+        seen.add(id);
+        fresh++;
+        times.push(closedAt);
+        if (closedAt < from) continue;
+        const pnl = num(r.netProfit);
+        byId.set(id, { id, closedAt, pnl, net: pnl });
+      }
+      // The end of the history; or a page that repeats the last one (a full page repeated: the paging is not followed).
+      if (rows.length === 0) break;
+      if (fresh === 0) {
+        capped = rows.length >= ETORO_PAGE_SIZE;
+        break;
+      }
+    }
+    // Cut short: complete back to the oldest row only if the rows come newest first.
+    const newestFirst = times.every((t, i) => i === 0 || t <= (times[i - 1] as number));
+    const coveredFrom = !capped ? from : newestFirst && times.length ? (times[times.length - 1] as number) : Number.POSITIVE_INFINITY;
+    return { currency: 'USD', trades: [...byId.values()], coveredFrom, asOf: null };
   }
 }
 
@@ -463,6 +603,8 @@ function flexError(code: string, message: string): BrokerError {
   if (c === 1014) return new BrokerError('EXCHANGE', 'Interactive Brokers: Flex Query ID-ul nu e valid.');
   if (c === 1018) return new BrokerError('RATE_LIMIT', 'Interactive Brokers: prea multe cereri Flex (maximum 10 pe minut).');
   if (c === 1009 || c === 1021) return new BrokerError('MAINTENANCE', `Interactive Brokers: ${message || 'serviciul Flex e ocupat'}`);
+  // 1001, 1003–1008: the report (or its P/L data) is not ready yet.
+  if (c === 1001 || (c >= 1003 && c <= 1008)) return new BrokerError('MAINTENANCE', `Interactive Brokers: raportul Flex nu e gata încă (${message || `cod ${code}`}); se reîncearcă la următoarea citire.`);
   return new BrokerError('EXCHANGE', `Interactive Brokers (cod ${code}): ${message}`);
 }
 
@@ -489,6 +631,17 @@ function nthSunday(year: number, month: number, n: number): number {
 const FLEX_BASE = 'https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService';
 const FLEX_CACHE_MS = 15 * 60_000;
 const flexCache = new Map<string, { xml: string; at: number }>();
+/** One report at a time per token, a little over a second apart (IBKR: one request a second, ten a minute). */
+const flexChains = new Map<string, Promise<void>>();
+const FLEX_GAP_MS = 1_100;
+const ET = 'America/New_York';
+
+/** The weekday (Monday to Friday) before `day` (YYYY-MM-DD). */
+function previousWeekday(day: string): string {
+  let d = addDays(day, -1);
+  while ([0, 6].includes(new Date(`${d}T00:00:00Z`).getUTCDay())) d = addDays(d, -1);
+  return d;
+}
 
 class Ibkr implements BrokerAdapter {
   private readonly token: string;
@@ -508,12 +661,40 @@ class Ibkr implements BrokerAdapter {
     return r.body;
   }
 
-  /** SendRequest, then GetStatement until the report is ready (IBKR: 1 request / s, 10 / min). */
-  private async statement(force = false): Promise<string> {
-    const key = `${this.token}|${this.queryId}`;
-    const cached = flexCache.get(key);
-    if (!force && cached && this.now() - cached.at < FLEX_CACHE_MS) return cached.xml;
-    const sent = await this.getXml(`${FLEX_BASE}/SendRequest?t=${encodeURIComponent(this.token)}&q=${encodeURIComponent(this.queryId)}&v=3`);
+  /** Runs `fn` after the token's previous report, with a gap after it. */
+  private queued<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = flexChains.get(this.token) ?? Promise.resolve();
+    const run = prev.then(fn);
+    const tail = run.then(
+      () => this.sleep(FLEX_GAP_MS),
+      () => this.sleep(FLEX_GAP_MS),
+    );
+    flexChains.set(this.token, tail);
+    void tail.then(() => {
+      if (flexChains.get(this.token) === tail) flexChains.delete(this.token);
+    });
+    return run;
+  }
+
+  /**
+   * SendRequest, then GetStatement until the report is ready (IBKR: 1 request / s, 10 / min). `range` (yyyymmdd)
+   * overrides the query's period (FD-BROKERSTATS: IBKR allows up to 365 days).
+   */
+  private async statement(force = false, range?: { fd: string; td: string }): Promise<string> {
+    const key = `${this.token}|${this.queryId}${range ? `|${range.fd}|${range.td}` : ''}`;
+    const fresh = (): string | null => {
+      const cached = flexCache.get(key);
+      return !force && cached && this.now() - cached.at < FLEX_CACHE_MS ? cached.xml : null;
+    };
+    const ready = fresh();
+    if (ready !== null) return ready;
+    // Waiting for another report of the same token may have brought this one.
+    return this.queued(async () => fresh() ?? this.generate(key, range));
+  }
+
+  private async generate(key: string, range?: { fd: string; td: string }): Promise<string> {
+    const period = range ? `&fd=${range.fd}&td=${range.td}` : '';
+    const sent = await this.getXml(`${FLEX_BASE}/SendRequest?t=${encodeURIComponent(this.token)}&q=${encodeURIComponent(this.queryId)}&v=3${period}`);
     if (xmlText(sent, 'Status') !== 'Success') throw flexError(xmlText(sent, 'ErrorCode') ?? '?', xmlText(sent, 'ErrorMessage') ?? sent.slice(0, 200));
     const ref = xmlText(sent, 'ReferenceCode');
     const url = xmlText(sent, 'Url') ?? `${FLEX_BASE}/GetStatement`;
@@ -525,6 +706,8 @@ class Ibkr implements BrokerAdapter {
       if (code === '1019' || /Statement generation in progress/i.test(xml.slice(0, 500))) continue;
       if (code) throw flexError(code, xmlText(xml, 'ErrorMessage') ?? '');
       if (!/<FlexQueryResponse|<FlexStatement/.test(xml)) throw new BrokerError('EXCHANGE', 'Interactive Brokers: raportul nu are formatul XML așteptat (alege XML la Flex Query)');
+      // The stats' reports change key every day: the expired ones go, so they do not pile up in memory.
+      for (const [k, v] of flexCache) if (this.now() - v.at >= FLEX_CACHE_MS) flexCache.delete(k);
       flexCache.set(key, { xml, at: this.now() });
       return xml;
     }
@@ -617,9 +800,112 @@ class Ibkr implements BrokerAdapter {
     const cashRow = xmlElements(xml, 'CashReportCurrency').find((c) => c.currency === 'BASE_SUMMARY');
     return { currency: base, balances, positions, orders: [], fills, cash: num(cashRow?.endingCash), asOf, errors };
   }
+
+  /**
+   * FD-BROKERSTATS: the orders that closed (or reduced) a position since `from`, from a report of those days up to the
+   * last weekday (an Activity report has only finished days), each with IBKR's realised FIFO P/L (commissions in),
+   * in the account's base currency. Kept 15 minutes, as the portfolio's report.
+   */
+  async closedTrades(from: number): Promise<ClosedTrades> {
+    const fd = dayKey(from, ET);
+    const td = previousWeekday(dayKey(this.now(), ET));
+    // Nothing finished since `from` yet (it is today, or the weekend after it): no report to ask for.
+    if (td < fd) return { currency: null, trades: [], coveredFrom: from, asOf: zonedTimeToUtc(td, ET, 16) };
+    const xml = await this.statement(false, { fd: fd.replaceAll('-', ''), td: td.replaceAll('-', '') });
+    if (!/<Trades[\s>/]/.test(xml)) throw new BrokerError('EXCHANGE', 'Interactive Brokers: Flex Query-ul nu conține secțiunea „Trades”. Bifeaz-o (nivelul „Execution”, toate câmpurile) în configurarea query-ului.');
+    const all = xmlElements(xml, 'Trade');
+    const execs = all.filter((t) => !t.levelOfDetail || t.levelOfDetail === 'EXECUTION');
+    const rows = execs.length ? execs : all.filter((t) => t.levelOfDetail === 'ORDER');
+    if (all.length && !rows.length) throw new BrokerError('EXCHANGE', 'Interactive Brokers: secțiunea „Trades” din Flex Query nu are execuțiile. Alege nivelul „Execution” la Trades.');
+    if (rows.length && !rows.some((t) => t.fifoPnlRealized !== undefined)) throw new BrokerError('EXCHANGE', 'Interactive Brokers: secțiunea „Trades” din Flex Query nu are câmpul „Realized P/L”. Bifează toate câmpurile („Select All”) la Trades.');
+    const base = xmlElements(xml, 'AccountInformation')[0]?.currency || null;
+    const byOrder = new Map<string, ClosedTrade>();
+    for (const t of rows) {
+      // Currency conversions are not positions.
+      if (t.assetCategory === 'CASH') continue;
+      const pnl = num(t.fifoPnlRealized);
+      if (pnl === null) continue;
+      const oc = t.openCloseIndicator;
+      if (!(oc ? oc.includes('C') : pnl !== 0)) continue;
+      const ts = flexDate(t.dateTime || t.tradeDate);
+      if (ts === null || ts < from) continue;
+      const rate = !t.currency || t.currency === base ? 1 : num(t.fxRateToBase);
+      const id = t.ibOrderID || t.orderID || t.tradeID || t.transactionID || `${t.symbol ?? '?'}-${ts}`;
+      const prev = byOrder.get(id);
+      const net = rate === null ? null : pnl * rate;
+      byOrder.set(id, {
+        id,
+        closedAt: Math.max(prev?.closedAt ?? ts, ts),
+        pnl: (prev?.pnl ?? 0) + pnl,
+        net: prev && prev.net === null ? null : net === null ? null : (prev?.net ?? 0) + net,
+      });
+    }
+    const toDate = flexDate(xmlElements(xml, 'FlexStatement')[0]?.toDate);
+    return { currency: base, trades: [...byOrder.values()], coveredFrom: from, asOf: toDate !== null ? toDate + 16 * 3_600_000 : null };
+  }
 }
 
 // ---------------------------------------------------------------- Alpaca
+
+/** Fill pages read for the closed-trade stats (100 each, newest first). */
+const ALPACA_PAGE_SIZE = 100;
+const ALPACA_HISTORY_PAGES = 40;
+/** An OCC option symbol (AAPL261120C00300000): one contract is 100 shares. */
+const OCC_OPTION = /^[A-Z]{1,6}\d{6}[CP]\d{8}$/;
+const QTY_EPS = 1e-9;
+
+export interface FifoExec {
+  id: string;
+  orderId: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  /** A sale Alpaca marks as short (`sell_short`): what it sells beyond the shares held is a short, whatever is known. */
+  short?: boolean;
+  qty: number;
+  price: number;
+  time: number;
+}
+
+/**
+ * FD-BROKERSTATS: the realised result of each order that closed (or reduced) a position, first in first out. A sell
+ * beyond the shares held opens a short only when the history is complete and the account may short; otherwise its
+ * cost is unknown (shares bought before the history read, transferred in, split) and the order's result is null.
+ */
+export function fifoResults(execs: FifoExec[], opts: { complete: boolean; shorting: boolean }): ClosedTrade[] {
+  const sorted = [...execs].sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
+  // Per symbol, the open lots oldest first: quantity > 0 long, < 0 short (never both).
+  const books = new Map<string, { qty: number; price: number }[]>();
+  const orders = new Map<string, { closedAt: number; sum: number; unknown: boolean }>();
+  for (const e of sorted) {
+    const symbol = e.symbol.replace('/', '').toUpperCase();
+    const mult = OCC_OPTION.test(symbol) ? 100 : 1;
+    const book = books.get(symbol) ?? [];
+    books.set(symbol, book);
+    const sign = e.side === 'buy' ? 1 : -1;
+    let left = e.qty;
+    let realised = 0;
+    let closed = false;
+    while (left > QTY_EPS && book.length > 0 && Math.sign((book[0] as { qty: number }).qty) === -sign) {
+      const lot = book[0] as { qty: number; price: number };
+      const m = Math.min(left, Math.abs(lot.qty));
+      // A sell closes a long (price − cost); a buy closes a short (entry − price).
+      realised += (sign === -1 ? e.price - lot.price : lot.price - e.price) * m * mult;
+      lot.qty += sign * m;
+      left -= m;
+      closed = true;
+      if (Math.abs(lot.qty) <= QTY_EPS) book.shift();
+    }
+    let unknown = false;
+    if (left > QTY_EPS) {
+      if (sign === 1 || e.short || (opts.complete && opts.shorting)) book.push({ qty: sign * left, price: e.price });
+      else unknown = true;
+    }
+    if (!closed && !unknown) continue;
+    const prev = orders.get(e.orderId);
+    orders.set(e.orderId, { closedAt: e.time, sum: (prev?.sum ?? 0) + realised, unknown: (prev?.unknown ?? false) || unknown });
+  }
+  return [...orders.entries()].map(([id, o]) => ({ id, closedAt: o.closedAt, pnl: o.unknown ? null : o.sum, net: o.unknown ? null : o.sum }));
+}
 
 class Alpaca implements BrokerAdapter {
   private readonly base: string;
@@ -707,6 +993,40 @@ class Alpaca implements BrokerAdapter {
     }, []);
     return { currency, balances, positions, orders, fills, cash: num(account.cash), errors };
   }
+
+  /**
+   * FD-BROKERSTATS: Alpaca gives no realised result, so it is computed (FIFO) from the account's fills, read newest
+   * first up to 4 000; the orders that closed something since `from`, in the account's currency.
+   */
+  async closedTrades(from: number): Promise<ClosedTrades> {
+    const account = obj(await this.get('/v2/account')) ?? {};
+    const execs: FifoExec[] = [];
+    let token: string | null = null;
+    let complete = false;
+    for (let page = 0; page < ALPACA_HISTORY_PAGES; page++) {
+      const rows = arr(await this.get(`/v2/account/activities/FILL?direction=desc&page_size=${ALPACA_PAGE_SIZE}${token ? `&page_token=${encodeURIComponent(token)}` : ''}`));
+      for (const a of rows) {
+        const price = num(a.price);
+        const qty = num(a.qty);
+        const time = utcTime(a.transaction_time);
+        // `buy`, `sell` or `sell_short`.
+        const side = (str(a.side) ?? '').toLowerCase();
+        if (price === null || qty === null || time === null || (side !== 'buy' && !side.startsWith('sell'))) continue;
+        execs.push({ id: str(a.id) ?? `${time}`, orderId: str(a.order_id) ?? str(a.id) ?? `${time}`, symbol: str(a.symbol) ?? '?', side: side === 'buy' ? 'buy' : 'sell', short: side === 'sell_short', qty: Math.abs(qty), price, time });
+      }
+      if (rows.length < ALPACA_PAGE_SIZE) {
+        complete = true;
+        break;
+      }
+      // The next page starts after the last activity's id; without one there is no next page to ask for.
+      const last = str(rows[rows.length - 1]?.id);
+      if (!last || last === token) break;
+      token = last;
+    }
+    const oldest = execs.reduce((m, e) => Math.min(m, e.time), Number.POSITIVE_INFINITY);
+    const trades = fifoResults(execs, { complete, shorting: account.shorting_enabled === true }).filter((t) => t.closedAt >= from);
+    return { currency: str(account.currency) ?? 'USD', trades, coveredFrom: complete ? 0 : oldest, asOf: null };
+  }
 }
 
 export function brokerAdapter(id: BrokerId, creds: Record<string, string>, env: string, opts: BrokerOptions = {}): BrokerAdapter {
@@ -722,8 +1042,12 @@ export function brokerAdapter(id: BrokerId, creds: Record<string, string>, env: 
   }
 }
 
+/** Test hook: how much the shared caches hold. */
+export const brokerCacheSizes = () => ({ flex: flexCache.size, instruments: etoroInstruments.size });
+
 /** Test hook: forget the shared caches. */
 export function resetBrokerCaches(): void {
   etoroInstruments.clear();
   flexCache.clear();
+  flexChains.clear();
 }

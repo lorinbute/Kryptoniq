@@ -2,8 +2,9 @@
 // `scripts/sentiq.sh admin-reset`:
 //   email <address>  sets the admin's address before the first sign-in (the first-password page then shows it);
 //   reset            clears the admin's password, two-factor, passkeys and sessions, so the first-password page shows
-//                    again at http://localhost. Whoever can run this already holds the Mac and its data folder
-//                    (data/database.env included: the database is Azure SQL since FD-AZURE).
+//                    again at http://localhost (and then the two-factor setup, FD-2FA). Whoever can run this already
+//                    holds the Mac and its data folder (data/database.env included: the database is Azure SQL since
+//                    FD-AZURE).
 import { loadConfig } from '../src/server/config.ts';
 import { Db } from '../src/server/db/database.ts';
 import { SecretBox } from '../src/server/secrets/crypto.ts';
@@ -35,7 +36,7 @@ try {
     console.log(`Adresa adminului: ${u.email}. Deschide http://localhost:${config.port} pe acest Mac ca să-i setezi parola.`);
   } else if (cmd === 'reset') {
     await db.tx(async () => {
-      await db.run('UPDATE users SET password_hash = NULL, totp_secret = NULL, totp_confirmed_at = NULL, totp_last_step = 0, recovery_codes = NULL, disabled_at = NULL WHERE id = ?', [admin.id]);
+      await db.run('UPDATE users SET password_hash = NULL, totp_secret = NULL, totp_next_secret = NULL, totp_confirmed_at = NULL, totp_last_step = 0, recovery_codes = NULL, disabled_at = NULL WHERE id = ?', [admin.id]);
       for (const table of ['passkeys', 'sessions', 'user_tokens']) await db.run(`DELETE FROM ${table} WHERE user_id = ?`, [admin.id]);
     });
     console.log(`Parola, autentificarea în doi pași și passkey-urile adminului (${admin.email ?? 'fără adresă'}) au fost șterse.`);

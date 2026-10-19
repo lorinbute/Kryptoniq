@@ -1,8 +1,9 @@
 // Inputs of "[DI] Logarithmic Moving Average" (© Dusty Investments, Pine v6) with the exact Pine defaults and limits.
 import { z } from 'zod';
 
-export const LMA_TITLE = '[DI] Logarithmic Moving Average';
-export const LMA_SHORT_TITLE = '[DI] LMA';
+// FD-DENAMES: "[DE]" for Dusty Enterprise (the Pine script says "[DI]").
+export const LMA_TITLE = '[DE] Logarithmic Moving Average';
+export const LMA_SHORT_TITLE = '[DE] LMA';
 
 export const LMA_PRESETS = ['Default', 'Scalping', 'Swing Trading', 'Trend Following', 'Mean Reversion', 'Custom'] as const;
 export const LMA_MA_TYPES = ['EMA', 'SMA', 'WMA', 'RMA', 'VWMA'] as const;

@@ -1,14 +1,31 @@
-// The sign-in screens (FD-USERS §3–§6): sign in (password, then a code; or a passkey), create an account, confirm
-// the email, forgotten password, and the admin's first password. Everything a signed-out visitor can reach.
+// The sign-in screens (FD-USERS §3–§6): sign in (password, then a code; or a passkey), ask for an account and
+// activate it, forgotten password, and the admin's first password. Everything a signed-out visitor can reach; plus
+// the two-factor setup every account goes through before anything else (FD-2FA).
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router';
-import { browserSupportsWebAuthn, startAuthentication, WebAuthnError } from '@simplewebauthn/browser';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { browserSupportsWebAuthn, startAuthentication } from '@simplewebauthn/browser';
 import { Fingerprint, Loader2 } from 'lucide-react';
-import type { AuthState, LoginResult, PublicUser } from '../../shared/api-types.ts';
+import type { ActivateResult, AuthState, LoginResult, PublicUser, TwoFactorEnabled, TwoFactorView } from '../../shared/api-types.ts';
 import { api, ApiError, errorMessage } from '../api.ts';
-import { afterSignInTarget, afterSignOutTarget, clearAfterSignOut, landAfterSignIn, landAfterSignOut, safeNext, useAuthChange } from '../auth.ts';
+import { passkeyMessage } from '../passkey.ts';
+import {
+  afterSignInTarget,
+  afterSignOutTarget,
+  AUTH_KEY,
+  clearAfterSignOut,
+  endEnrolment,
+  holdEnrolment,
+  landAfterSignIn,
+  landAfterSignOut,
+  safeNext,
+  useAuthChange,
+  useEnrolment,
+} from '../auth.ts';
 import { Loading } from '../components/ui.tsx';
+import { RecoveryCodes } from '../components/RecoveryCodes.tsx';
 import { ThemeToggle } from '../components/ThemeToggle.tsx';
+import { TotpManualKey, TotpQrImage } from '../components/TotpQr.tsx';
 
 /** The page shell: the mark, a title, one column. */
 function Shell({ title, lead, children, footer }: { title: string; lead?: ReactNode; children: ReactNode; footer?: ReactNode }) {
@@ -71,17 +88,6 @@ function Submit({ busy, children }: { busy: boolean; children: ReactNode }) {
 
 const inputClass = 'w-full';
 
-/** A WebAuthn failure the person can understand (cancelled, no passkey for this site…). */
-export function passkeyMessage(err: unknown): string {
-  if (err instanceof WebAuthnError) {
-    if (err.code === 'ERROR_CEREMONY_ABORTED' || (err.cause instanceof Error && err.cause.name === 'NotAllowedError')) return 'Operația a fost anulată sau a expirat.';
-    if (err.code === 'ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED') return 'Acest dispozitiv are deja un passkey pentru contul tău.';
-    if (err.code === 'ERROR_INVALID_DOMAIN' || err.code === 'ERROR_INVALID_RP_ID') return 'Passkey-urile merg doar pe http://localhost sau pe HTTPS.';
-    return err.message;
-  }
-  if (err instanceof Error && err.name === 'NotAllowedError') return 'Operația a fost anulată sau a expirat.';
-  return errorMessage(err);
-}
 
 /** Where to go after signing in: ?next=… or home; after a recovery code, the Security page says how many are left. */
 function useFinishSignIn() {
@@ -315,6 +321,7 @@ function ActivatePage({ state }: { state: AuthState }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [done, setDone] = useState<string | null>(null);
+  const change = useAuthChange();
   useEffect(() => {
     api
       .post<{ valid: false } | { valid: true; email: string; name: string }>('/api/auth/activate/check', { token })
@@ -330,26 +337,51 @@ function ActivatePage({ state }: { state: AuthState }) {
     setBusy(true);
     setError(null);
     try {
-      setDone((await api.post<{ email: string }>('/api/auth/activate', { token, password: form.password })).email);
+      const r = await api.post<ActivateResult>('/api/auth/activate', { token, password: form.password });
+      if (r.signedIn) {
+        // FD-2FA §1: the link signed the account in: straight on to the two-factor setup, then home.
+        landAfterSignIn('/');
+        change(r.user);
+      } else setDone(r.email);
     } catch (err) {
       setError(err);
     } finally {
       setBusy(false);
     }
   };
+  // Only a browser signed in with another account gets here (FD-INVITE §5, FD-2FA §1): it stays in that account until
+  // asked to leave it; then the sign-in, with the new address filled in (the setup follows the password).
   if (done) {
+    const switchAccount = async () => {
+      setBusy(true);
+      setError(null);
+      try {
+        await api.post('/api/auth/logout');
+        landAfterSignOut(`/login?activated=1&email=${encodeURIComponent(done)}`);
+        change(null);
+      } catch (err) {
+        setError(err);
+      } finally {
+        setBusy(false);
+      }
+    };
     return (
       <Shell title="Contul e activ">
         <p className="text-[14px]">
-          Parola e setată pentru <span className="text-text">{done}</span>. Acum poți intra în cont.
+          Parola e setată pentru <span className="text-text">{done}</span>.
         </p>
         {signedIn && (
           <Note>
-            Acest browser e în contul {signedIn.email ?? signedIn.name}. Ca să intri cu {done}, ieși întâi din el (meniul cu inițiala, sus în dreapta) sau folosește alt browser.
+            Acest browser e în contul {signedIn.email ?? signedIn.name}. Ca să intri cu {done}, ieși întâi din el sau folosește alt browser; la prima intrare urmează configurarea
+            autentificării în doi pași.
           </Note>
         )}
-        <Link to={`/login?activated=1&email=${encodeURIComponent(done)}`} className="btn btn-primary w-full">
-          Intră în cont
+        <FormError error={error} />
+        <button type="button" className="btn btn-primary w-full" onClick={() => void switchAccount()} disabled={busy}>
+          Ieși și intră cu {done}
+        </button>
+        <Link to="/" className="self-center text-[13.5px]">
+          Rămâi în contul de acum
         </Link>
       </Shell>
     );
@@ -363,7 +395,7 @@ function ActivatePage({ state }: { state: AuthState }) {
     );
   }
   return (
-    <Shell title="Activează-ți contul" lead="Cererea ta a fost aprobată. Alege parola cu care vei intra în Sentiq.">
+    <Shell title="Activează-ți contul" lead="Cererea ta a fost aprobată. Alege parola cu care vei intra în Sentiq; apoi configurezi autentificarea în doi pași (un cod de pe telefon).">
       <form className="flex flex-col gap-4" onSubmit={(e) => void onSubmit(e)}>
         <Field label="Nume">
           <input className={inputClass} value={info.name} readOnly />
@@ -501,7 +533,8 @@ function SetupPage({ state }: { state: AuthState }) {
     setError(null);
     try {
       const r = await api.post<{ user: PublicUser }>('/api/auth/setup', { name: form.name, email: form.email, password: form.password });
-      landAfterSignIn('/security?welcome=1');
+      // FD-2FA §2: the two-factor setup comes first, then home.
+      landAfterSignIn('/');
       change(r.user);
     } catch (err) {
       setError(err);
@@ -559,11 +592,165 @@ export function SignedOutApp({ state }: { state: AuthState }) {
 /** Signed in: the links from the mails still work; the other sign-in pages go where the sign-in asked, or home. */
 export function SignedInAuthRoutes({ state }: { state: AuthState }) {
   const [params] = useSearchParams();
+  // Just signed in on one of these pages, through the two-factor setup (FD-2FA): where the sign-in asked to go wins
+  // over the page itself (else /activate would show again, its link already used).
+  const target = afterSignInTarget();
+  if (target) return <Navigate to={target} replace />;
   return (
     <Routes>
       <Route path="/activate" element={<ActivatePage state={state} />} />
       <Route path="/reset-password" element={<ResetPasswordPage state={state} />} />
       <Route path="*" element={<Navigate to={afterSignInTarget() ?? safeNext(params.get('next'))} replace />} />
     </Routes>
+  );
+}
+
+/**
+ * FD-2FA §1: the two-factor setup every account goes through before anything else: an authenticator app, its QR code
+ * and first code, then the recovery codes. The app shows it in place of any page while the account has no two-factor
+ * (or while the codes of the setup just finished are still on screen).
+ */
+export function TwoFactorSetupPage({ user }: { user: PublicUser }) {
+  const qc = useQueryClient();
+  const change = useAuthChange();
+  const held = useEnrolment();
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const codeRef = useRef<HTMLInputElement>(null);
+  const view = useQuery({
+    queryKey: ['two-factor-setup', user.id],
+    queryFn: async () => {
+      const v = await api.get<TwoFactorView>('/api/account/2fa');
+      // Not started yet: the QR code at once, without a button (asking again keeps the same secret).
+      return v.enabled || v.pending ? v : api.post<TwoFactorView>('/api/account/2fa/start', { restart: false });
+    },
+    enabled: !held,
+    // Back in this tab after a new key was made in another one: the QR code of now.
+    refetchOnWindowFocus: true,
+  });
+  const doneElsewhere = !held && view.data?.enabled === true;
+  useEffect(() => {
+    // Finished in another tab: the auth state says so once it is read again.
+    if (doneElsewhere) void qc.invalidateQueries({ queryKey: AUTH_KEY });
+  }, [doneElsewhere, qc]);
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (err) {
+      // Finished in another tab meanwhile ("Activează" or "Cheie nouă" here): the app opens once the state is read.
+      if (err instanceof ApiError && err.code === 'TWO_FACTOR_ON') void qc.invalidateQueries({ queryKey: AUTH_KEY });
+      else setError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const onEnable = (e: FormEvent) => {
+    e.preventDefault();
+    void run(async () => {
+      try {
+        const r = await api.post<TwoFactorEnabled>('/api/account/2fa/enable', { code });
+        setCode('');
+        holdEnrolment({ codes: r.codes, user: r.user });
+      } catch (err) {
+        codeRef.current?.select();
+        throw err;
+      }
+    });
+  };
+  const newKey = () =>
+    void run(async () => {
+      qc.setQueryData(['two-factor-setup', user.id], await api.post<TwoFactorView>('/api/account/2fa/start', { restart: true }));
+      setCode('');
+    });
+  const signOut = () =>
+    void run(async () => {
+      await api.post('/api/auth/logout');
+      landAfterSignOut();
+      change(null);
+    });
+  /** The codes are kept: the account as it is now goes into the auth state, and the app opens. */
+  const enter = () => {
+    if (held) qc.setQueryData<AuthState>(AUTH_KEY, (prev) => (prev ? { ...prev, user: held.user } : prev));
+    endEnrolment();
+    void qc.invalidateQueries({ queryKey: AUTH_KEY });
+  };
+
+  const footer = (
+    <>
+      <span className="truncate text-faint">{user.email}</span>
+      <button type="button" className="text-link hover:underline" onClick={signOut} disabled={busy}>
+        Ieși din cont
+      </button>
+    </>
+  );
+  if (held) {
+    return (
+      <Shell title="Codurile de recuperare" lead="Autentificarea în doi pași e activă. Dacă rămâi fără telefon, intri cu unul din aceste coduri.">
+        <RecoveryCodes codes={held.codes} onDone={enter} doneLabel="Intră în Sentiq" />
+      </Shell>
+    );
+  }
+  const v = view.data;
+  return (
+    <Shell
+      title="Autentificarea în doi pași"
+      lead="Ultimul pas: contul tău Sentiq se deschide cu parola și cu un cod de pe telefon, ca nimeni să nu poată intra doar cu parola."
+      footer={footer}
+    >
+      {!v || doneElsewhere ? (
+        view.isError ? (
+          <>
+            <FormError error={view.error} />
+            <button type="button" className="btn self-start" onClick={() => void view.refetch()}>
+              Reîncearcă
+            </button>
+          </>
+        ) : (
+          <Loading />
+        )
+      ) : (
+        <>
+          <ol className="flex list-decimal flex-col gap-1.5 pl-5 text-[13.5px]">
+            <li>Instalează pe telefon o aplicație de autentificare: Google Authenticator, Microsoft Authenticator, 1Password, Authy…</li>
+            <li>Scanează cu ea codul QR de mai jos.</li>
+            <li>Scrie codul de 6 cifre pe care îl arată.</li>
+          </ol>
+          {v.qr ? (
+            <div className="flex justify-center">
+              <TotpQrImage qr={v.qr} size={200} />
+            </div>
+          ) : (
+            // The stored secret could not be decrypted (another master key): a new one is a click away.
+            <Note>Codul QR nu a putut fi afișat. Apasă „Am scanat pe alt telefon: cheie nouă” ca să faci altul.</Note>
+          )}
+          <div className="text-[13px]">
+            <TotpManualKey secret={v.secret} />
+          </div>
+          <form className="flex flex-col gap-4" onSubmit={onEnable}>
+            <Field label="Codul de 6 cifre din aplicație">
+              <input
+                ref={codeRef}
+                className={`${inputClass} num tracking-[0.2em]`}
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength={8}
+                required
+              />
+            </Field>
+            <FormError error={error} />
+            <Submit busy={busy}>Activează</Submit>
+          </form>
+          <button type="button" className="self-start text-[13px] text-link hover:underline" onClick={newKey} disabled={busy}>
+            Am scanat pe alt telefon: cheie nouă
+          </button>
+        </>
+      )}
+    </Shell>
   );
 }

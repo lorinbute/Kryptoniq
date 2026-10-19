@@ -1,12 +1,13 @@
 // FD-USERS end to end through the HTTP API: first access, registration, sign-in with 2FA and passkeys, the
-// one-time links, data isolation between users, the admin's Users page and the local-network checks.
+// one-time links, data isolation between users, the admin's Users page and the local-network checks; FD-2FA: the
+// two-factor setup every account goes through before anything else, and the change of authenticator.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
+import { HLINE_DEFAULT_STYLE } from '../shared/hlines.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { networkInterfaces, tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
-import { isoCBOR } from '@simplewebauthn/server/helpers';
+import { softAuthenticator } from './test/soft-authenticator.ts';
 import { testDb } from './test/db.ts';
 import { createContext, type AppContext } from './context.ts';
 import { loadConfig } from './config.ts';
@@ -16,7 +17,7 @@ import { setFetchImpl } from './net/http.ts';
 import { SecretBox } from './secrets/crypto.ts';
 import type { NliScorer } from './sentiment/local.ts';
 import type { ClientFactory } from './exchange/accounts.ts';
-import { computeCode, decodeBase32, stepFor } from './auth/totp.ts';
+import { computeCode, decodeBase32, newSecret, stepFor } from './auth/totp.ts';
 import { hashPassword } from './auth/passwords.ts';
 import { ingestItems } from './news/ingest.ts';
 import { publishPublicInstance } from './settings.ts';
@@ -39,6 +40,8 @@ const fakeClients: ClientFactory = () => {
 };
 
 const ADMIN = { email: 'admin@example.com', password: 'Admin-password-1' };
+/** The context's key box: the tests read the authenticator secrets they need through it. */
+const BOX = new SecretBox(Buffer.alloc(32, 9));
 const ANA = { email: 'ana@example.com', name: 'Ana', password: 'Ana-password-12' };
 
 let dir: string;
@@ -110,7 +113,7 @@ beforeEach(async () => {
   logLines = [];
   dir = mkdtempSync(path.join(tmpdir(), 'sq-users-'));
   const config = { ...loadConfig({ SENTIQ_DATA_DIR: dir, SENTIQ_ALLOWED_HOSTS: 'sentiq.lan' } as NodeJS.ProcessEnv), webDist: path.join(dir, 'no-web') };
-  ctx = await createContext(config, makeLogger(), { nli: fakeNli, clientFactory: fakeClients, box: new SecretBox(Buffer.alloc(32, 9)), retryDelaysMs: [0, 0], db: await testDb() });
+  ctx = await createContext(config, makeLogger(), { nli: fakeNli, clientFactory: fakeClients, box: BOX, retryDelaysMs: [0, 0], db: await testDb() });
   app = await buildApp(ctx);
 });
 
@@ -121,21 +124,49 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-/** The admin with a password (without going through the setup page) and a signed-in browser. */
+/**
+ * The authenticator's code of this moment for an account. Its last used step is forgotten first: a test signs in more
+ * often than once every 30 seconds, which the anti-replay threshold would refuse.
+ */
+async function codeNow(email: string): Promise<string> {
+  const u = (await ctx.users.byEmail(email))!;
+  await ctx.db.run('UPDATE users SET totp_last_step = 0 WHERE id = ?', [u.id]);
+  return computeCode(decodeBase32(BOX.decrypt(u.totp_secret!)), stepFor(Date.now()));
+}
+
+/** Email, password, then the code: two-factor is every account's (FD-2FA). */
+async function signIn(b: Browser, email: string, password: string): Promise<void> {
+  expect((await b.post('/api/auth/login', { email, password })).json()).toEqual({ status: '2fa' });
+  expect((await b.post('/api/auth/login/2fa', { code: await codeNow(email) })).json()).toMatchObject({ status: 'ok' });
+}
+
+/** The two-factor setup of a signed-in account without it (FD-2FA §1): the QR's key, the first code, the codes. */
+async function enrol(b: Browser): Promise<{ key: Buffer; codes: string[] }> {
+  const start = (await b.post('/api/account/2fa/start')).json();
+  const key = decodeBase32(start.secret.replace(/ /g, ''));
+  const done = (await b.post('/api/account/2fa/enable', { code: computeCode(key, stepFor(Date.now())) })).json();
+  expect(done.codes).toHaveLength(10);
+  return { key, codes: done.codes };
+}
+
+/** The admin with a password and an authenticator (without going through the setup pages), and a signed-in browser. */
 async function adminBrowser(): Promise<Browser> {
-  await ctx.db.run('UPDATE users SET email = ?, name = ?, password_hash = ? WHERE id = 1', [ADMIN.email, 'Admin', adminHash]);
+  await ctx.db.run('UPDATE users SET email = ?, name = ?, password_hash = ?, totp_secret = ?, totp_confirmed_at = 1 WHERE id = 1', [ADMIN.email, 'Admin', adminHash, BOX.encrypt(newSecret())]);
   const b = browser();
-  expect((await b.post('/api/auth/login', { email: ADMIN.email, password: ADMIN.password })).json()).toMatchObject({ status: 'ok' });
+  await signIn(b, ADMIN.email, ADMIN.password);
   return b;
 }
 
-/** Ana asks for an account, the admin approves it, she activates it from the link and signs in (FD-INVITE). */
-async function anaBrowser(): Promise<Browser> {
+/**
+ * Ana asks for an account, the admin approves it and the activation link sets the password and signs the account in
+ * (FD-INVITE, FD-2FA §1); then two-factor is set up, unless `enrol: false` leaves the account on the setup.
+ */
+async function anaBrowser(opts: { enrol?: boolean } = {}): Promise<Browser> {
   const b = browser({ ip: '192.168.1.40' });
   expect((await b.post('/api/auth/request-account', { name: ANA.name, email: ANA.email })).statusCode).toBe(200);
   const { token } = await ctx.users.approveRequest((await ctx.users.accountRequests())[0]!.id);
-  expect((await b.post('/api/auth/activate', { token, password: ANA.password })).statusCode).toBe(200);
-  expect((await b.post('/api/auth/login', { email: ANA.email, password: ANA.password })).json()).toMatchObject({ status: 'ok' });
+  expect((await b.post('/api/auth/activate', { token, password: ANA.password })).json()).toMatchObject({ ok: true, signedIn: true, user: { email: ANA.email, twoFactor: false } });
+  if (opts.enrol !== false) await enrol(b);
   return b;
 }
 
@@ -156,7 +187,14 @@ describe('the admin account and its first password (FD-USERS §3)', () => {
     expect((await mac.post('/api/auth/setup', { email: ADMIN.email, password: 'short' })).statusCode).toBe(400);
     expect((await mac.post('/api/auth/setup', { email: 'not-an-email', password: ADMIN.password })).statusCode).toBe(400);
     const done = await mac.post('/api/auth/setup', { email: ADMIN.email, name: 'Lorin', password: ADMIN.password });
-    expect(done.json()).toMatchObject({ status: 'ok', user: { role: 'admin', email: ADMIN.email, name: 'Lorin' } });
+    expect(done.json()).toMatchObject({ status: 'ok', user: { role: 'admin', email: ADMIN.email, name: 'Lorin', twoFactor: false } });
+    // FD-2FA §2: the admin too sets up two-factor before anything else, the admin's own routes included.
+    for (const url of ['/api/watchlist', '/api/admin/users', '/api/health', '/api/account']) {
+      const r = await mac.get(url);
+      expect(r.statusCode, url).toBe(403);
+      expect(r.json().error, url).toEqual({ code: 'TWO_FACTOR_REQUIRED', message: 'Configurează mai întâi autentificarea în doi pași.' });
+    }
+    await enrol(mac);
     // Everything that was in the database before is the admin's: the default favourites included.
     expect((await mac.get('/api/watchlist')).json().map((w: { coin: string }) => w.coin)).toContain('BTC');
     expect((await mac.post('/api/auth/setup', { email: 'x@example.com', password: ADMIN.password })).statusCode).toBe(409);
@@ -248,11 +286,26 @@ describe('approval and activation (FD-INVITE §2, §3)', () => {
     expect(linkCount('reset-password')).toBe(0);
     expect((await anon.post('/api/auth/activate/check', { token })).json()).toEqual({ valid: true, email: ANA.email, name: 'Ana' });
     expect((await anon.post('/api/auth/activate', { token, password: 'weakpassword' })).statusCode).toBe(400);
-    expect((await anon.post('/api/auth/activate', { token, password: ANA.password })).json()).toEqual({ ok: true, email: ANA.email });
+    // FD-2FA §1: the activation signs the account in, straight on to the two-factor setup.
+    expect((await anon.post('/api/auth/activate', { token, password: ANA.password })).json()).toMatchObject({
+      ok: true,
+      email: ANA.email,
+      signedIn: true,
+      user: { role: 'user', name: 'Ana', activated: true, emailVerified: true, twoFactor: false },
+    });
+    expect((await anon.get('/api/auth/state')).json().user).toMatchObject({ email: ANA.email, twoFactor: false });
     expect((await anon.post('/api/auth/activate', { token, password: 'Another-pass-99' })).json().error.message).toBe('Linkul nu mai e valabil. Cere adminului unul nou.');
     expect((await anon.post('/api/auth/activate/check', { token })).json()).toEqual({ valid: false });
-    expect((await anon.post('/api/auth/login', { email: ANA.email.toUpperCase(), password: ANA.password })).json()).toMatchObject({ status: 'ok', user: { role: 'user', name: 'Ana', activated: true, emailVerified: true } });
+    // Signing in with the password alone (another browser) also lands on the setup, and nothing else opens.
+    const other = browser({ ip: '192.168.1.46' });
+    expect((await other.post('/api/auth/login', { email: ANA.email.toUpperCase(), password: ANA.password })).json()).toMatchObject({ status: 'ok', user: { twoFactor: false } });
+    expect((await other.get('/api/watchlist')).json().error.code).toBe('TWO_FACTOR_REQUIRED');
+    expect((await anon.get('/api/watchlist')).json().error.code).toBe('TWO_FACTOR_REQUIRED');
+    await enrol(anon);
     expect((await anon.get('/api/watchlist')).json().map((w: { coin: string }) => w.coin)).toEqual(['BTC', 'ETH', 'SOL']);
+    // The session opened with the password alone ended with the setup (FD-2FA §2).
+    expect((await other.get('/api/watchlist')).statusCode).toBe(401);
+    expect((await other.post('/api/auth/login', { email: ANA.email, password: ANA.password })).json()).toEqual({ status: '2fa' });
     expect((await admin.post(`/api/admin/users/${a.users[1].id}/activation-link`)).json().error.message).toBe('Contul e deja activat.');
   });
 
@@ -331,16 +384,30 @@ describe('data of each user (FD-USERS §2)', () => {
     expect((await admin.get('/api/settings')).json().charts.showLma).toBe(true);
     const forbidden = await ana.put('/api/settings', { retentionDays: 30 });
     expect(forbidden.statusCode).toBe(403);
-    expect((await ana.put('/api/settings', { sentiment: { engine: 'claude' } })).statusCode).toBe(403);
+    expect((await ana.put('/api/settings', { marketData: { candles: 5000 } })).statusCode).toBe(403);
+    // FD-AIKEYS: the AI is each one's own.
+    expect((await ana.put('/api/settings', { ai: { provider: 'gemini', scoring: true } })).json().ai).toEqual({ provider: 'gemini', scoring: true });
+    expect((await admin.get('/api/settings')).json().ai).toEqual({ provider: 'anthropic', scoring: false });
     expect((await admin.put('/api/settings', { retentionDays: 30 })).json().retentionDays).toBe(30);
     expect((await ana.get('/api/settings')).json().retentionDays).toBe(30);
     expect((await ana.get('/api/sentiment/history?days=3')).json().tz).toBe('Asia/Tokyo');
 
-    // Secrets: the admin's alone to change; their hints only the admin sees.
-    expect((await admin.put('/api/settings/claude-key', { key: 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz' })).statusCode).toBe(200);
-    expect((await ana.put('/api/settings/claude-key', { key: null })).statusCode).toBe(403);
-    expect((await ana.get('/api/settings')).json()).toMatchObject({ claudeKeySet: true, claudeKeyHint: null });
-    expect((await admin.get('/api/settings')).json().claudeKeyHint).not.toBeNull();
+    // Everyone's secrets (Resend): the admin's alone to change. The Twelve Data key is each one's own (FD-TDKEYS).
+    expect((await ana.put('/api/settings/resend', { key: null })).statusCode).toBe(403);
+    await ctx.settings.setTwelveDataKey(1, 'a'.repeat(32));
+    expect((await ana.put('/api/settings/twelvedata-key', { key: null })).statusCode).toBe(200);
+    expect(await ctx.settings.getTwelveDataKey(1)).toBe('a'.repeat(32));
+    expect((await ana.get('/api/settings')).json()).toMatchObject({ twelveDataKeySet: false, twelveDataKeyHint: null });
+    expect((await admin.get('/api/settings')).json()).toMatchObject({ twelveDataKeySet: true, twelveDataKeyHint: 'aaaa…aaaa' });
+    expect(await ctx.stocks.timeframes(2)).toEqual(['1d', '1w']);
+    expect(await ctx.stocks.hasKey(1)).toBe(true);
+    // The AI keys are each one's own (FD-AIKEYS): Ana sees only the hint of Ana's own key.
+    await ctx.settings.setAiKey(2, 'gemini', 'AIzaSyD-ana-key-0123456789abcdef');
+    ctx.ai.forget(2);
+    expect((await ana.get('/api/settings')).json().aiKeys.gemini).toEqual({ set: true, hint: 'AIza…cdef' });
+    expect((await admin.get('/api/settings')).json().aiKeys.gemini).toEqual({ set: false, hint: null });
+    expect((await ana.get('/api/ai/status')).json()).toMatchObject({ provider: 'gemini', keySet: true, scoring: true });
+    expect((await admin.get('/api/ai/status')).json()).toMatchObject({ provider: 'anthropic', keySet: false });
     // The mail settings are the admin's alone (FD-ADMINSET §1): not even whether they are set.
     const anaView = (await ana.get('/api/settings')).json();
     for (const k of ['resendKeySet', 'resendKeyHint', 'resendFrom', 'resendDev']) expect(anaView, k).not.toHaveProperty(k);
@@ -353,7 +420,6 @@ describe('data of each user (FD-USERS §2)', () => {
       ['DELETE', '/api/sources/coindesk'],
       ['POST', '/api/sentiment/rescore'],
       ['POST', '/api/sentiment/recompute-history'],
-      ['PUT', '/api/settings/twelvedata-key'],
       ['PUT', '/api/settings/resend'],
       ['GET', '/api/admin/users'],
     ] as const) {
@@ -382,6 +448,124 @@ describe('data of each user (FD-USERS §2)', () => {
 
     // The scanner keeps a result per user.
     expect((await ana.get('/api/scanner')).json()).toMatchObject({ computedAt: null, rows: [] });
+  });
+});
+
+describe('the indicators on the charts (FD-INDICATORS §4)', () => {
+  it('are each one\'s own, saved whole, refused when wrong, and kept item by item when an old list no longer parses', async () => {
+    const admin = await adminBrowser();
+    const ana = await anaBrowser();
+    const rsi = { uid: 'anarsi000001', id: 'rsi', inputs: { length: 21 }, visible: true, plots: { plot0: { color: '#FF0000' } } };
+    const ema = { uid: 'anaema000001', id: 'ema', inputs: {}, visible: false, height: 0.5 };
+    const saved = (await ana.put('/api/settings', { studies: [rsi, ema] })).json();
+    expect(saved.studies).toEqual([rsi, ema]);
+    expect((await ana.get('/api/settings')).json().studies).toEqual([rsi, ema]);
+    expect((await admin.get('/api/settings')).json().studies).toEqual([]);
+    // The list is replaced whole (one removed is gone).
+    expect((await ana.put('/api/settings', { studies: [ema] })).json().studies).toEqual([ema]);
+    for (const bad of [
+      [{ ...rsi, id: 'unknown' }],
+      [rsi, rsi],
+      [{ ...rsi, inputs: { length: { a: 1 } } }],
+      Array.from({ length: 21 }, (_, i) => ({ ...ema, uid: `many${String(i).padStart(4, '0')}` })),
+    ]) {
+      expect((await ana.put('/api/settings', { studies: bad })).statusCode).toBe(400);
+    }
+    expect((await ana.get('/api/settings')).json().studies).toEqual([ema]);
+    // A list written by a newer catalog: the indicator it no longer knows goes, the rest and the chart prefs stay.
+    const row = await ctx.db.get<{ value: string }>('SELECT value FROM user_settings WHERE user_id = 2');
+    const stored = JSON.parse(row?.value ?? '{}') as Record<string, unknown>;
+    stored.studies = [rsi, { ...ema, id: 'removed-one' }, { uid: 'bad', id: 'sma' }, rsi];
+    stored.charts = { ...(stored.charts as object), showLma: false };
+    await ctx.db.run('UPDATE user_settings SET value = ? WHERE user_id = 2', [JSON.stringify(stored)]);
+    ctx.settings.forget();
+    const view = (await ana.get('/api/settings')).json();
+    expect(view.studies).toEqual([rsi]);
+    expect(view.charts.showLma).toBe(false);
+  });
+
+  it('the last settings of each indicator: own, replaced whole, kept item by item when an old list no longer parses (FD-STUDYMEMORY)', async () => {
+    const admin = await adminBrowser();
+    const ana = await anaBrowser();
+    expect((await ana.get('/api/settings')).json().studyMemory).toEqual([]);
+    const rsi = { uid: 'anarsi000002', id: 'rsi', inputs: { length: 21, src: 'hl2' }, visible: true };
+    const memory = [{ id: 'rsi', inputs: { length: 21, src: 'hl2' }, plots: { plot0: { style: 'dotted' } } }];
+    // The list and the memory in one request (a removal).
+    const saved = (await ana.put('/api/settings', { studies: [], studyMemory: memory })).json();
+    expect(saved).toMatchObject({ studies: [], studyMemory: memory });
+    expect((await admin.get('/api/settings')).json().studyMemory).toEqual([]);
+    // Saved again without `src` or style: replaced whole, nothing lingers.
+    expect((await ana.put('/api/settings', { studies: [rsi], studyMemory: [{ id: 'rsi', inputs: { length: 14 } }] })).json().studyMemory).toEqual([{ id: 'rsi', inputs: { length: 14 } }]);
+    expect((await ana.put('/api/settings', { studyMemory: [{ id: 'rsi', inputs: {} }, { id: 'rsi', inputs: {} }] })).statusCode).toBe(400);
+    const row = await ctx.db.get<{ value: string }>('SELECT value FROM user_settings WHERE user_id = 2');
+    const stored = JSON.parse(row?.value ?? '{}') as Record<string, unknown>;
+    stored.studyMemory = [{ id: 'ema', inputs: { length: 50 } }, { id: 'removed-one', inputs: {} }, { id: 'ema', inputs: {} }, { id: 'macd', inputs: { x: { a: 1 } } }];
+    await ctx.db.run('UPDATE user_settings SET value = ? WHERE user_id = 2', [JSON.stringify(stored)]);
+    ctx.settings.forget();
+    const view = (await ana.get('/api/settings')).json();
+    expect(view.studyMemory).toEqual([{ id: 'ema', inputs: { length: 50 } }]);
+    expect(view.studies).toEqual([rsi]);
+  });
+
+  it('the order form’s last choices: own, merged choice by choice, kept item by item (FD-TICKETMEMORY)', async () => {
+    const admin = await adminBrowser();
+    const ana = await anaBrowser();
+    expect((await ana.get('/api/settings')).json().orderTicket).toEqual({ lastAccount: {}, accounts: {} });
+    await ana.put('/api/settings', { orderTicket: { accounts: { '7': { market: 'futures', kind: 'limit' } } } });
+    // One choice more: merged into the account's entry, the others stay.
+    const saved = (await ana.put('/api/settings', { orderTicket: { accounts: { '7': { leverage: 10 } }, lastAccount: { crypto: 7 } } })).json();
+    expect(saved.orderTicket).toEqual({ lastAccount: { crypto: 7 }, accounts: { '7': { market: 'futures', kind: 'limit', leverage: 10 } } });
+    expect((await admin.get('/api/settings')).json().orderTicket).toEqual({ lastAccount: {}, accounts: {} });
+    expect((await ana.put('/api/settings', { orderTicket: { accounts: { '7': { price: 100 } } } })).statusCode).toBe(400);
+    const row = await ctx.db.get<{ value: string }>('SELECT value FROM user_settings WHERE user_id = 2');
+    const stored = JSON.parse(row?.value ?? '{}') as Record<string, unknown>;
+    stored.orderTicket = { lastAccount: { crypto: 7 }, accounts: { '7': { kind: 'limit' }, '8': { kind: 'iceberg' } } };
+    await ctx.db.run('UPDATE user_settings SET value = ? WHERE user_id = 2', [JSON.stringify(stored)]);
+    ctx.settings.forget();
+    expect((await ana.get('/api/settings')).json().orderTicket).toEqual({ lastAccount: { crypto: 7 }, accounts: { '7': { kind: 'limit' } } });
+  });
+
+  it('the favourites: each one\'s own, the list replaced whole, an unknown id dropped on read (FD-STUDYUX §1)', async () => {
+    const admin = await adminBrowser();
+    const ana = await anaBrowser();
+    expect((await ana.get('/api/settings')).json().studyFavorites).toEqual([]);
+    expect((await ana.put('/api/settings', { studyFavorites: ['rsi', 'slingshot'] })).json().studyFavorites).toEqual(['rsi', 'slingshot']);
+    expect((await admin.get('/api/settings')).json().studyFavorites).toEqual([]);
+    expect((await ana.put('/api/settings', { studyFavorites: ['slingshot'] })).json().studyFavorites).toEqual(['slingshot']);
+    for (const bad of [['nope'], ['rsi', 'rsi']]) expect((await ana.put('/api/settings', { studyFavorites: bad })).statusCode).toBe(400);
+    const row = await ctx.db.get<{ value: string }>('SELECT value FROM user_settings WHERE user_id = 2');
+    const stored = JSON.parse(row?.value ?? '{}') as Record<string, unknown>;
+    stored.studyFavorites = ['ema', 'removed-one', 'ema', 'lma'];
+    await ctx.db.run('UPDATE user_settings SET value = ? WHERE user_id = 2', [JSON.stringify(stored)]);
+    ctx.settings.forget();
+    expect((await ana.get('/api/settings')).json().studyFavorites).toEqual(['ema', 'lma']);
+  });
+
+  it('the horizontal lines and their template: own, a symbol\'s list replaced whole, an invalid line dropped on read (FD-HLINE)', async () => {
+    const admin = await adminBrowser();
+    const ana = await anaBrowser();
+    const line = (id: string, price: number, patch: Record<string, unknown> = {}) => ({ ...structuredClone(HLINE_DEFAULT_STYLE), id, price, text: '', ...patch });
+    expect((await ana.get('/api/settings')).json()).toMatchObject({ chartLines: {}, hlineTemplate: null });
+    await ana.put('/api/settings', { chartLines: { 'BTC/USDT': [line('aaaaaa', 100), line('bbbbbb', 90)], 'stock:AAPL': [line('cccccc', 250, { text: 'Rezistență' })] } });
+    // One symbol's list replaced (a line moved, one deleted); the other symbol's stays.
+    const saved = (await ana.put('/api/settings', { chartLines: { 'BTC/USDT': [line('aaaaaa', 101)] } })).json();
+    expect(saved.chartLines).toEqual({ 'BTC/USDT': [line('aaaaaa', 101)], 'stock:AAPL': [line('cccccc', 250, { text: 'Rezistență' })] });
+    // A symbol emptied is not kept.
+    expect(Object.keys((await ana.put('/api/settings', { chartLines: { 'stock:AAPL': [] } })).json().chartLines)).toEqual(['BTC/USDT']);
+    expect((await ana.put('/api/settings', { hlineTemplate: { ...structuredClone(HLINE_DEFAULT_STYLE), color: '#6FFFB0' } })).json().hlineTemplate).toMatchObject({ color: '#6FFFB0' });
+    expect((await admin.get('/api/settings')).json()).toMatchObject({ chartLines: {}, hlineTemplate: null });
+    for (const bad of [{ chartLines: { 'BTC/USDT': [line('aaaaaa', 1, { width: 9 })] } }, { chartLines: { 'btc/usdt': [line('aaaaaa', 1)] } }, { hlineTemplate: { color: '#fff' } }]) {
+      expect((await ana.put('/api/settings', bad)).statusCode).toBe(400);
+    }
+    const row = await ctx.db.get<{ value: string }>('SELECT value FROM user_settings WHERE user_id = 2');
+    const stored = JSON.parse(row?.value ?? '{}') as Record<string, unknown>;
+    stored.chartLines = { 'BTC/USDT': [line('aaaaaa', 101), { id: 'broken', price: 'x' }], nope: [line('dddddd', 5)] };
+    await ctx.db.run('UPDATE user_settings SET value = ? WHERE user_id = 2', [JSON.stringify(stored)]);
+    ctx.settings.forget();
+    const read = (await ana.get('/api/settings')).json();
+    expect(read.chartLines).toEqual({ 'BTC/USDT': [line('aaaaaa', 101)] });
+    // The other keys survived the broken one.
+    expect(read.hlineTemplate).toMatchObject({ color: '#6FFFB0' });
   });
 });
 
@@ -460,14 +644,14 @@ describe('sign-in (FD-USERS §5)', () => {
     const admin = await adminBrowser();
     const ana = await anaBrowser();
     const ana2 = browser({ ip: '192.168.1.70' });
-    await ana2.post('/api/auth/login', { email: ANA.email, password: ANA.password });
+    await signIn(ana2, ANA.email, ANA.password);
     expect((await ana.post('/api/auth/logout')).statusCode).toBe(200);
     expect((await ana.get('/api/watchlist')).statusCode).toBe(401);
     expect((await ana2.get('/api/watchlist')).statusCode).toBe(200);
-    await ana.post('/api/auth/login', { email: ANA.email, password: ANA.password });
+    await signIn(ana, ANA.email, ANA.password);
     expect((await ana.post('/api/account/logout-all')).statusCode).toBe(200);
     expect((await ana2.get('/api/watchlist')).statusCode).toBe(401);
-    await ana.post('/api/auth/login', { email: ANA.email, password: ANA.password });
+    await signIn(ana, ANA.email, ANA.password);
     const anaId = (await ctx.users.byEmail(ANA.email))!.id;
     expect((await admin.post(`/api/admin/users/${anaId}/disable`)).statusCode).toBe(200);
     expect((await ana.get('/api/watchlist')).statusCode).toBe(401);
@@ -497,7 +681,7 @@ describe('sign-in (FD-USERS §5)', () => {
   it('changes the password with the current one, closing the other sessions', async () => {
     const ana = await anaBrowser();
     const other = browser({ ip: '192.168.1.71' });
-    await other.post('/api/auth/login', { email: ANA.email, password: ANA.password });
+    await signIn(other, ANA.email, ANA.password);
     expect((await ana.put('/api/account/password', { current: 'Wrong-password-1', next: 'New-password-123' })).statusCode).toBe(400);
     expect((await ana.put('/api/account/password', { current: ANA.password, next: 'weak' })).statusCode).toBe(400);
     expect((await ana.put('/api/account/password', { current: ANA.password, next: 'New-password-123' })).json()).toMatchObject({ ok: true, closedSessions: 1 });
@@ -511,18 +695,24 @@ describe('two-factor authentication (FD-USERS §5, §7)', () => {
   it('enrols with a QR code, then asks for a code within 5 minutes; recovery codes work once', async () => {
     const t0 = Date.UTC(2026, 9, 13, 10, 0, 5);
     vi.useFakeTimers({ toFake: ['Date'], now: t0 });
-    const ana = await anaBrowser();
+    const ana = await anaBrowser({ enrol: false });
     const start = (await ana.post('/api/account/2fa/start')).json();
-    expect(start).toMatchObject({ enabled: false, pending: true });
+    expect(start).toMatchObject({ enabled: false, pending: true, replacing: false });
     expect(start.qr).toMatch(/^data:image\/svg\+xml;base64,/);
     expect(Buffer.from(start.qr.split(',')[1], 'base64').toString()).toContain('<svg');
+    // Asked again (a second tab, a reload): the same secret, not a new one.
+    expect((await ana.post('/api/account/2fa/start')).json().secret).toBe(start.secret);
     const key = decodeBase32(start.secret.replace(/ /g, ''));
     const codeAt = (ms: number) => computeCode(key, stepFor(ms));
     expect((await ana.post('/api/account/2fa/enable', { code: '000000' === codeAt(t0) ? '111111' : '000000' })).statusCode).toBe(400);
     const enabled = (await ana.post('/api/account/2fa/enable', { code: codeAt(t0) })).json();
     expect(enabled.codes).toHaveLength(10);
-    expect(enabled.twoFactor).toMatchObject({ enabled: true, pending: false, secret: null, qr: null, recoveryCodesLeft: 10 });
+    expect(enabled.twoFactor).toMatchObject({ enabled: true, pending: false, replacing: false, secret: null, qr: null, recoveryCodesLeft: 10 });
+    expect(enabled.user).toMatchObject({ email: ANA.email, twoFactor: true, recoveryCodesLeft: 10 });
     expect((await ana.post('/api/account/2fa/start')).statusCode).toBe(409);
+    // Finished in another tab: not counted as a wrong code.
+    expect((await ana.post('/api/account/2fa/enable', { code: '123456' })).json().error.code).toBe('TWO_FACTOR_ON');
+    await until(() => logLines.includes(`warn email: no Resend key, the totp-on mail for ${ANA.email} was not sent`));
 
     await ana.post('/api/auth/logout');
     expect((await ana.post('/api/auth/login', { email: ANA.email, password: ANA.password })).json()).toEqual({ status: '2fa' });
@@ -548,11 +738,72 @@ describe('two-factor authentication (FD-USERS §5, §7)', () => {
     expect((await ana.post('/api/auth/login/2fa', { code: codeAt(t0 + 6 * 60_000) })).json().error.code).toBe('LOGIN_EXPIRED');
   });
 
+  it('FD-2FA: without it an account reaches only its setup, and the sessions opened before it end', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 9, 18, 9) });
+    const ana = await anaBrowser({ enrol: false });
+    const phone = browser({ ip: '192.168.1.72' });
+    expect((await phone.post('/api/auth/login', { email: ANA.email, password: ANA.password })).json()).toMatchObject({ status: 'ok', user: { twoFactor: false } });
+    for (const [method, url] of [
+      ['GET', '/api/watchlist'],
+      ['GET', '/api/account'],
+      ['GET', '/api/settings'],
+      ['GET', '/api/news'],
+      ['GET', '/api/account/passkeys'],
+      ['POST', '/api/account/passkeys/options'],
+      ['PUT', '/api/account/password'],
+      ['PUT', '/api/account/name'],
+      ['POST', '/api/account/logout-all'],
+      ['POST', '/api/account/2fa/recovery-codes'],
+      ['POST', '/api/account/2fa/replace'],
+      ['GET', '/api/admin/users'],
+    ] as const) {
+      const r = method === 'GET' ? await ana.get(url) : method === 'PUT' ? await ana.put(url, {}) : await ana.post(url, {});
+      expect(r.statusCode, `${method} ${url}`).toBe(403);
+      expect(r.json().error.code, `${method} ${url}`).toBe('TWO_FACTOR_REQUIRED');
+    }
+    // What the setup screen needs answers; so do the public routes (the state, signing out).
+    expect((await ana.get('/api/account/2fa')).json()).toMatchObject({ enabled: false, pending: false });
+    expect((await ana.get('/api/auth/state')).json().user).toMatchObject({ twoFactor: false });
+    expect((await ana.get('/api/ping')).statusCode).toBe(200);
+    await enrol(ana);
+    expect((await ana.get('/api/watchlist')).statusCode).toBe(200);
+    // Turning it off or abandoning the setup no longer exists.
+    expect((await ana.post('/api/account/2fa/cancel')).statusCode).toBe(404);
+    expect((await ana.post('/api/account/2fa/disable', { password: ANA.password, code: '123456' })).statusCode).toBe(404);
+    expect((await ana.get('/api/account')).json().user).toMatchObject({ twoFactor: true });
+    // The phone signed in with the password alone: its session does not get the second factor for free.
+    expect((await phone.get('/api/watchlist')).statusCode).toBe(401);
+    expect((await phone.get('/api/auth/state')).json().user).toBeNull();
+    // Three wrong codes at the setup lock the account's own budget for 15 minutes.
+    const bob = browser({ ip: '192.168.1.73' });
+    await bob.post('/api/auth/request-account', { name: 'Bob', email: 'bob@example.com' });
+    const { token } = await ctx.users.approveRequest((await ctx.users.accountRequests())[0]!.id);
+    await bob.post('/api/auth/activate', { token, password: 'Bob-password-123' });
+    const s = (await bob.post('/api/account/2fa/start')).json();
+    const right = computeCode(decodeBase32(s.secret.replace(/ /g, '')), stepFor(Date.now()));
+    const wrong = right === '000000' ? '111111' : '000000';
+    expect((await bob.post('/api/account/2fa/enable', { code: wrong })).statusCode).toBe(400);
+    expect((await bob.post('/api/account/2fa/enable', { code: wrong })).statusCode).toBe(400);
+    expect((await bob.post('/api/account/2fa/enable', { code: wrong })).statusCode).toBe(429);
+    expect((await bob.post('/api/account/2fa/enable', { code: right })).statusCode).toBe(429);
+  });
+
+  it('FD-2FA: a browser signed in with another account stays in it when an activation link is used there', async () => {
+    const admin = await adminBrowser();
+    await browser({ ip: '192.168.1.74' }).post('/api/auth/request-account', { name: ANA.name, email: ANA.email });
+    const { token } = await ctx.users.approveRequest((await ctx.users.accountRequests())[0]!.id);
+    expect((await admin.post('/api/auth/activate', { token, password: ANA.password })).json()).toEqual({ ok: true, email: ANA.email, signedIn: false });
+    expect((await admin.get('/api/auth/state')).json().user).toMatchObject({ email: ADMIN.email });
+    expect((await admin.get('/api/admin/users')).statusCode).toBe(200);
+    // At Ana's own sign-in, the setup.
+    const b = browser({ ip: '192.168.1.75' });
+    expect((await b.post('/api/auth/login', { email: ANA.email, password: ANA.password })).json()).toMatchObject({ status: 'ok', user: { twoFactor: false } });
+    expect((await b.get('/api/watchlist')).json().error.code).toBe('TWO_FACTOR_REQUIRED');
+  });
+
   it('shares the attempt budget between the password and the code', async () => {
     vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 9, 13, 11) });
-    const ana = await anaBrowser();
-    const s = (await ana.post('/api/account/2fa/start')).json();
-    await ana.post('/api/account/2fa/enable', { code: computeCode(decodeBase32(s.secret.replace(/ /g, '')), stepFor(Date.now())) });
+    await anaBrowser();
     const b = browser({ ip: '192.168.1.80' });
     expect((await b.post('/api/auth/login', { email: ANA.email, password: 'Wrong-password-1' })).statusCode).toBe(400);
     expect((await b.post('/api/auth/login', { email: ANA.email, password: ANA.password })).json().status).toBe('2fa');
@@ -560,24 +811,54 @@ describe('two-factor authentication (FD-USERS §5, §7)', () => {
     expect((await b.post('/api/auth/login/2fa', { code: 'AAAAA-AAAAA' })).statusCode).toBe(429);
   });
 
-  it('turns off and renews codes only with the password and a code', async () => {
-    vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 9, 13, 12) });
-    const ana = await anaBrowser();
-    const s = (await ana.post('/api/account/2fa/start')).json();
-    const key = decodeBase32(s.secret.replace(/ /g, ''));
-    const { codes } = (await ana.post('/api/account/2fa/enable', { code: computeCode(key, stepFor(Date.now())) })).json();
+  it('renews the codes and changes the authenticator only with the password and a code (FD-2FA §3)', async () => {
+    const t0 = Date.UTC(2026, 9, 18, 12, 0, 5);
+    vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+    const ana = await anaBrowser({ enrol: false });
+    const { key, codes } = await enrol(ana);
     expect((await ana.post('/api/account/2fa/recovery-codes', { password: 'Wrong-password-1', code: codes[1] })).statusCode).toBe(400);
     const renewed = (await ana.post('/api/account/2fa/recovery-codes', { password: ANA.password, code: codes[1] })).json();
     expect(renewed.codes).toHaveLength(10);
     expect(renewed.codes).not.toContain(codes[2]);
-    expect((await ana.post('/api/account/2fa/disable', { password: ANA.password, code: codes[2] })).statusCode).toBe(400); // old codes are gone
-    // Restarting an unconfirmed enrolment is possible; the third bad attempt locks the account's own budget.
-    expect((await ana.post('/api/account/2fa/disable', { password: ANA.password, code: renewed.codes[0] })).json()).toMatchObject({ enabled: false });
-    const again = (await ana.post('/api/account/2fa/start')).json();
-    const restarted = (await ana.post('/api/account/2fa/start', { restart: true })).json();
-    expect(restarted.secret).not.toBe(again.secret);
-    await ana.post('/api/account/2fa/cancel');
-    expect((await ana.get('/api/account/2fa')).json()).toMatchObject({ enabled: false, pending: false });
+    // The old codes are gone.
+    expect((await ana.post('/api/account/2fa/replace', { password: ANA.password, code: codes[2] })).statusCode).toBe(400);
+
+    // A new phone: the old app's code (the enrolment's step is spent, the next one is not) and the password.
+    vi.setSystemTime(t0 + 30_000);
+    const oldCode = computeCode(key, stepFor(t0 + 30_000));
+    const started = (await ana.post('/api/account/2fa/replace', { password: ANA.password, code: oldCode })).json();
+    expect(started).toMatchObject({ enabled: true, pending: true, replacing: true, recoveryCodesLeft: 10 });
+    expect(started.qr).toMatch(/^data:image\/svg\+xml;base64,/);
+    const next = decodeBase32(started.secret.replace(/ /g, ''));
+    expect(next.equals(key)).toBe(false);
+    expect((await ana.get('/api/account/2fa')).json()).toMatchObject({ replacing: true, secret: started.secret });
+    // Until it is confirmed, the old app still signs in.
+    vi.setSystemTime(t0 + 60_000);
+    const other = browser({ ip: '192.168.1.76' });
+    await other.post('/api/auth/login', { email: ANA.email, password: ANA.password });
+    expect((await other.post('/api/auth/login/2fa', { code: computeCode(key, stepFor(t0 + 60_000)) })).json()).toMatchObject({ status: 'ok' });
+    // The old app's code in the new one's field is refused; the new app's code of the very same 30 seconds is not.
+    const sameStep = computeCode(next, stepFor(t0 + 60_000));
+    if (sameStep !== computeCode(key, stepFor(t0 + 60_000))) {
+      expect((await ana.post('/api/account/2fa/replace/confirm', { code: computeCode(key, stepFor(t0 + 60_000)) })).statusCode).toBe(400);
+    }
+    expect((await ana.post('/api/account/2fa/replace/confirm', { code: sameStep })).json()).toMatchObject({ enabled: true, replacing: false, pending: false, secret: null, recoveryCodesLeft: 10 });
+    await until(() => logLines.includes(`warn email: no Resend key, the totp-changed mail for ${ANA.email} was not sent`));
+    expect((await ana.post('/api/account/2fa/replace/confirm', { code: sameStep })).json().error.code).toBe('NO_REPLACEMENT');
+    // From now on the new app signs in, the old one does not; the recovery codes stayed; no session was closed.
+    vi.setSystemTime(t0 + 90_000);
+    const later = browser({ ip: '192.168.1.77' });
+    await later.post('/api/auth/login', { email: ANA.email, password: ANA.password });
+    expect((await later.post('/api/auth/login/2fa', { code: computeCode(key, stepFor(t0 + 90_000)) })).statusCode).toBe(400);
+    expect((await later.post('/api/auth/login/2fa', { code: computeCode(next, stepFor(t0 + 90_000)) })).json()).toMatchObject({ status: 'ok', user: { recoveryCodesLeft: 10 } });
+    expect((await other.get('/api/watchlist')).statusCode).toBe(200);
+    // A change abandoned: the app of now stays (and a recovery code starts one too, for a lost phone).
+    vi.setSystemTime(t0 + 120_000);
+    expect((await ana.post('/api/account/2fa/replace', { password: ANA.password, code: renewed.codes[0] })).json().replacing).toBe(true);
+    expect((await ana.post('/api/account/2fa/replace/cancel')).json()).toMatchObject({ replacing: false, pending: false, secret: null, recoveryCodesLeft: 9 });
+    const last = browser({ ip: '192.168.1.78' });
+    await last.post('/api/auth/login', { email: ANA.email, password: ANA.password });
+    expect((await last.post('/api/auth/login/2fa', { code: computeCode(next, stepFor(t0 + 120_000)) })).statusCode).toBe(200);
   });
 });
 
@@ -586,8 +867,6 @@ describe('forgotten password (FD-USERS §6)', () => {
     const t0 = Date.UTC(2026, 9, 13, 13);
     vi.useFakeTimers({ toFake: ['Date'], now: t0 });
     const ana = await anaBrowser();
-    const s = (await ana.post('/api/account/2fa/start')).json();
-    await ana.post('/api/account/2fa/enable', { code: computeCode(decodeBase32(s.secret.replace(/ /g, '')), stepFor(t0)) });
     const anon = browser({ ip: '192.168.1.90' });
     const generic = (await anon.post('/api/auth/forgot', { email: 'nobody@example.com' })).json();
     await settle();
@@ -613,10 +892,20 @@ describe('forgotten password (FD-USERS §6)', () => {
     await browser({ ip: '192.168.1.92' }).post('/api/auth/forgot', { email: ANA.email });
     await until(() => linkCount('reset-password') === 2);
   });
+
+  it('FD-2FA: a new password on an account without two-factor leads to its setup', async () => {
+    await anaBrowser({ enrol: false });
+    await browser({ ip: '192.168.1.93' }).post('/api/auth/forgot', { email: ANA.email });
+    await until(() => loggedLink('reset-password') !== null);
+    const anon = browser({ ip: '192.168.1.94' });
+    expect((await anon.post('/api/auth/reset', { token: loggedLink('reset-password'), password: 'Reset-password-3' })).json()).toMatchObject({ ok: true, twoFactor: false });
+    expect((await anon.post('/api/auth/login', { email: ANA.email, password: 'Reset-password-3' })).json()).toMatchObject({ status: 'ok', user: { twoFactor: false } });
+    expect((await anon.get('/api/watchlist')).json().error.code).toBe('TWO_FACTOR_REQUIRED');
+  });
 });
 
 describe('the Users page (FD-USERS §8)', () => {
-  it('lets the admin turn off 2FA and delete accounts, never their own', async () => {
+  it('lets the admin reset 2FA and delete accounts, never their own', async () => {
     const admin = await adminBrowser();
     const ana = await anaBrowser();
     const list = (await admin.get('/api/admin/users')).json();
@@ -626,6 +915,14 @@ describe('the Users page (FD-USERS §8)', () => {
     ]);
     const anaId = list[1].id as number;
     await ana.post('/api/watchlist', { kind: 'stock', coin: 'AAPL', name: 'Apple Inc.' });
+    // FD-2FA §4: resetting two-factor ends the account's sessions; at the next sign-in it is set up again.
+    expect((await admin.post(`/api/admin/users/${anaId}/reset-2fa`)).json().find((u: { id: number }) => u.id === anaId)).toMatchObject({ twoFactor: false });
+    expect((await ana.get('/api/watchlist')).statusCode).toBe(401);
+    await until(() => logLines.includes(`warn email: no Resend key, the totp-reset mail for ${ANA.email} was not sent`));
+    expect((await ana.post('/api/auth/login', { email: ANA.email, password: ANA.password })).json()).toMatchObject({ status: 'ok', user: { twoFactor: false } });
+    expect((await ana.get('/api/watchlist')).json().error.code).toBe('TWO_FACTOR_REQUIRED');
+    await enrol(ana);
+    expect((await ana.get('/api/watchlist')).statusCode).toBe(200);
     for (const action of ['disable', 'enable', 'reset-2fa', 'activation-link']) expect((await admin.post(`/api/admin/users/1/${action}`)).statusCode, action).toBe(400);
     expect((await admin.del('/api/admin/users/1')).statusCode).toBe(400);
     expect((await admin.del('/api/admin/users/999')).statusCode).toBe(404);
@@ -694,63 +991,6 @@ describe('mail through Resend (FD-USERS §6, FD-INVITE)', () => {
   });
 });
 
-/** A software authenticator: a P-256 key, attestation "none", user verification done. */
-function softAuthenticator(rpId: string, origin: string) {
-  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
-  const jwk = publicKey.export({ format: 'jwk' }) as { x: string; y: string };
-  const credId = randomBytes(16);
-  const b64 = (b: Uint8Array) => Buffer.from(b).toString('base64url');
-  const rpHash = createHash('sha256').update(rpId).digest();
-  let counter = 0;
-  let userHandle = '';
-  const authData = (flags: number, attested?: Buffer, signCount = counter) => {
-    const count = Buffer.alloc(4);
-    count.writeUInt32BE(signCount);
-    return Buffer.concat([rpHash, Buffer.from([flags]), count, ...(attested ? [attested] : [])]);
-  };
-  return {
-    id: b64(credId),
-    create(options: { challenge: string; user: { id: string } }) {
-      userHandle = options.user.id;
-      const cose = new Map<number, number | Uint8Array>([
-        [1, 2],
-        [3, -7],
-        [-1, 1],
-        [-2, Buffer.from(jwk.x, 'base64url')],
-        [-3, Buffer.from(jwk.y, 'base64url')],
-      ]);
-      const len = Buffer.alloc(2);
-      len.writeUInt16BE(credId.length);
-      const attested = Buffer.concat([Buffer.alloc(16), len, credId, Buffer.from(isoCBOR.encode(cose))]);
-      const attestationObject = isoCBOR.encode(new Map<string, unknown>([['fmt', 'none'], ['attStmt', new Map()], ['authData', authData(0x45, attested)]]) as never);
-      const clientData = Buffer.from(JSON.stringify({ type: 'webauthn.create', challenge: options.challenge, origin, crossOrigin: false }));
-      return {
-        id: b64(credId),
-        rawId: b64(credId),
-        type: 'public-key',
-        response: { clientDataJSON: b64(clientData), attestationObject: b64(attestationObject), transports: ['internal'] },
-        clientExtensionResults: {},
-        authenticatorAttachment: 'platform',
-      };
-    },
-    /** `signCount`: what a cloned authenticator would send (a counter behind the real one's). */
-    get(options: { challenge: string }, handle = userHandle, signCount?: number) {
-      counter++;
-      const data = authData(0x05, undefined, signCount ?? counter);
-      const clientData = Buffer.from(JSON.stringify({ type: 'webauthn.get', challenge: options.challenge, origin, crossOrigin: false }));
-      const signature = sign('sha256', Buffer.concat([data, createHash('sha256').update(clientData).digest()]), privateKey);
-      return {
-        id: b64(credId),
-        rawId: b64(credId),
-        type: 'public-key',
-        response: { clientDataJSON: b64(clientData), authenticatorData: b64(data), signature: b64(signature), userHandle: handle },
-        clientExtensionResults: {},
-        authenticatorAttachment: 'platform',
-      };
-    },
-  };
-}
-
 describe('passkeys (FD-USERS §5, §7)', () => {
   it('registers on localhost, signs in without a password or code, and refuses replays', async () => {
     const ana = await anaBrowser();
@@ -766,12 +1006,7 @@ describe('passkeys (FD-USERS §5, §7)', () => {
     // The same authenticator is listed as excluded next time.
     expect((await ana.post('/api/account/passkeys/options')).json().excludeCredentials.map((c: { id: string }) => c.id)).toEqual([device.id]);
 
-    // Even two-factor does not ask for a code after a passkey.
-    vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 9, 13, 14) });
-    const s = (await ana.post('/api/account/2fa/start')).json();
-    await ana.post('/api/account/2fa/enable', { code: computeCode(decodeBase32(s.secret.replace(/ /g, '')), stepFor(Date.now())) });
-    vi.useRealTimers();
-
+    // Two-factor (every account's) does not ask for a code after a passkey.
     const fresh = browser();
     const authOptions = (await fresh.post('/api/auth/passkey/options')).json();
     expect(authOptions.allowCredentials ?? []).toEqual([]);
@@ -802,6 +1037,20 @@ describe('passkeys (FD-USERS §5, §7)', () => {
     expect((await ana.del(`/api/account/passkeys/${pk.id}`)).json()).toEqual([]);
     const o4 = (await fresh.post('/api/auth/passkey/options')).json();
     expect((await fresh.post('/api/auth/passkey', { response: device.get(o4) })).statusCode).toBe(400);
+  });
+
+  it('do not skip the two-factor setup of an account without it (FD-2FA §2)', async () => {
+    const ana = await anaBrowser();
+    const device = softAuthenticator('localhost', 'http://localhost:4317');
+    const regOptions = (await ana.post('/api/account/passkeys/options')).json();
+    await ana.post('/api/account/passkeys', { response: device.create(regOptions), name: 'MacBook' });
+    await ctx.users.resetTwoFactor((await ctx.users.byEmail(ANA.email))!.id);
+    const b = browser();
+    const o = (await b.post('/api/auth/passkey/options')).json();
+    expect((await b.post('/api/auth/passkey', { response: device.get(o) })).json()).toMatchObject({ status: 'ok', user: { email: ANA.email, twoFactor: false, passkeys: 1 } });
+    expect((await b.get('/api/watchlist')).json().error.code).toBe('TWO_FACTOR_REQUIRED');
+    await enrol(b);
+    expect((await b.get('/api/watchlist')).statusCode).toBe(200);
   });
 
   it('are not offered on an IP address', async () => {

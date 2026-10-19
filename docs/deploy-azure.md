@@ -119,6 +119,15 @@ az webapp deploy --resource-group DE-SQL-RG --name sentiq --src-path ../sentiq.z
 - Se verifică: „Sentiq running” în jurnalul Sentiq, `/api/ping` cu 200, niciun lacăt rămas în bază.
 - Dacă un build tot se întrerupe (Kudu repornit, aplicația mutată pe alt worker): pașii de mai sus (lacătul din `/home/site/locks/deployment`), iar ca rezervă procedura cu `az webapp stop` / `start`.
 
+**16 oct 2026: s-a întâmplat și pe B2.** Build-ul pornit la 22:08 UTC cu aplicația pornită a fost oprit de o repornire a Kudu (~22:11; joburile aplicației vechi dădeau timeout-uri chiar atunci). Manifestul fusese deja șters, deci aplicația nu a mai pornit (`Cannot find package 'mssql'`), iar Azure a blocat-o după pornirile eșuate. Site-ul a fost căzut 22:11–22:27 UTC. Reparat cu procedura cu aplicația oprită: lacătul șters, aceeași arhivă publicată din nou, build în 3,5 minute, `az webapp start`. **De acum, publicarea se face mereu cu aplicația oprită** (`stop` → `deploy` → `start` după `status 4`): câteva minute de pauză planificată în loc de riscul unei căderi.
+
+**18 oct 2026: planul e din nou B1** (`az appservice plan show` → `B1`). Publicarea `d7f4b886` s-a făcut cu aplicația oprită (build 17:46–17:50 UTC, neîntrerupt). Pauza a ținut până la 18:13 UTC, pentru că urmărirea stării a rămas fără răspuns: comenzile `az` de urmărire trebuie să poată ieși în rețea.
+
+Capcane la urmărire:
+- `az webapp deploy` poate spune „Deployment has completed successfully” deși build-ul încă rulează (endpoint-ul lui de stare a dat timeout). Se crede doar Kudu → `/api/deployments/latest` (`az rest --method get --uri "https://<scm>/api/deployments/latest" --resource https://management.azure.com/`).
+- Kudu scrie `"complete": true` cu literă mică.
+- Cât Azure e oprit, joburile le ia Mac-ul. Dacă publicarea schimbă schema bazei, Mac-ul se repornește imediat după ce Azure a pornit pe codul nou (`scripts/sentiq.sh restart`), altfel ține joburile cu codul vechi.
+
 ## 6. Domeniul
 
 1. Aplicația → **Custom domains → Add custom domain**.

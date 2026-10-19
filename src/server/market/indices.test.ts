@@ -248,7 +248,7 @@ describe('IndexData with CNBC (FD-INDEXINTRA)', () => {
 
   it('through StockData: 1h candles named CNBC, the bar of the hour still open', async () => {
     const s = new StockData({ key: async () => null, nasdaq: fakeNasdaq().n, cboe: fakeCboe().c, cnbc: fakeCnbc().c, now: () => NOW });
-    const r = await s.candles('^SPX', '1h', 50);
+    const r = await s.candles('^SPX', '1h', 50, 1);
     expect(r).toMatchObject({ exchange: 'cnbc', symbol: '^SPX', tf: '1h' });
     expect(r.candles).toHaveLength(50);
     // NOW is 11:00 in New York: the 10:00 bar has just closed.
@@ -261,30 +261,30 @@ describe('StockData with indices', () => {
 
   it('serves daily and weekly from the fallback when CNBC is down, even with a Twelve Data key', async () => {
     const { s, cboe } = make();
-    expect(await s.timeframesFor('^SPX')).toEqual(['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '1d', '1w']);
-    expect(await s.timeframesFor('AAPL')).toContain('1h');
-    const d = await s.candles('^SPX', '1d', 100);
+    expect(await s.timeframesFor('^SPX', 1)).toEqual(['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '1d', '1w']);
+    expect(await s.timeframesFor('AAPL', 1)).toContain('1h');
+    const d = await s.candles('^SPX', '1d', 100, 1);
     expect(d).toMatchObject({ exchange: 'cboe', symbol: '^SPX', tf: '1d', pricePrecision: 2 });
     expect(d.candles).toHaveLength(100);
     expect(d.candles.at(-1)?.t).toBe(day('2026-10-14'));
     // The session's bar is still open.
     expect(d.lastClosedIndex).toBe(98);
-    const w = await s.candles('^spx', '1w', 50);
+    const w = await s.candles('^spx', '1w', 50, 1);
     expect(w.candles.length).toBeGreaterThan(40);
     expect(w.candles.length).toBeLessThanOrEqual(50);
     // 1d, 1w and the spark line came from one download.
     expect((await s.spark('^SPX')).closes).toHaveLength(60);
     expect(cboe.calls.daily).toBe(1);
-    await expect(s.candles('^SPX', '6h', 100)).rejects.toMatchObject({ code: 'UNSUPPORTED_TIMEFRAME', message: 'Indicii nu au 6h' });
+    await expect(s.candles('^SPX', '6h', 100, 1)).rejects.toMatchObject({ code: 'UNSUPPORTED_TIMEFRAME', message: 'Indicii nu au 6h' });
     // Intraday has no fallback: the reason is said.
-    await expect(s.candles('^SPX', '1h', 100)).rejects.toMatchObject({ code: 'EXCHANGE_ERROR', message: expect.stringMatching(/^Datele intraday ale indicilor nu sunt disponibile acum/) });
-    await expect(s.candles('^DAX', '1d', 100)).rejects.toMatchObject({ code: 'UNKNOWN_SYMBOL' });
+    await expect(s.candles('^SPX', '1h', 100, 1)).rejects.toMatchObject({ code: 'EXCHANGE_ERROR', message: expect.stringMatching(/^Datele intraday ale indicilor nu sunt disponibile acum/) });
+    await expect(s.candles('^DAX', '1d', 100, 1)).rejects.toMatchObject({ code: 'UNKNOWN_SYMBOL' });
   });
 
   it('quotes an index under its id; a source that fails with nothing loaded yet is an error', async () => {
     const { s } = make();
     expect(await s.quote('^SPX')).toMatchObject({ symbol: '^SPX', name: 'S&P 500', last: 7752.88 });
     const failing = make(fakeCboe({ fail: true })).s;
-    await expect(failing.candles('^SPX', '1d', 100)).rejects.toMatchObject({ code: 'EXCHANGE_ERROR' });
+    await expect(failing.candles('^SPX', '1d', 100, 1)).rejects.toMatchObject({ code: 'EXCHANGE_ERROR' });
   });
 });

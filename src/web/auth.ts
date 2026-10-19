@@ -1,11 +1,13 @@
 // Who is signed in (FD-USERS). One query, ['auth'], drives the whole app: no user → the sign-in screens.
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import type { AuthState, PublicUser } from '../shared/api-types.ts';
 import { api, newSessionEpoch } from './api.ts';
 
 /** Sent by the API client when the server answers 401 to a signed-in page (session ended elsewhere). */
 export const SIGNED_OUT_EVENT = 'sentiq:signed-out';
+/** Sent by the API client on 403 TWO_FACTOR_REQUIRED (FD-2FA): the auth state is read again, the setup shows. */
+export const TWO_FACTOR_EVENT = 'sentiq:two-factor-required';
 
 export const AUTH_KEY = ['auth'] as const;
 /** The account requests waiting for the admin (FD-INVITE §1): the Users page and the account menu share it. */
@@ -33,6 +35,8 @@ export function useAuthChange() {
   return useCallback(
     (user: PublicUser | null) => {
       newSessionEpoch();
+      // The recovery codes of a setup never outlive the account they belong to on this screen.
+      endEnrolment();
       const prev = qc.getQueryData<AuthState>(AUTH_KEY);
       qc.removeQueries({ predicate: (q) => q.queryKey[0] !== AUTH_KEY[0] });
       if (prev) qc.setQueryData<AuthState>(AUTH_KEY, { ...prev, user, setupNeeded: user ? false : prev.setupNeeded, setupHere: user ? false : prev.setupHere });
@@ -40,6 +44,37 @@ export function useAuthChange() {
     },
     [qc],
   );
+}
+
+/**
+ * FD-2FA §1: a two-factor setup just finished. Its recovery codes stay on screen (with the account as it is now)
+ * until the user says they are kept, even when the auth state is read again meanwhile and already has two-factor on.
+ */
+export interface Enrolment {
+  codes: string[];
+  user: PublicUser;
+}
+let enrolment: Enrolment | null = null;
+const enrolmentListeners = new Set<() => void>();
+const tellEnrolment = () => {
+  for (const l of enrolmentListeners) l();
+};
+export function holdEnrolment(e: Enrolment): void {
+  enrolment = e;
+  tellEnrolment();
+}
+export function endEnrolment(): void {
+  if (!enrolment) return;
+  enrolment = null;
+  tellEnrolment();
+}
+const subscribeEnrolment = (l: () => void) => {
+  enrolmentListeners.add(l);
+  return () => void enrolmentListeners.delete(l);
+};
+const currentEnrolment = () => enrolment;
+export function useEnrolment(): Enrolment | null {
+  return useSyncExternalStore(subscribeEnrolment, currentEnrolment);
 }
 
 /** A path inside the app to go to after signing in (never another site: "//evil.com" or "/\\evil.com"). */

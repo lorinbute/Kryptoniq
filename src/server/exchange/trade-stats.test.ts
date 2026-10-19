@@ -1,7 +1,7 @@
 // FD-TRADESTATS: reading closed futures positions in the pieces each exchange allows, and counting them.
 import { describe, expect, it } from 'vitest';
 import type { Position } from 'ccxt';
-import { fetchClosedPositions, periodStart, settleOf, STATS_WINDOW_MS, summarizeClosed } from './trade-stats.ts';
+import { fetchClosedPositions, periodStart, settleOf, STATS_WINDOW_MS, summarizeClosed, summarizeResults } from './trade-stats.ts';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -57,6 +57,11 @@ describe('counting them', () => {
     expect(summarizeClosed([{ ...pos('g', 1, 5), info: { netProfit: '4.2' } } as unknown as Position], () => null).net).toBeCloseTo(4.2, 6);
     expect(settleOf(pos('x', 1, 1, 'BTC/USDT'))).toBe('USDT');
     expect(settleOf(pos('x', 1, 1, 'XBT/USD:XBT'))).toBe('XBT');
+  });
+
+  it('counts a broker\'s results (FD-BROKERSTATS): a result without a rate is counted, not summed', () => {
+    expect(summarizeResults([{ pnl: 5, net: 4.5 }, { pnl: -2, net: -1.8 }, { pnl: 0, net: 0 }, { pnl: 7, net: null }])).toEqual({ wins: 2, losses: 1, breakeven: 1, successRate: 66.7, net: 2.7, netPartial: true });
+    expect(summarizeResults([])).toEqual({ wins: 0, losses: 0, breakeven: 0, successRate: null, net: 0, netPartial: false });
   });
 
   it('starts "today" at midnight in the user\'s time zone', () => {

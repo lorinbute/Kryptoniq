@@ -25,4 +25,14 @@ describe('api client and the change of user (FD-USERS §10)', () => {
     await expect(api.post('/api/auth/login/2fa', { code: '1' })).rejects.toMatchObject({ code: 'LOGIN_EXPIRED' });
     expect(events).toEqual(['sentiq:signed-out']);
   });
+
+  it('tells the app when the account still has to set up two-factor (403 TWO_FACTOR_REQUIRED, FD-2FA)', async () => {
+    const events: string[] = [];
+    vi.stubGlobal('window', { dispatchEvent: (e: Event) => events.push(e.type) });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":{"code":"TWO_FACTOR_REQUIRED","message":"Configurează mai întâi autentificarea în doi pași."}}', { status: 403 })));
+    await expect(api.get('/api/watchlist')).rejects.toMatchObject({ status: 403, code: 'TWO_FACTOR_REQUIRED' });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":{"code":"FORBIDDEN","message":"Doar adminul"}}', { status: 403 })));
+    await expect(api.get('/api/health')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(events).toEqual(['sentiq:two-factor-required']);
+  });
 });

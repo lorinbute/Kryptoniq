@@ -96,10 +96,31 @@ export interface ClosedSummary {
   breakeven: number;
   /** Wins out of wins + losses, in percent; null without either. */
   successRate: number | null;
-  /** In dollars. */
+  /** In dollars (a broker: in the account's currency). */
   net: number;
-  /** Some results settled in a coin without a price: counted, but not in `net`. */
+  /** Some results could not be converted (a coin without a price, a currency without a rate): counted, but not in `net`. */
   netPartial: boolean;
+}
+
+/**
+ * The counts of closed trades (FD-TRADESTATS, FD-BROKERSTATS): `pnl` decides win / loss / break-even, `net` is the
+ * same result in the currency of the sum (null: counted, not summed).
+ */
+export function summarizeResults(results: { pnl: number; net: number | null }[]): ClosedSummary {
+  let wins = 0;
+  let losses = 0;
+  let breakeven = 0;
+  let net = 0;
+  let netPartial = false;
+  for (const r of results) {
+    if (!Number.isFinite(r.pnl)) continue;
+    if (r.pnl > 0) wins++;
+    else if (r.pnl < 0) losses++;
+    else breakeven++;
+    if (r.net === null || !Number.isFinite(r.net)) netPartial = true;
+    else net += r.net;
+  }
+  return { wins, losses, breakeven, successRate: wins + losses ? Math.round((wins / (wins + losses)) * 1000) / 10 : null, net, netPartial };
 }
 
 /**
@@ -115,23 +136,14 @@ export function netResult(p: Position): number {
 
 /** `price(asset)`: dollars per unit of a settlement coin (stablecoins are 1), or null when unknown. */
 export function summarizeClosed(positions: Position[], price: (asset: string) => number | null): ClosedSummary {
-  let wins = 0;
-  let losses = 0;
-  let breakeven = 0;
-  let net = 0;
-  let netPartial = false;
-  for (const p of positions) {
-    const pnl = netResult(p);
-    if (!Number.isFinite(pnl)) continue;
-    if (pnl > 0) wins++;
-    else if (pnl < 0) losses++;
-    else breakeven++;
-    const settle = settleOf(p);
-    const rate = STABLES.has(settle) ? 1 : price(settle);
-    if (rate === null) netPartial = true;
-    else net += pnl * rate;
-  }
-  return { wins, losses, breakeven, successRate: wins + losses ? Math.round((wins / (wins + losses)) * 1000) / 10 : null, net, netPartial };
+  return summarizeResults(
+    positions.map((p) => {
+      const pnl = netResult(p);
+      const settle = settleOf(p);
+      const rate = STABLES.has(settle) ? 1 : price(settle);
+      return { pnl, net: rate === null ? null : pnl * rate };
+    }),
+  );
 }
 
 /** The coins (not stablecoins) the results settle in, for their prices. */

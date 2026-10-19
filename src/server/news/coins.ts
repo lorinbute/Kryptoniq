@@ -1,4 +1,5 @@
-// Coin detection in headlines (docs/technical-design.md §5.5).
+// Coin detection in headlines (docs/technical-design.md §5.5), and the companies of the filter indices (FD-INDEXNEWS).
+import { COMPANY_TAG, memberTag, type FilterIndexId } from '../../shared/stock-indices.ts';
 
 export interface CoinEntry {
   /** Ticker, upper case (e.g. BTC). */
@@ -28,6 +29,23 @@ export const SYMBOL_BLACKLIST = new Set([
  * SPX6900 token). Never a coin unless the user has it in the watchlist (FD-SENTIQ §4.4).
  */
 export const INDEX_TICKERS = new Set(['SPX', 'SPY', 'NDX', 'IUXX', 'NQ', 'ES', 'YM', 'VIX', 'DJI', 'DJIA', 'DOWI', 'DOW', 'RUT', 'COMP', 'IXIC', 'DXY', 'TNX', 'GSPC', 'QQQ']);
+
+/**
+ * Tickers of index members that are also common acronyms or words in capitals (FD-INDEXNEWS §4): never matched bare,
+ * only as "$X" or "(NYSE: X)". Members' tickers of one or two letters are never matched bare either.
+ */
+export const MEMBER_TICKER_BLACKLIST = new Set([
+  'USB', 'PSA', 'REG', 'DOC', 'GEN', 'AMP', 'CAT', 'MAR', 'MET', 'TAP', 'POOL', 'BALL', 'COST', 'FAST', 'TECH', 'DAY', 'LUV', 'HAL', 'HON',
+  'HUM', 'KIM', 'LEN', 'LIN', 'MAS', 'MOS', 'TEL', 'TER', 'WAT', 'ROL', 'ROP', 'PEG', 'EQT', 'PTC', 'APP', 'ARM', 'FIX', 'NOW', 'KEY', 'LOW',
+  'HAS', 'ARE', 'ALL', 'ICE', 'WELL', 'CPT', 'DOW', 'EXE', 'FOX', 'SPG', 'STE', 'TRI', 'COIN', 'HOOD', 'DASH', 'PODD', 'CASY', 'ODFL', 'SNA',
+]);
+
+/** The companies of the filter indices and every US-listed share (FD-INDEXNEWS §4), for the tagging detector. */
+export interface MemberIndex {
+  byTicker: Map<string, { aliases: string[]; indices: FilterIndexId[] }>;
+  /** Named only explicitly ("$XYZ", "NYSE: XYZ"). */
+  listed: Set<string>;
+}
 
 /** Names that are ordinary English words; matched only through their ticker unless the user adds them as aliases. */
 export const AMBIGUOUS_NAMES = new Set([
@@ -120,6 +138,10 @@ export class CoinDetector {
   private readonly userSymbols: Set<string>;
   /** Watchlist stocks (FD-SENTIQ §4.4): "$AAPL" and "(NASDAQ: AAPL)" always count, a bare "AAPL" like any ticker. */
   private readonly stockSymbols: Set<string>;
+  /** FD-INDEXNEWS: the index members and the listed shares (explicit forms), and the members matched bare. */
+  private readonly members: MemberIndex | null;
+  private readonly explicitStocks: Set<string>;
+  private readonly bareMembers: Set<string>;
 
   /**
    * `stocks`: watchlist stocks → their aliases (company names). These are proper nouns, matched in their own
@@ -127,13 +149,14 @@ export class CoinDetector {
    * `indices`: watchlist indices (FD-INDICES) by id ("^SPX") → their aliases ("S&P 500", "SPX"), matched the same way.
    * Added last, so an index's alias wins over a coin's name or alias ("SPX" is also SPX6900's ticker).
    */
-  constructor(entries: CoinEntry[], userAliases: Record<string, string[]> = {}, stocks: Record<string, string[]> = {}, indices: Record<string, string[]> = {}) {
+  constructor(entries: CoinEntry[], userAliases: Record<string, string[]> = {}, stocks: Record<string, string[]> = {}, indices: Record<string, string[]> = {}, members: MemberIndex | null = null) {
     const names = new Map<string, NameDef>(); // lower-case name → definition
     const symbols = new Set<string>();
     const add = (symbol: string, raw: string, force = false, company = false) => {
       const caseSensitive = raw.startsWith('=');
       const n = (caseSensitive ? raw.slice(1) : raw).trim();
-      if (n.length < 3) return;
+      // Two characters only for a company with a digit ("3M"): never a word.
+      if (n.length < 3 && !(company && n.length === 2 && /\d/.test(n))) return;
       const lower = n.toLowerCase();
       if (!force && AMBIGUOUS_NAMES.has(lower)) return;
       if (!names.has(lower) || force) names.set(lower, company ? { symbol, name: n, caseSensitive: true, titleCase: true } : { symbol, name: n, caseSensitive: caseSensitive && !force });
@@ -147,6 +170,8 @@ export class CoinDetector {
       if (/^[A-Z0-9]{2,10}$/.test(sym)) symbols.add(sym);
       for (const name of e.names) if (/\s/.test(name.trim())) add(sym, name.replace(/^=/, ''));
     }
+    // Before the user's own aliases and stocks, so those win a name both have.
+    if (members) for (const [sym, m] of members.byTicker) for (const a of m.aliases) add(sym, a, true, true);
     for (const [sym, aliases] of Object.entries(userAliases)) {
       const s = sym.toUpperCase();
       symbols.add(s);
@@ -155,6 +180,9 @@ export class CoinDetector {
     for (const [sym, aliases] of Object.entries(stocks)) for (const a of aliases) add(sym.toUpperCase(), a.replace(/^=/, ''), true, true);
     for (const [id, aliases] of Object.entries(indices)) for (const a of aliases) add(id, a.replace(/^=/, ''), true, true);
     this.stockSymbols = new Set(Object.keys(stocks).map((s) => s.toUpperCase()));
+    this.members = members;
+    this.explicitStocks = new Set([...this.stockSymbols, ...(members ? [...members.byTicker.keys(), ...members.listed] : [])]);
+    this.bareMembers = new Set(members ? [...members.byTicker.keys()].filter((t) => t.length >= 3 && !SYMBOL_BLACKLIST.has(t) && !MEMBER_TICKER_BLACKLIST.has(t)) : []);
     this.symbols = symbols;
     const bounded = (alt: string) => `(?<![\\p{L}\\p{N}])(?:${alt})(?![\\p{L}\\p{N}])`;
     this.nameMatchers = [...names.values()]
@@ -189,19 +217,22 @@ export class CoinDetector {
       const sym = (r[1] as string).toUpperCase();
       if (this.symbols.has(sym) && (!INDEX_TICKERS.has(sym) || this.userSymbols.has(sym))) found.add(sym);
     }
-    if (this.stockSymbols.size) {
+    if (this.explicitStocks.size) {
       // $F, $BRK.B and "(NYSE: F)" name a stock without doubt, even with one letter.
       for (const r of text.matchAll(/\$([A-Za-z][A-Za-z0-9]{0,9}(?:[.-][A-Za-z])?)(?![A-Za-z0-9])/g)) {
-        const sym = (r[1] as string).toUpperCase();
-        if (this.stockSymbols.has(sym)) found.add(sym);
+        const sym = (r[1] as string).toUpperCase().replace('-', '.');
+        if (this.explicitStocks.has(sym)) found.add(sym);
       }
-      for (const r of text.matchAll(EXCHANGE_TICKER)) if (this.stockSymbols.has(r[1] as string)) found.add(r[1] as string);
+      for (const r of text.matchAll(EXCHANGE_TICKER)) {
+        const sym = (r[1] as string).replace('-', '.');
+        if (this.explicitStocks.has(sym)) found.add(sym);
+      }
     }
     // 3) bare upper-case tickers with word boundaries — skipped for ALL-CAPS text ("JUST IN: …"),
     //    where every upper-case word would look like a ticker.
     const letters = text.replace(/[^\p{L}]/gu, '');
     const upper = letters.replace(/[^\p{Lu}]/gu, '').length;
-    if (letters.length >= 12 && upper / letters.length > 0.6) return [...found].sort();
+    if (letters.length >= 12 && upper / letters.length > 0.6) return [...this.withMarkers(found)].sort();
     for (const r of text.matchAll(/(?<![A-Za-z0-9$])([A-Z][A-Z0-9]{1,9})(?![A-Za-z0-9])/g)) {
       const sym = r[1] as string;
       const s = r.index ?? 0;
@@ -215,9 +246,23 @@ export class CoinDetector {
     for (const r of text.matchAll(/(?<![A-Za-z0-9$.])([A-Z][A-Z0-9]{1,9}(?:\.[A-Z])?)(?![A-Za-z0-9])/g)) {
       const sym = r[1] as string;
       const s = r.index ?? 0;
-      if (!this.stockSymbols.has(sym) || SYMBOL_BLACKLIST.has(sym) || overlaps(s, s + sym.length)) continue;
+      if (!(this.stockSymbols.has(sym) || this.bareMembers.has(sym)) || SYMBOL_BLACKLIST.has(sym) || overlaps(s, s + sym.length)) continue;
       found.add(sym);
     }
-    return [...found].sort();
+    return [...this.withMarkers(found)].sort();
+  }
+
+  /** FD-INDEXNEWS: "#CO" for a company named (a member, a listed share, a stock in the favourites), "#NDX" … per index. */
+  private withMarkers(found: Set<string>): Set<string> {
+    if (!this.members) return found;
+    const out = new Set(found);
+    for (const sym of found) {
+      const m = this.members.byTicker.get(sym);
+      if (m) {
+        out.add(COMPANY_TAG);
+        for (const id of m.indices) out.add(memberTag(id));
+      } else if (this.stockSymbols.has(sym) || this.members.listed.has(sym)) out.add(COMPANY_TAG);
+    }
+    return out;
   }
 }

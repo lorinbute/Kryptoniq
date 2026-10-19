@@ -30,6 +30,8 @@ const app = await buildApp(ctx);
 // scratch directory: a session counts only for an account that can sign in).
 if (await ctx.users.setupNeeded()) await ctx.users.setupAdmin({ email: 'smoke@example.com', password: 'Smoke-password-1' });
 const adminId = (await ctx.users.admin()).id;
+// FD-2FA: an account without two-factor reaches only its setup; the scratch admin counts as set up.
+await ctx.db.run('UPDATE users SET totp_confirmed_at = COALESCE(totp_confirmed_at, ?) WHERE id = ?', [Date.now(), adminId]);
 const H = { host: '127.0.0.1:4317', cookie: `sentiq_session=${await ctx.sessions.create(adminId, 'full')}` };
 const t0 = Date.now();
 const ctxRes = await refreshContext(ctx.db); ctx.coins.invalidate();

@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { Activity, CalendarDays, ChartCandlestick, Gauge, Landmark, LogOut, Moon, Newspaper, Search, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Users, Wallet } from 'lucide-react';
 import type { AccountRequest, PublicUser } from '../shared/api-types.ts';
 import { api, errorMessage } from './api.ts';
-import { AUTH_PATHS, clearAfterSignIn, landAfterSignOut, REQUESTS_KEY, SIGNED_OUT_EVENT, useAuthChange, useAuthState } from './auth.ts';
-import { SignedInAuthRoutes, SignedOutApp } from './pages/Auth.tsx';
+import { AUTH_KEY, AUTH_PATHS, clearAfterSignIn, landAfterSignOut, REQUESTS_KEY, SIGNED_OUT_EVENT, TWO_FACTOR_EVENT, useAuthChange, useAuthState, useEnrolment } from './auth.ts';
+import { SignedInAuthRoutes, SignedOutApp, TwoFactorSetupPage } from './pages/Auth.tsx';
 import { fmtTime } from './format.ts';
 import { useNow, useTz } from './hooks.ts';
 import { Loading } from './components/ui.tsx';
@@ -17,6 +17,7 @@ import { ThemeToggle } from './components/ThemeToggle.tsx';
 import { setTheme, useTheme } from './theme.ts';
 import { EXIT_FULLSCREEN_EVENT } from './chart/fullscreen.ts';
 import { isImportFailure } from './stale.ts';
+import { useScrollLock } from './scroll-lock.ts';
 import { TodayPage } from './pages/Today.tsx';
 
 const NewsPage = lazy(() => import('./pages/News.tsx'));
@@ -270,12 +271,20 @@ export function App() {
   const auth = useAuthState();
   const change = useAuthChange();
   const location = useLocation();
+  const qc = useQueryClient();
+  const enrolment = useEnrolment();
   useEffect(() => {
     // A 401 from any request: the session ended elsewhere (signed out everywhere, disabled, expired).
     const onSignedOut = () => change(null);
+    // A 403 TWO_FACTOR_REQUIRED (FD-2FA): the account has no two-factor; read again, the auth state shows the setup.
+    const onTwoFactor = () => void qc.invalidateQueries({ queryKey: AUTH_KEY });
     window.addEventListener(SIGNED_OUT_EVENT, onSignedOut);
-    return () => window.removeEventListener(SIGNED_OUT_EVENT, onSignedOut);
-  }, [change]);
+    window.addEventListener(TWO_FACTOR_EVENT, onTwoFactor);
+    return () => {
+      window.removeEventListener(SIGNED_OUT_EVENT, onSignedOut);
+      window.removeEventListener(TWO_FACTOR_EVENT, onTwoFactor);
+    };
+  }, [change, qc]);
   if (!auth.data) {
     if (auth.isError) {
       return (
@@ -295,12 +304,15 @@ export function App() {
   }
   const user = auth.data.user;
   if (!user) return <SignedOutApp state={auth.data} />;
+  // FD-2FA: nothing opens before two-factor is set up, and its recovery codes stay until they are kept.
+  if (!user.twoFactor || enrolment) return <TwoFactorSetupPage user={user} />;
   if (AUTH_PATHS.includes(location.pathname)) return <SignedInAuthRoutes state={auth.data} />;
   return <SignedInApp user={user} />;
 }
 
 /** The summary window could not be shown (e.g. its code changed under an old tab): say so in a window of its own. */
 function SummaryFailed({ error, onClose }: { error: Error; onClose: () => void }) {
+  useScrollLock();
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-scrim p-4 pt-[12vh] backdrop-blur-sm"

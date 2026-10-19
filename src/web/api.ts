@@ -45,6 +45,8 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
     const err = (json as { error?: { code?: string; message?: string; details?: unknown; suggestions?: string[] } } | null)?.error;
     // The session ended (signed out elsewhere, disabled, expired): the app goes back to the sign-in screen.
     if (res.status === 401 && err?.code === 'AUTH_REQUIRED') window.dispatchEvent(new Event('sentiq:signed-out'));
+    // The account has no two-factor (FD-2FA; e.g. a tab older than the auth state): the app shows the setup.
+    if (res.status === 403 && err?.code === 'TWO_FACTOR_REQUIRED') window.dispatchEvent(new Event('sentiq:two-factor-required'));
     throw new ApiError(res.status, err?.code ?? 'HTTP', err?.message ?? `HTTP ${res.status}`, err?.details, err?.suggestions ?? []);
   }
   return json as T;

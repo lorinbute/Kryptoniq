@@ -11,6 +11,7 @@ import { plainSymbol, searchIndices } from '../../shared/indices.ts';
 import { api, qs } from '../api.ts';
 import { useMarketSource, useWatchlist } from '../hooks.ts';
 import { CoinLogo } from './icons.tsx';
+import { useScrollLock } from '../scroll-lock.ts';
 
 export interface PaletteLink {
   to: string;
@@ -127,6 +128,8 @@ export function CommandPalette({ open, onClose, pages }: { open: boolean; onClos
       opener?.focus?.();
     };
   }, [open, onClose]);
+  // FD-SCROLLLOCK: the page behind the search stays still.
+  useScrollLock(open);
 
   if (!open) return null;
 
@@ -176,7 +179,7 @@ export function CommandPalette({ open, onClose, pages }: { open: boolean; onClos
           />
           <kbd className="num shrink-0 rounded-md border border-line-strong px-1.5 py-0.5 text-[11px] text-faint">Esc</kbd>
         </div>
-        <ul id={listId} role="listbox" aria-label="Rezultate" className="max-h-[50vh] overflow-y-auto p-2">
+        <ul id={listId} role="listbox" aria-label="Rezultate" className="max-h-[50vh] overflow-y-auto overscroll-contain p-2">
           {items.length === 0 && <li className="px-3 py-6 text-center text-[13.5px] text-faint">Niciun rezultat</li>}
           {items.map((it, i) => {
             const header = it.group !== lastGroup;

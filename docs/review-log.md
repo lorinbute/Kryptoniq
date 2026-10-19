@@ -1418,3 +1418,929 @@ Recitite reparațiile din runda 34 și FD / TD / ghidul față de cod. Verificat
 
 ## Publicarea FD-TDPLAN + FD-INDEXINTRA (14 oct 2026)
 Azure: deploy `19c474cd`, codul nou pornit la 18:26:15 UTC, fără oprire. Mac: repornit la 21:26 ora României; ține joburile și a citit planul cheii reale: „twelvedata: plan basic, 8 credits a minute, 800 a day” (înainte de upgrade). Niciun lacăt rămas.
+
+# FD-AIKEYS + FD-TDKEYS (16–17 oct 2026)
+
+Domeniu (tot codul nou și impactul lui; fiecare rundă îl recitește întreg):
+- server: `ai/` (nou: `types.ts`, `http.ts`, `openai.ts`, `gemini.ts`, `anthropic.ts`, `models.ts`, `service.ts`, `usage.ts`), `sentiment/ai-scorer.ts` (nou), `sentiment/service.ts`, `sentiment/daily.ts`, `news/query.ts`, `news/ingest.ts`, `summary/service.ts`, `summary/context.ts`, `settings.ts` (cheile personale în `user_keys`, mutările de la pornire), `db/schema.ts` (migrarea 3), `context.ts`, `http/routes.ts`, `http/auth.ts`, `http/auth-routes.ts`, `http/app.ts`, `jobs/register.ts`, `market/stocks.ts` (`StockData` și `CreditBudget` per utilizator), `scanner/scanner.ts`;
+- comune: `shared/ai.ts` (nou), `shared/settings.ts`, `shared/api-types.ts`;
+- interfață: `components/AiSettings.tsx` și `components/StockDataSettings.tsx` (noi), `Settings.tsx`, `SettingsAdmin.tsx`, `DaySummary.tsx`, `News.tsx`, `Health.tsx`, `Charts.tsx`;
+- teste: `ai/providers.test.ts`, `ai/service.test.ts` (noi), `ai/usage.test.ts`, `sentiment.test.ts`, `impact.test.ts`, `summary.test.ts`, `server.test.ts`, `users.test.ts`, `stocks.test.ts`, `indices.test.ts`, `scanner.test.ts`; FD / TD, ghidul, README.
+
+Cercetare: modelele curente OpenAI și Gemini (16 oct 2026; ID-uri retrase în octombrie → lista citită din cheie), Responses API (JSON Schema strict, `store: false`), `generateContent` (`responseJsonSchema`, `thinkingLevel`), erorile fiecărui furnizor; Twelve Data (Basic 8 / minut, 800 / zi, `/api_usage`, atribuirea).
+
+Verificat înainte de review: 456 de teste pe Azure SQL; Chrome pe o schemă de test cu furnizori simulați (adminul cu cheia Claude mutată, alt utilizator cu ChatGPT; 1280 și 390 px). Verificarea a prins deja ordinea mutării la pornire (reparată, cu test).
+
+## Runda 36 — 4 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `AiService.setKey` | după salvare, `forget` ștergea și lista de modele tocmai citită: furnizorul era întrebat din nou la deschiderea listei | se uită doar alegerea (`configs`); lista rămâne, legată de amprenta cheii |
+| 2 | `CreditBudget` per utilizator | bugetul unui utilizator, făcut la prima cerere, răspundea la `/api/stocks/info` și la primele cereri înainte să-și citească planul și consumul din bază („Basic (presupus)”, limita zilnică neverificată) | `TwelveDataClient.get` și ruta așteaptă `budget.ready` |
+| 3 | TD-AIKEYS / PROGRESS | numele vechi al tabelei (`user_ai_keys`) | `user_keys` |
+| 4 | TD-AIKEYS | spunea că mutarea AI rulează „după celelalte migrări de setări”; codul (corect) o rulează înaintea lui `migrateMarketData` | TD corectat, cu motivul |
+
+Recitite fără alte probleme: SQL-ul (parametrii `?` / `@` nu se amestecă; ordinea parametrilor la `LEFT JOIN … a.user_id = ?` înaintea `WHERE` în indice, știri și contextul Rezumatului), migrarea 3 (cascadele din `users` și `news`), mutările de la pornire (idempotente, în tranzacții), cheile (doar hint-ul, doar pentru proprietar; nimic în log-uri sau în mesajele de eroare), clienții (reîncercări doar pe erori trecătoare, abandonul apelantului, timeout-ul neîncercat din nou), nicio buclă care plătește de două ori același lot (refuz / răspuns necitit → rând fără scor), cache-urile (30 s pentru alegere, scorer refăcut la altă cheie / model), scanner-ul (rândul acțiunii cu cheie e al utilizatorului), scripturile (`tsc` curat).
+
+## Runda 37 — 6 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `PUT /api/settings` | o schimbare de model / furnizor uita și listele de modele ale cheilor: panoul cerea din nou lista de la furnizor la fiecare schimbare | `AiService.forgetChoice` (doar alegerea); `forget` rămâne pentru ștergerea utilizatorului |
+| 2 | Starea scorării AI | eroarea și pauza stăteau în memoria instanței cu joburile: cu pagina servită de cealaltă instanță (Mac / Azure), panoul nu arăta niciodată o cheie refuzată | starea se scrie în `market_cache` (`ai:scorer:<userId>`, legată de furnizor / model / cheie), în ordine, așteptată la sfârșitul rundei; `aiStatus` o citește; ștearsă cu utilizatorul; test cu două instanțe |
+| 3 | `settings.ts` | `secret()` rămăsese nefolosit | scos |
+| 4 | `settings.ts` | comentariul lui `viewFor` spunea că hint-urile cheilor sunt doar ale adminului | corectat (cheile proprii, pentru proprietar; emailul, pentru admin) |
+| 5 | `ai/service.test.ts` | o variabilă nefolosită | scoasă (`tsc --noUnusedLocals` curat pe fișierele atinse) |
+| 6 | TD-AIKEYS | riscul nenotat: Google numește `generateContent` „Legacy” (recomandă Interactions API) | notat, cu calea de trecere; `thinkingLevel: "low"` confirmat în ghidul oficial Gemini 3 |
+
+## Runda 38 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | FD-TDKEYS / TD-TDKEYS / ghidul | spuneau că o cheie Twelve Data nouă „începe ziua de la zero”; codul (corect) o verifică pe un buget al ei și pornește de la cererile ei (verificarea, planul) | textele corectate (și `reset(spent)` descris cu așteptarea primei citiri) |
+| 2 | Teste | TD-TDKEYS promitea un test al scanner-ului cu și fără cheie, care lipsea | test nou: trei utilizatori, doi cu cheie (rândul fiecăruia, cu cheia lui), unul fără (zilnicul comun); cheia ștearsă → rândul comun, fără cerere nouă |
+
+Recitite fără alte probleme: `ai/http.ts` (abandonul în timpul așteptării dintre reîncercări, limita de mărime), scorer-ul și starea lui (scrierile în ordine; o eroare permanentă la repornirea instanței cu joburile: o singură cerere refuzată, gratuită), retenția (scorurile AI pleacă odată cu știrile; istoricul zilnic nu se taie nici pentru cel comun), FD-AIKEYS față de cod (textele panoului, valorile implicite, tabelul de cazuri limită), scripturile. `tsc` curat (și cu `--noUnusedLocals` pe fișierele atinse), build curat, 458 de teste pe Azure SQL.
+
+## Runda 39 — 0 probleme
+Recitit tot domeniul (cele două funcționalități și impactul lor): `shared/ai.ts` (motoarele, modelele implicite, `effectiveModel`), migrarea 3 (cascadele: niciun drum dublu), rutele (CSRF pe toate scrierile, cheile doar ale utilizatorului, `forgetChoice` / `forget`), log-urile și mesajele (nicio cheie), ștergerea și dezactivarea unui utilizator (chei, scoruri, istoric, consum, starea scorării, bugetul Twelve Data), scanner-ul (rândul cu cheie al fiecăruia, cel comun fără), interfața (panourile, textele fără gen gramatical pentru utilizatori, legăturile spre `/settings#ai` și `/settings#stock-data`).
+
+Verificat în Chrome pe o schemă de test, cu cheile vechi ale adminului (Claude cu motorul Claude și Sonnet; Twelve Data cu planul Grow și 37 de cereri azi): după pornire, adminul are ambele chei, cu modelul, scorul, planul și consumul mutate; Ana, fără chei: acțiunile pe 1d / 1w, cu mesajul și linkul spre setările ei, Rezumatul cere cheia; Stare sistem: 1 utilizator cu cheie Twelve Data, 1 cu scorul pe AI. `tsc` curat (și pe `scripts/`), build curat, 458 de teste pe Azure SQL (45 de fișiere).
+
+## Publicarea FD-AIKEYS + FD-TDKEYS (16 oct 2026)
+- Primul deploy (`9be0ed8b`, 22:08 UTC, cu aplicația pornită, ca pe B2 până acum): build întrerupt de o repornire a Kudu (~22:11); manifestul deja șters → aplicația nu a mai pornit (`Cannot find package 'mssql'`), blocată de Azure după pornirile eșuate. Site căzut 22:11–22:27 UTC. `az webapp deploy` a raportat totuși „completed successfully” (endpoint-ul lui de stare a dat timeout).
+- Reparat: aplicația oprită, lacătul `/home/site/locks/deployment` șters (niciun `npm` nu mai rula), aceeași arhivă publicată din nou (`d724277f`, build 22:20–22:23:29), `az webapp start`. Codul nou a pornit la 22:27:03 UTC: migrarea 3, „the Claude key and engine are now the admin's own”, „the Twelve Data key is now the admin's own”, „Sentiq running”; `/api/ping` 200.
+- Mac: preluase joburile cu codul vechi cât Azure era oprit; repornit pe codul nou la 22:27:59 UTC (ține joburile).
+- Verificat în bază: schema 3; nicio cheie globală rămasă; adminul are cheile Anthropic și Twelve Data, scorul pe Claude (`claude-opus-5-5`), 8.083 de scoruri Claude mutate, planul și consumul Twelve Data; după un minut: scorarea AI a adminului merge (35 de știri, tokenii înregistrați), rescorarea locală a celor 6.454 de știri din ultimele 4 zile avansează, joburile fără erori.
+- `deploy-azure.md`: publicarea doar cu aplicația oprită; capcanele urmăririi (Kudu, `complete` cu literă mică, Mac-ul la o schimbare de schemă).
+
+## Runda 40 — importanța cu sursa ei (18 oct 2026) — 0 probleme
+Recitite cele trei ramuri din „De ce acest scor?” (`News.tsx`): notă AI diferită de cuvinte-cheie (două valori, fiecare cu sursa), egală (o valoare, ambele surse), fără notă AI (doar cuvinte-cheie); motorul necunoscut tot „AI”; `1,5` formatat ca înainte; niciun test sau text din altă parte nu depindea de formularea veche (căutat în `src/` și `docs/`). Documentele (FD, TD-IMPACT §5, ghidul) spun la fel. `tsc` curat.
+
+# FD-2FA — autentificarea în doi pași, obligatorie (18 oct 2026)
+
+Domeniu (tot codul nou și impactul lui; fiecare rundă îl recitește întreg):
+- **server:**
+  - `auth/users.ts` (schimbarea aplicației, `confirmTwoFactor` → `'on'`; scoase `cancelTwoFactor` / `disableTwoFactor`);
+  - `auth/sessions.ts` (scos `destroyPending`), `auth/email.ts` (3 anunțuri);
+  - `http/auth.ts` (bariera `TWO_FACTOR_REQUIRED`);
+  - `http/auth-routes.ts` (activarea care intră în cont, `enable` cu sesiunile închise, `replace*`, resetarea de către admin);
+  - `db/schema.ts` (migrarea 4);
+- **scripturi:** `admin.ts`, `smoke.ts`;
+- **comune:** `shared/api-types.ts`;
+- **interfață:**
+  - `auth.ts` (depozitul configurării), `api.ts`, `App.tsx`;
+  - `pages/Auth.tsx` (`TwoFactorSetupPage`, activarea, prima parolă, `SignedInAuthRoutes`), `pages/Security.tsx`, `pages/Users.tsx`;
+  - `components/RecoveryCodes.tsx` și `components/TotpQr.tsx` (noi);
+- **teste:** `users.test.ts`, `server.test.ts`, `source.test.ts`, `summary.test.ts`, `api.test.ts`;
+- **documente:** FD / TD, ghidul, README.
+
+Cercetare:
+- OWASP MFA Cheat Sheet: al doilea factor pentru toți; reautentificare cu un factor existent la schimbare; anunț pe alt canal; resetare sigură.
+- Riscul înrolării după un login doar cu parola (Mandiant, APT29).
+- Baza de producție: 2 conturi, amândouă cu 2FA.
+
+Verificat înainte de review:
+- `tsc` curat;
+- 463 de teste pe Azure SQL (45 de fișiere);
+- Chrome pe o schemă de test:
+  - activarea → configurarea (cod greșit, apoi bun) → codurile (rămân și după recitirea stării) → Azi;
+  - Securitate → „Schimbă aplicația de autentificare” → QR nou → confirmat;
+  - Utilizatori („2FA neconfigurat”, „Resetează 2FA”);
+  - la 390 px, Bob (cont vechi fără 2FA): login → configurare (un link spre `/news` arată tot configurarea) → `/news`;
+  - fără erori în consolă.
+
+## Runda 41 — 4 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `auth-routes.ts`, `scripts/admin.ts` | comentariile de antet depășeau lățimea de rând a proiectului | rescrise pe mai multe rânduri |
+| 2 | `web/auth.ts` | `useEnrolment` dădea lui `useSyncExternalStore` o funcție de abonare nouă la fiecare randare (dezabonare și reabonare la fiecare randare) | abonarea și citirea, funcții stabile la nivel de modul |
+| 3 | `TwoFactorSetupPage` | „Cheie nouă” după o configurare terminată în alt tab arăta eroarea „deja activă”, în loc să deschidă aplicația (doar „Activează” o trata) | `TWO_FACTOR_ON` tratat în `run` pentru ambele acțiuni: starea se recitește, aplicația se deschide |
+| 4 | FD-2FA | butonul era numit „Cheie nouă” (pe ecran: „Am scanat pe alt telefon: cheie nouă”); un rând spunea „pagina se reîmprospătează” (o reîncărcare a paginii pierde codurile; e vorba de recitirea stării) | textele aliniate cu ecranul; lipsa lui „Renunță” la configurare, notată |
+
+Recitite fără alte probleme:
+- bariera (ordinea în hook, `HEAD` → `GET`, rutele publice, adminul fără 2FA);
+- schimbarea aplicației (pragul 0 pe secretul nou, cu motivul lui; aplicația veche până la confirmare; codurile de recuperare păstrate; `'none'` după terminare în alt tab);
+- sesiunile (cele deschise înainte de configurare se închid; resetarea închide tot);
+- emailurile (fără link sau cod; în fundal);
+- interfața (activarea → configurare → `/`; prima parolă; ținta de după login peste `/activate`; codurile păstrate până la „Intră în Sentiq”; evenimentul `TWO_FACTOR_REQUIRED`).
+
+## Runda 42 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | TD §11 (tabelul API) | „Contul meu” lista încă `2fa/cancel` și `2fa/disable` și nu spunea ce poate un cont fără 2FA | rutele de acum (`replace`, `replace/confirm`, `replace/cancel`) și bariera |
+| 2 | TD §3 (baza de date) | versiunile schemei se opreau la 2, iar tabelele FD-AIKEYS / FD-TDKEYS (`user_keys`, `news_ai_scores`, `ai_daily_sentiment`) lipseau din listă (rămas din publicarea anterioară) | versiunile 3 și 4; rândurile tabelelor; `totp_next_secret` la `users` |
+
+Recitite fără alte probleme:
+- rutele din afara `/api` (doar `index.html`): nimic nu ocolește bariera;
+- `UPDATE … SET totp_secret = totp_next_secret, totp_next_secret = NULL` (T-SQL folosește valorile de dinainte);
+- ordinea hook-urilor în `TwoFactorSetupPage` / `SignedInAuthRoutes` (toate înaintea primului `return`);
+- referințele rămase la comportamentul vechi (`welcome=1`, `Oprește 2FA`, `destroyPending`): doar în istoric și în testele care verifică că au dispărut.
+
+`tsc` curat (și pe `scripts/`, și cu `--noUnusedLocals` pe fișierele atinse), build curat.
+
+## Runda 43 — 4 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | FD-2FA §1 | „pagina închisă înainte de final: la următorul login…” era inexact: sesiunea (30 de zile) rămâne, deci ecranul revine la simpla redeschidere | „la următoarea deschidere… iar dacă între timp sesiunea s-a încheiat, după login” |
+| 2 | FD-2FA §6 | „o nouă «Schimbă…» începe de la capăt” lăsa de înțeles că butonul apare cât schimbarea e începută (ecranul arată atunci doar „Confirmă” / „Renunță”) | „după «Renunță», o nouă «Schimbă…»” |
+| 3 | FD-2FA §6, ghidul | ordinea recomandată după o configurare făcută de altcineva era greșită: cu resetarea 2FA înaintea parolei noi, cine are parola veche ar putea configura din nou primul | întâi parola nouă din „Am uitat parola” (linkul vine pe emailul titularului; închide sesiunile), apoi resetarea 2FA de către admin; motivul notat |
+| 4 | `auth/email.ts` | anunțurile „e activă” / „a fost schimbată” spuneau doar „scrie-i adminului”, fără primul pas sigur | „cere cât mai repede o parolă nouă din «Am uitat parola» (închide toate sesiunile), apoi scrie-i adminului”; FD §5 la fel |
+
+Recitite fără alte probleme: TD-2FA față de cod (bariera, `UserService`, rutele, emailurile, interfața, scripturile, testele promise), testele noi (timpul înghețat, IP-urile diferite pentru bugetele de login, bugetul contului resetat de fiecare succes).
+
+## Runda 44 — 5 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `ActivatePage` | pagina de activare nu spunea că urmează configurarea 2FA (persoana afla abia după parolă) | „…apoi configurezi autentificarea în doi pași (un cod de pe telefon).” |
+| 2 | `TwoFactorSetupPage` | un secret de înrolare care nu se poate decripta (altă cheie master) lăsa pașii fără cod QR și fără explicație | o notă cu butonul care face o cheie nouă (pornirea automată rămâne fără `restart`, ca două taburi să primească același secret) |
+| 3 | `Security.tsx` | o schimbare nouă a aplicației arăta eroarea rămasă de la cea dinainte (ex. „Nu e nicio schimbare începută” după o terminare în alt tab) | `confirm.reset()` la pornirea unei schimbări |
+| 4 | `Security.tsx` | codul scris rămânea în câmp după „Renunță” sau la o schimbare nouă | câmpul se golește |
+| 5 | `TwoFactorSetupPage` | un comentariu numea butonul „Cheie nouă” | reformulat |
+
+Recitite fără alte probleme: tipurile comune (`ActivateResult`, `TwoFactorEnabled`, `TwoFactorView.replacing`), pagina Utilizatori (coloana, confirmarea, butonul doar pentru conturile cu 2FA), `RecoveryCodes` / `TotpQr`.
+
+## Runda 45 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `ActivatePage` („Contul e activ”) | ecranul apare acum doar într-un browser deja în alt cont, iar butonul lui „Intră în cont” ducea în acel cont, nu în cel nou (și lead-ul „Contul e activ. Intră cu parola nouă.” al login-ului nu mai era atins de nicăieri) | „Ieși și intră cu …”: `logout`, apoi login-ul cu adresa completată și lead-ul lui; „Rămâi în contul de acum”; FD-2FA §1 și TD-2FA §6 la fel. Verificat în Chrome: browserul adminului → activarea Anei → „Ieși și intră cu ana@…” → login completat → configurarea |
+
+Recitit restul domeniului fără alte probleme (migrarea 4 pe schemele de test, `import-sqlite` cu coloana nouă nulabilă, întreținerea sesiunilor, scripturile).
+
+## Runda 46 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | FD-2FA §6, TD-2FA §2, `users.test.ts` | formulări cu gen gramatical pentru persoane, pe care proiectul le evită („titularul… emailul lui”, „rutele lui” pentru admin, „she / her” în comentariile noi ale testelor) | „persoana care deține contul… adresa contului”, „rutele de admin”, comentarii fără pronume |
+
+Recitite fără alte probleme: toate locurile care pornesc o sesiune (prima parolă, login, codul, passkey-ul, activarea) trec prin aceeași barieră; textele noi din interfață și din emailuri (fără gen, cu pașii corecți).
+
+## Runda 47 — 0 probleme
+Recitit tot domeniul, cu impactul lui:
+- **bariera:** hook-ul, rutele permise, toate intrările care pornesc o sesiune, rutele din afara `/api`;
+- **`UserService`:** înrolarea, schimbarea aplicației, resetarea;
+- **rutele:** activarea, `enable` cu sesiunile închise, `replace*`, resetarea de către admin, emailurile;
+- **scripturile;**
+- **interfața:**
+  - ecranul de configurare: QR, cheia, cod greșit, alt tab, lipsa QR-ului;
+  - codurile ținute până la „Intră în Sentiq”;
+  - ținta de după login;
+  - „Contul e activ” într-un browser cu alt cont;
+  - Securitate și Utilizatori;
+- **documentele:** FD-2FA / TD-2FA față de cod, ghidul, README, tabelul API și baza de date din TD.
+
+`tsc` curat (și pe `scripts/`, fără variabile nefolosite în fișierele atinse), build curat, 463 de teste pe Azure SQL (45 de fișiere).
+
+# FD-TRADING — ordine de tranzacționare din Sentiq (18 oct 2026)
+
+Domeniu (tot codul nou și impactul lui; fiecare rundă îl recitește întreg):
+- **server:**
+  - `exchange/trading/` (nou): `types.ts`, `crypto.ts`, `trading212.ts`, `etoro.ts`, `alpaca.ts`, `http.ts`, `rights.ts`, `service.ts`;
+  - `exchange/accounts.ts` (accesul de tranzacționare, permisiunile Coinbase, `invalidate`, `TradeRef`, `cancellable`, oprirea la „Testează”), `exchange/brokers.ts` (referințele);
+  - `auth/users.ts` (`stepUp`), `db/schema.ts` (migrarea 5), `context.ts`, `http/app.ts`, `http/routes.ts`, `http/auth-routes.ts`;
+- **comune:** `shared/trading.ts` (nou), `shared/providers.ts`;
+- **interfață:**
+  - `components/OrderTicket.tsx`, `components/TradingControls.tsx`, `components/Modal.tsx` (noi);
+  - `pages/Trades.tsx`, `pages/Charts.tsx`, `pages/Settings.tsx`, `components/AccountWizard.tsx`;
+- **teste:** `trading/crypto.test.ts`, `brokers.test.ts`, `service.test.ts` (noi), testul de siguranță din `server.test.ts`;
+- **documente:** FD / TD, ghidul, README, PROGRESS.
+
+Cercetare:
+- documentațiile oficiale Trading 212 (Orders), eToro (Trading Real / Demo, market orders), Alpaca (POST /v2/orders), IBKR (Web API: Gateway sau OAuth);
+- ccxt 4.5.85 (createOrder, stop-uri, TP / SL, levier, marjă, modul de poziție) pe cele 7 exchange-uri.
+
+Verificat înainte de review:
+- `tsc` curat;
+- 491 de teste pe Azure SQL (48 de fișiere);
+- Chrome pe o schemă de test, cu un exchange simulat:
+  - pornirea cu parola + 2FA;
+  - ordin nou → verificare → confirmare → rezultat;
+  - „Închide” pe o poziție;
+  - „Anulează”;
+  - jurnalul;
+  - „Tranzacționează” pe grafic;
+  - telefon 390 px.
+- Pe drum, verificarea a prins:
+  - o închidere reduce-only ar fi schimbat levierul;
+  - o cheie care primește retrageri după pornire rămânea pornită;
+  - textul direcției greu de citit pe butonul ales;
+  - piața și direcția modificabile la „Închide”;
+  - „Vinde” pe soldul „main” KuCoin.
+
+## Runda 48 — 4 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `TradingService.fromLog` | un rând rămas „în curs” după o repornire în timpul trimiterii bloca formularul pentru totdeauna („deja în curs de trimitere”) | după 2 minute, răspunsul e „trimiterea a fost întreruptă: nu știm sigur dacă a ajuns” (`UNKNOWN_OUTCOME`) |
+| 2 | `TradingService.cancel` | pe un cont KuCoin unificat, ordinele futures sunt listate cu cele spot: anularea lor se verifica pe piața spot (refuzată dacă tranzacționarea era pornită doar pentru futures) | piața se deduce din simbol (`…:USDT` → futures); la brokeri, `stock` |
+| 3 | Jurnalul | o cantitate scrisă ca valoare (USDT) rămânea în jurnal ca „Cantitate” | rândul primește cantitatea în activ și prețurile rotunjite ale ordinului verificat |
+| 4 | `TradingService.enable` | o cheie care nu poate tranzacționa nimic din ce Sentiq trimite pe acel exchange pornea cu o listă de piețe goală | refuzată, cu motivul |
+
+Recitite fără alte probleme:
+- prețul trimis cu ordinele la piață (ccxt îl folosește doar unde exchange-ul cere suma la o cumpărare la piață; ignorat la futures și la ordinele pe cantitate);
+- `availability` pe conturile KuCoin clasice / unificate;
+- detectarea modului hedge;
+- `etoro.ts` folosește acum `randomUUID` din `node:crypto`, ca restul codului.
+
+Teste noi pentru 1–3. FD §7 și TD §4 au acum rândurile pentru întrerupere, prețul Trading 212 și anularea pe contul unificat.
+
+## Runda 49 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `trading212.ts` | verificarea și trimiterea citeau fiecare rezumatul contului și pozițiile; Trading 212 le răspunde o dată la câteva secunde, deci trimiterea putea primi 429 chiar după verificare | citirile ținute 6 s în trader (păstrat per cont), uitate după un ordin sau o anulare; testul numără o singură citire a rezumatului |
+| 2 | `etoro.ts` | închiderea unei dețineri din mai multe poziții se oprea la prima eroare: pozițiile deja închise nu mai apăreau în rezultat, iar jurnalul spunea „eroare” | poziție cu poziție, cu rezultatul celor închise și motivul celor rămase; eroarea doar dacă nu se închide niciuna; test nou |
+
+Recitite fără alte probleme:
+- `http.ts` (o scriere fără răspuns e „necunoscută”, un GET doar refuzat);
+- `alpaca.ts` (simbolurile crypto, poziția fără „/”, 422 la anulare);
+- `rights.ts`;
+- pagina Tranzacții („Închide” / „Vinde” pe fiecare platformă, `cancellable`);
+- formularul în modul de închidere (TP / SL ascunse, câmpurile fixe);
+- Graficele (fără buton pe indici), expertul, Setările.
+
+## Runda 50 — 6 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `OrderTicket` | la eToro, levierul arăta „max 400×”, deși schema primește cel mult 125×, iar eToro are limite pe instrument | fără maxim afișat la eToro (îl verifică eToro); restul din piață / platformă |
+| 2 | FD §3 / §7 | promiteau un buton „Reîncearcă” pentru TP / SL-ul Binance refuzat după intrare; nu există | FD descrie ce se face: un ordin stop reduce-only în sens opus, din formular (posibil) sau din Binance |
+| 3 | `TradingService.place` | FD §7: o cheie refuzată de platformă la primul ordin primește „pașii platformei”; mesajul nu-i avea | pașii platformei adăugați la o eroare de permisiune; test nou |
+| 4 | FD §5 | „pe primul cont cu tranzacționare care are perechea”: codul ia primul exchange pornit, iar perechea se semnalează dacă lipsește | FD aliniat (contul și piața se schimbă din formular; X/USDT → X/USD sau X/USDC pe Kraken / Coinbase) |
+| 5 | TD §5 / §3 | lista de perechi „ținută 10 min” pe server (o ține doar pagina); ID-ul de client „pleacă și la platformă” peste tot (Coinbase își face singur ID-ul) | TD corectat |
+| 6 | Ghidul | jurnalul „sub ordinele contului” (e în josul paginii, cu pornirile și opririle) | corectat |
+
+Recitite fără alte probleme:
+- maparea ID-ului de client în ccxt (KuCoin `clientOid`, Kraken `cl_ord_id`, Bybit `orderLinkId`, OKX / Bitget / Binance), formatul de 32 de caractere hex acceptat de toate;
+- `reduceOnly` boolean la Binance futures;
+- textele noi fără gen pentru persoane;
+- ștergerea unui utilizator (jurnalul pleacă prin cheia străină), a unui cont (jurnalul rămâne), importul SQLite și resetarea schemelor de test cu tabelul nou.
+
+## Runda 51 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `AccountsService.refreshPermissions` / `test` | o recitire a permisiunilor fără rezultat (endpoint căzut chiar atunci) scria `NULL` peste lista știută: o cheie știută cu retrageri devenea „necunoscută” și tranzacționarea putea porni | o citire fără rezultat păstrează lista știută (la pornire și la „Testează”); test nou; FD §7 și TD §4 la fel |
+| 2 | Pagina Tranzacții | nota „cheia poate tranzacționa (…)” apărea pentru orice permisiune în plus față de citire (ex. „Earn”), nu doar pentru tranzacționare | „are permisiuni în plus față de citire (…); dacă poate tranzacționa…” |
+
+Recitite fără alte probleme:
+- diff-ul `accounts.ts` (vederea contului, accesul, comutatorul, `invalidate`);
+- „Închide” / „Vinde” pe fiecare platformă (pozițiile copiate eToro fără buton);
+- fără buton pe IBKR (motivul afișat);
+- „Pornește” pe o cheie cu retrageri: refuzat la server, cu nota deja vizibilă.
+
+## Runda 52 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `OrderTicket` | „valoare” (USDT / USD) aleasă pe un cont rămânea aleasă după trecerea pe un cont care primește doar cantități (Trading 212): ordinul era refuzat | unitatea folosită e cea aleasă doar dacă platforma o primește; altfel cantitatea în activ |
+| 2 | `OrderTicket` | la eToro, 25 / 50 / 100% pentru „Short” luau unitățile deținute (ca la o vânzare), deși un short se plătește din numerar | la eToro, procentele vin din numerar în ambele direcții |
+
+Recitite fără alte probleme:
+- schema formularului (regulile prețului, ale declanșării, ale marjei și ale levierului; levierul pe `stock` permis pentru eToro);
+- fereastra modală (blocată cât pleacă ordinul);
+- comutatorul și jurnalul;
+- cheia formularului (nouă la orice modificare, aceeași la retrimiterea aceluiași formular).
+
+## Runda 53 — 4 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `trading/types.ts` | `floorToStep` / `roundToStep` exportate, nefolosite (rotunjirea o face ccxt) | scoase |
+| 2 | FD §7 | „levier peste maxim: limitat la maxim în formular”; formularul nu-l limitează, verificarea îl refuză | FD aliniat (maximul afișat lângă câmp, refuzul la verificare) |
+| 3 | `trading212.ts` | FD §7: la un simbol de pe mai multe burse, confirmarea arată ISIN-ul / bursa; arăta doar numele | instrumentul din confirmare are numele, ISIN-ul și tickerul Trading 212 |
+| 4 | `alpaca.ts` | FD §7: un ordin la piață pe o piață închisă are avertisment și la Alpaca (se execută la deschidere); lipsea | avertisment pentru ordinele la piață pe acțiuni |
+
+Recitite fără alte probleme:
+- FD-TRADING §1–§8, punct cu punct, față de cod: valorile implicite, tipurile pe platformă, procentele, valabilitatea, eticheta DEMO, starea eToro citită după trimitere, jurnalul, limitele, mesajele de eroare;
+- `--noUnusedLocals` / `--noUnusedParameters` curat pe fișierele noi.
+
+## Runda 54 — 4 probleme (reparate, documentație)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | TD §2 | `OrderResult` avea în TD un câmp `unknown` care nu există (e una din stări) | stările listate |
+| 2 | TD §3 | `place(ticket, clientId)`; codul are `place(preview)` (ID-ul de client din cheia formularului) | TD corectat |
+| 3 | TD §3 | Alpaca: „închiderea: DELETE /v2/positions”; „Închide” trimite un ordin la piață în sens opus pe cantitatea poziției (același drum, cu confirmare) | TD corectat, plus 422 la anulare |
+| 4 | TD §8 | testele cu clasele ccxt reale erau trecute pentru toate cele 7 exchange-uri (sunt KuCoin, Bybit, Coinbase; restul pe clienți simulați); „închidere” la Alpaca | TD corectat |
+
+Recitit restul TD-TRADING față de cod fără alte probleme.
+
+## Runda 55 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `OrderTicket` (confirmarea) | o închidere reduce-only („Închide” pe un long) apărea ca „Direcție: Short”, ca și cum s-ar deschide un short | „Închidere (vânzare)” / „Închidere (cumpărare)” pentru reduce-only |
+
+Recitite fără alte probleme:
+- ghidul și README-ul față de cod (tabelul permisiunilor, regulile pe platformă, limita de 20 / minut);
+- ordinea hook-urilor în `OrderTicket` (toate înaintea primului `return`);
+- fluxul complet în Chrome pe codul curent: pornire, ordin, confirmare, „Închide”, „Anulează”, jurnal, „Tranzacționează” pe grafic; fără erori în consolă.
+
+## Runda 56 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `CcxtTrader` (KuCoin, cont unificat) | un ordin futures cu marjă isolated pe un cont UTA chema `setLeverage(…, { marginMode: 'isolated' })`, pe care ccxt 4.5 îl refuză (NotSupported): ordinul pica abia la trimitere, cu un mesaj tehnic | refuzat la verificare, cu „alege Cross”; închiderile reduce-only trec (nu schimbă levierul, iar ordinul UTA nu poartă marja); test nou; FD / TD / ghidul actualizate |
+
+Recitite fără alte probleme:
+- `createUtaOrderRequest` din ccxt: `marginMode` / `leverage` se trimit doar pe conturile clasice;
+- ultima rulare completă: 48 de fișiere, 492 de teste trecute.
+
+## Runda 57 — 8 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `CcxtTrader.isUta` | dacă citirea modului contului KuCoin (unificat / clasic) eșua, eroarea ccxt ieșea nemapată: un 500 generic în loc de mesajul exchange-ului | mapată prin `tradingErrorOf` (nimic trimis); se recitește la următoarea cerere; test |
+| 2 | `tradingErrorOf` (după trimitere) | un `BadResponse` sau o eroare din afara ccxt la citirea răspunsului devenea `REJECTED`: cheia formularului se elibera și același ordin, poate deja în carte, se putea retrimite | `UNKNOWN_OUTCOME`; test; TD |
+| 3 | `EtoroTrader` (închiderea mai multor poziții) | o poziție fără răspuns apărea la „NU s-au închis”; dacă nu se primea niciuna, se arunca prima eroare (poate un refuz), nu „necunoscut” | listată separat („nu știm sigur… verifică pe eToro”); fără nicio primire → `UNKNOWN_OUTCOME` dacă vreuna a rămas fără răspuns; test; TD |
+| 4 | `OrderTicket` (confirmarea) | după un „necunoscut”, „Înapoi” și un formular schimbat, eroarea veche rămânea și ascundea „Confirmă și trimite” | „Înapoi” golește eroarea trimiterii (același formular retrimis primește tot „necunoscut” de la server) |
+| 5 | `OrderTicket` | un refuz care a oprit tranzacționarea (cheia poate acum retrage) sau a găsit-o oprită nu reîmprospăta comutatorul paginii | la `PERMISSION` / `DISABLED` se recitesc conturile și capabilitățile |
+| 6 | `TradeJournal` | cantitatea și prețul apăreau brut (ex. 0.30000000000000004, cu punct) | `fmtNum(…, 8)`, ca restul paginii |
+| 7 | `Trades` | „Închide” (futures), „Vinde” (spot) și „Anulează” apăreau și pe piețele pentru care tranzacționarea nu e pornită (o cheie doar pentru spot): formularul spunea doar „niciun exchange”, anularea dădea eroare | afișate doar pe piețele pornite (piața ordinului citită ca pe server: un perpetuu e futures); FD |
+| 8 | `TradingControls` | două importuri din `lucide-react` | unul singur |
+
+Verificat:
+- fluxul în Chrome pe codul nou: pornire, ordin, confirmare, „Închide”, „Anulează”, jurnalul formatat, „Tranzacționează” pe grafic; fără erori în consolă;
+- `createUtaOrderRequest` / `handleTradeType` din ccxt pentru reduce-only pe UTA.
+
+## Runda 58 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `CcxtTrader` (Bitget, cont unificat) | ccxt 4.5 detectează singur contul unificat și trimite ordinul pe v3 cu parametrii brut: un ordin stop își pierdea prețul de declanșare (v3 nu are câmpul; ar fi putut pleca drept ordin obișnuit), marja pleca drept `cross` (v3 vrea `crossed`), `oneWayMode` pleca în plus, iar modul de poziție se citea de pe endpoint-ul clasic | contul unificat recunoscut din setările v3 (care dau și `holdMode`), transmis lui ccxt; stop și isolated la deschidere refuzate la verificare; marja `crossed` / `isolated`, fără `oneWayMode`, levierul fără marjă; o eroare de rețea nu mai e luată drept „clasic”; teste (inclusiv cu clasa reală ccxt `bitget`); FD / TD / ghidul |
+| 2 | `AlpacaTrader` | fracționat și pe sumă se refuzau la orice tip în afară de „la piață”, deși Alpaca le primește la piață, limită, stop și stop-limită, valabile o zi | doar regula „valabil o zi”; pe sumă cu limită, cantitatea la prețul limită; test; FD / ghidul |
+| 3 | `AlpacaTrader` | TP / SL (bracket) în afara orelor nu era refuzat înainte de trimitere (Alpaca: `extended_hours` trebuie să lipsească la bracket) | refuzat la verificare; test |
+
+Recitite fără alte probleme: `rights.ts`, `types.ts`, `accounts.ts` (vederea, accesul, comutatorul, permisiunile), rutele, `Charts.tsx` („Tranzacționează”).
+
+## Runda 59 — 4 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Portofoliul (`accounts.ts`), ordinele deschise | pe Binance, Bybit, OKX și Bitget nu se citeau ordinele futures și / sau cele stop (fiecare exchange le ține în liste separate): un ordin limită futures sau un stop trimis din Sentiq nu apărea la „Ordine deschise” și nu se putea anula, deși FD-TRADING §4 promite „Anulează” pe fiecare | `EXTRA_ORDER_READS` per exchange (Binance futures și algo, Bybit linear, OKX algo `trigger`, Bitget stop spot și futures), fiecare citire separat, tolerantă la o cheie fără futures; piața ordinului luată din simbol (repară și eticheta ordinelor futures ale contului unificat KuCoin, care nu se mai potriveau cu pozițiile pe grafic); teste; FD / TD |
+| 2 | Portofoliul (Bybit), lista simplă | clientul ccxt Bybit pornește pe linear: lista „spot” de ordine și tranzacții aducea de fapt futures (iar ordinele și tranzacțiile spot lipseau), iar tranzacțiile futures intrau în costul mediu spot | `{ type: 'spot' }` cu paginile permise de Bybit (50 / 100); tranzacțiile linear citite separat (rămân în „Tranzacții recente”, ca futures); piața unei tranzacții luată din simbol, deci un perpetuu nu intră niciodată în costul spot; test |
+| 3 | Citirile noi de ordine (Binance) | ccxt aruncă `-2015` (cheie fără futures) drept `DDoSProtection` după ce cheia a mers o dată: citirea s-ar fi reîncercat la fiecare reîmprospătare și ar fi marcat secțiunea „orders” ca eroare pentru orice cheie doar spot | recunoscut (`binanceDenied`), nereîncercat, nimic listat acolo; o citire sărită nu se mai cere 15 minute (una cerută greșit: 6 ore, scrisă o dată în jurnal), iar „Testează” o cere din nou; teste |
+| 4 | `tradingErrorOf` (Binance) | același `-2015` la un ordin apărea drept „exchange-ul limitează cererile” | `PERMISSION`, cu pașii platformei; test; TD |
+
+Verificat în sursele ccxt 4.5.85: `binance.fetchOpenOrders` (linear → `fapi` / `openAlgoOrders`), `bybit.fetchOpenOrders` (`settleCoin`, `orderFilter`), `okx.fetchOpenOrders` (algo `trigger`), `bitget.fetchOpenOrders` (clasic / v3), anularea condiționată Binance (`fapiPrivateDeleteAlgoOrder`).
+
+## Runda 60 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `CcxtTrader` (Bitget, cont unificat, spot) | v3 citește `qty` al unei cumpărări la piață în moneda de cotare, iar ccxt 4.5 trimite cantitatea în moneda de bază: „cumpără 1000 DOGE” ar fi cheltuit 1000 USDT (de zece ori mai mult la 0,1 USDT) | `qty` = suma arătată la verificare (`costToPrecision`), care înlocuiește câmpul lui ccxt; vânzarea și limita rămân în bază; test cu clasa reală ccxt `bitget` (cerere și răspunsuri v3 simulate); TD |
+| 2 | `CcxtTrader.bitgetMode` | dacă citirea setărilor v3 era refuzată, contul era declarat „clasic” chiar când ccxt îl găsise deja unificat (`options.uta`), iar ordinele ar fi plecat pe v2 | păstrat unificat (modul de poziție rămâne necunoscut; un hedge e prins apoi din răspunsul platformei, `posSide`) |
+
+Verificat: KuCoin UTA trimite cumpărarea spot la piață în moneda de bază (`sizeUnit: 'BASECCY'` implicit), deci acolo nu e cazul.
+
+## Runda 61 — 1 problemă (reparată, claritate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `CcxtTrader.prepareFutures` (KuCoin) | ramura „UTA → `setLeverage` cu marja aleasă” nu mai era atinsă pentru isolated (verificarea îl refuză pe contul unificat), dar citea ca și cum s-ar trimite | doar „cross → `setLeverage`, altfel `leverage` în ordin”, cu motivul în comentariu |
+
+Verificat:
+- suita completă pe codul final: 48 de fișiere, 496 de teste trecute;
+- fluxul în Chrome pe codul nou (inclusiv citirea nouă a ordinelor): pornire, ordin, confirmare, „Închide”, „Anulează”, jurnalul, „Tranzacționează”; fără erori în consolă;
+- README, ghidul și FD / TD față de regulile noi (Bitget și KuCoin UTA, Alpaca fracționat, ordinele deschise).
+
+## Runda 62 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `accounts.ts` | `EXTRA_ORDER_READS` era exportat fără să-l folosească altcineva (spre deosebire de `FUTURES_BALANCE`, citit de trader) | intern modulului, ca `SPOT_LISTING` |
+| 2 | TD-TRADING §8 (testele) | lista testelor nu avea testele noi (contul unificat KuCoin / Bitget, erorile după trimitere, ordinele din portofoliu) | completată |
+
+Recitite fără alte probleme: `crypto.ts` cap-coadă (`isUta`, `bitgetMode`, verificarea, `assertOneWay`, `prepareFutures`, `stopParams`, `place`, `cancel`), lățimea comentariilor, README.
+
+## Runda 63 — zero probleme
+Recitite, full scope:
+- traderii (`crypto.ts`, `trading212.ts`, `etoro.ts`, `alpaca.ts`), `types.ts`, `http.ts`, `rights.ts`, `service.ts`;
+- rutele, maparea erorilor din `app.ts`, legăturile din `context.ts`, ștergerea contului și a utilizatorului (traderii și citirile sărite uitate), migrarea 5;
+- portofoliul (`accounts.ts`): comutatorul, permisiunile, citirile noi de ordine, listele Bybit;
+- interfața (`OrderTicket`, `TradingControls`, `Trades`, „Tranzacționează” pe grafic), `shared/trading.ts`;
+- FD / TD / ghidul / README față de cod.
+
+Verificat: `tsc` fără erori; suita completă 48 de fișiere, 496 de teste trecute; fluxul în Chrome fără erori în consolă.
+
+# FD-INDICATORS — orice indicator TradingView pe grafic; Slingshot și LMA la „Premium” (18 oct 2026)
+
+Găsite și reparate la verificarea în Chrome, înainte de runde:
+- legenda arăta „— — —” pentru linii fără nicio valoare (benzile RSI oprite, linia de netezire a EMA): acum nu le arată, ca TradingView;
+- „BTCUSD” din lista implicită Performance era luat drept acțiune pe graficul unui indice: o monedă majoră cu quote-ul ei e crypto pe orice grafic;
+- Ichimoku (norul desenat 26 de bare în viitor) muta vederea cu 25 de bare spre trecut: vederea e ținută acum pe ultimele lumânări.
+
+## Runda 64 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `CandleChart` (demontare) | rendererele nu erau curățate înainte de `chart.remove()`: observatorii și cadrele programate pentru tabelele indicatorilor (Performance, Seasonality) ar fi rulat pe un grafic deja distrus | `r.clear()` pentru fiecare, înaintea graficului |
+| 2 | `CandleChart` (vederea ținută minte) | distanța de la marginea din dreapta se salva față de ultimul punct al axei, pe care Ichimoku îl mută cu 26 de bare în viitor: la revenire, ultima lumânare ajungea tăiată la margine | salvată și pusă înapoi față de ultima lumânare (fără astfel de indicatori, aceeași valoare ca înainte, deci vederile vechi rămân valabile); vederea perechii părăsite se salvează înainte să intre lumânările noi; TD |
+| 3 | TD / FD (mărimea codului) | „122 KB gzip” venea dintr-o măsurătoare de probă; build-ul real dă ~112 KB | corectat |
+
+Recitite fără alte probleme: `useStudies` (planul, încărcările, cache-ul, generațiile), `compute.ts`, `extra-bars.ts`, `style.ts`, fereastra Indicatori, setările, legendele, `Charts.tsx` (salvările, limitele, sertarul, ecranul complet); toate scrierile setărilor sunt patch-uri, deci lista de indicatori nu poate fi suprascrisă dintr-un alt formular.
+
+## Runda 65 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `CandleChart` (vederea ținută minte, FD-CHARTUX §2) | la o încărcare a paginii, vederea salvată nu se aplica: biblioteca își pune opțiunile (`rightOffset`, `barSpacing`) în primul ei cadru, peste vederea setată imediat după `setData` (măsurat: `barSpacing` și poziția rămâneau 6 / 24, apoi `rightOffset` 24); problema era veche, iar indicatorii o făceau vizibilă | vederea (salvată sau implicită) se pune după acel cadru, când axa are lățime (altfel la prima schimbare de mărime); un contor de „epocă” oprește corecția de după desenarea indicatorilor să readucă o vedere mai veche; verificat în Chrome: BTC derulat, ETH, BTC din nou → aceeași vedere, cu Ichimoku pe grafic; TD |
+| 2 | `CandleChart` (vederea cu Ichimoku) | `shiftVisibleRangeOnNewBar` al bibliotecii trata punctele desenate în viitor ca bare noi și muta vederea cu 24 + 25 de bare, după corecția din cadrul precedent | oprit (lipirea de marginea din dreapta la lumânări noi o face deja efectul datelor) |
+
+Verificat: fluxul complet în Chrome (fereastra, legende, setări, ochi, ×, LMA scos și pus la loc) fără erori în consolă.
+
+## Runda 66 — 1 problemă (reparată, documentație)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | TD-INDICATORS §8 / §9 | lipseau `onVisibleRange` și `style` din props-urile graficului, iar categoriile ferestrei erau descrise ca `tablist` (codul: `group` cu butoane `aria-pressed`) | completat / corectat |
+
+Recitite fără alte probleme: efectul datelor din `CandleChart` după runda 65 (lipirea de marginea din dreapta cu lumânări noi, fereastra glisantă a lumânărilor, chei schimbate repede, demontarea înaintea cadrului), `useStudies` (dependențele planului, identitățile listelor), `Charts.tsx` (ordinea și înălțimile panourilor, legendele).
+
+## Runda 67 — zero probleme
+Recitite, full scope:
+- codul nou: catalogul și metadatele, `compute.ts`, `extra-bars.ts`, `style.ts`, `useStudies`, `runtime`, `volume.ts`, fereastra Indicatori, setările Intrări / Stil, legendele, `CandleChart` (panourile, înălțimile, vederea, desenarea), `Charts.tsx`;
+- serverul: schema `studies`, cheia personală, recuperarea element cu element; scrierile setărilor sunt patch-uri peste tot;
+- impactul: Slingshot, LMA, pozițiile și PnL-ul pe grafic, ecranul complet, vederea ținută minte, CSP-ul (chunk din `'self'`, fără `eval`), build-ul pe Azure (`oakscriptjs` fixat, ca `lightweight-charts`), fără migrare de schemă;
+- documentele: FD / TD / ghidul / README / `vendor/README.md`.
+
+Verificat: `tsc` fără erori; suita completă 53 de fișiere, 532 de teste; în Chrome, pe 1280 și 390 px (fereastra, legendele, setările, panourile), fără erori în consolă.
+
+# FD-PREMIUMHIDE și FD-TRADEUNLOCK
+
+## Runda 68 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `routes.ts` (pornirea tranzacționării) | mesajul cu încercările rămase avea „15 minute” scris de mână; o schimbare a pauzei l-ar fi lăsat greșit | din `COOLDOWN_MS` |
+
+Recitite fără alte probleme:
+- **PREMIUMHIDE:**
+  - `premiumState` și cele trei stări;
+  - legendele (ordinea în panoul prețului, rândul LMA ascuns, × golește și ascunderea);
+  - `paneOrder` / `paneFactors` (înălțimea LMA rămâne);
+  - lista Indicatori („Pe grafic, ascuns”);
+  - un server vechi (câmpurile lipsă: vizibil).
+- **TRADEUNLOCK:**
+  - ordinea în `enable` (permisiunile întâi; `refuse` oprește o tranzacționare pornită);
+  - `stepUp` (parola întâi, deci un cod de recuperare nu se pierde pe o parolă greșită);
+  - passkey-ul: provocare legată de utilizator și de scop; passkey-ul altui cont refuzat înainte să i se atingă contorul; fără `registerFailure`; o reușită golește bugetul;
+  - cookie-ul provocării șters la folosire;
+  - jurnalul fără secrete;
+  - fereastra (eroarea ultimei încercări, butoanele blocate cât rulează una).
+
+Verificat:
+- `tsc`, build-ul și testele țintite (101) trec;
+- în Chrome, pe o schemă de test, cu un autentificator virtual:
+  - fereastra fără și cu passkey;
+  - parola greșită și codul greșit, cu încercările rămase;
+  - pornirea cu passkey (spot + futures, permisiunile recitite);
+  - ochiul pe Slingshot și LMA: norul, semnalele și liniile dispar; panoul LMA și culorile lumânărilor dispar; legendele estompate; după reîncărcare la fel; lista arată „Pe grafic, ascuns”; înapoi la loc la fel.
+
+## Runda 69 — zero probleme (PREMIUMHIDE, TRADEUNLOCK)
+Recitite, full scope:
+- passkey-ul (`stepUpOptions`, `completeStepUp`, `verifyAssertion` comun cu login-ul);
+- ruta și fereastra de pornire a tranzacționării;
+- `stepUp`;
+- ordinea din `enable`;
+- legendele Slingshot / LMA și lista Indicatori;
+- documentele (FD / TD / ghidul).
+
+Suita completă: 54 de fișiere, 538 de teste.
+
+# FD-STUDYUX
+
+## Runda 70 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | „Stil” (grosimea) | o linie fără grosime declarată e desenată de renderer cu 2 px (histograma cu 1 px), dar „Implicită” era 1 px: alegerea ei subția linia, iar „Groasă” nu schimba nimic (și selectul vechi 1–4 px arăta tot 1 px) | `plotWidth(def)`: grosimea desenată fără alegere; opțiunile pornesc de la ea; FD / TD |
+| 2 | Lista Indicatori (steaua) | butonul avea și `aria-pressed`, și o etichetă care se schimbă („Adaugă…” / „Scoate…”): un cititor de ecran ar anunța ambele | doar eticheta, ca la butoanele ochi; TD |
+
+Recitite fără alte probleme:
+- **Favoritele:**
+  - schema, cheia personală, recuperarea id cu id;
+  - salvarea din ultima listă din cache, cu revenirea la eșec;
+  - categoria inițială, rândurile în ordinea marcării, rândul cu două butoane, mesajul listei goale;
+  - căutarea.
+- **Bara de jos:** ambele formulare, fără padding jos în zona care derulează.
+- **Stilul:**
+  - `lineKind`;
+  - copia `plotConfig` doar când e nevoie, iar modulul nu se atinge;
+  - `hlineConfig` cu tip și grosime;
+  - „Valorile implicite” golește și tipul;
+  - o grosime veche în pixeli rămâne listată.
+
+Verificat în Chrome pe o schemă de test:
+- fără favoriți, lista se deschide pe „Premium” și „Favorite” arată mesajul listei goale;
+- cu trei stele, lista se deschide pe „Favorite 3”, în ordinea marcării;
+- adăugare din favorite;
+- RSI cu linie punctată și „Groasă”, salvat și desenat;
+- bara de jos peste un formular derulat, la RSI și la Slingshot, pe 560 px înălțime.
+
+## Runda 71 — zero probleme (STUDYUX)
+Recitite, full scope:
+- `style.ts`:
+  - `lineKind`, `plotWidth`, `widthChoices`;
+  - `styledEntry`: copia `plotConfig` doar cu alegeri; legenda citește tot definițiile modulului;
+  - noua identitate a intrării se schimbă doar odată cu rezultatul.
+- `StudySettings` („Stil”, bara de jos).
+- `IndicatorPicker`: rândul cu două butoane, categoria „Favorite”, eticheta stelei.
+- `Charts.tsx`: favoriții din cache, eroarea în fereastră, formularul Slingshot / LMA.
+- Schema, `USER_KEYS`, `salvageFavorites`.
+- Documentele: FD / TD / ghidul / PROGRESS.
+
+Suita completă: 54 de fișiere, 543 de teste.
+- O rulare precedentă a avut 24 de eșecuri în lanț: Azure SQL a răspuns lent, un test a depășit 60 s și a continuat în fundal peste celelalte.
+- Fișierele afectate au trecut apoi separat, apoi și suita completă.
+
+# FD-STUDYMEMORY
+
+## Runda 72 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `Charts.tsx` (scoaterea) | salvarea din formular nu e optimistă: „Salvează” urmat repede de × (înainte de răspunsul serverului) calcula memoria din cache-ul de dinainte de salvare, iar cererea ei, venită a doua, o suprascria | scoaterea așteaptă salvarea formularului aflată în curs (`formSave`); TD |
+
+Recitite fără alte probleme:
+- `memory.ts` (ce se ține minte, înlocuirea întreagă, copia nouă vizibilă);
+- `saveStudies` și cele cinci locuri care-l folosesc (adăugare, ochi, scoatere, formular, înălțimi), cu lista și memoria în aceeași cerere;
+- schema, `USER_KEYS`, `salvageStudyMemory`.
+
+Verificat:
+- teste: memoria (3), schema, serverul (34, inclusiv memoria înlocuită întreagă și recuperată element cu element);
+- în Chrome, pe o schemă de test: RSI cu lungimea 21 și linia punctată, scos și adăugat (21, punctat), după reîncărcare la fel; „Valorile implicite” + „Salvează”, scos și adăugat: valorile TradingView.
+
+## Runda 73 — zero probleme (STUDYMEMORY)
+Recitite, full scope:
+- `saveStudies` și folosirile lui după reparația rundei 72 (`formSave` se actualizează doar la formular, iar o salvare eșuată nu blochează scoaterea);
+- `memory.ts`;
+- schema și recuperarea pe server;
+- FD / TD / ghidul.
+
+`tsc` fără erori.
+
+# FD-GOLATEST, FD-RODESC, FD-HLINELEVELS
+
+## Runda 74 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | „Stil” (liniile orizontale) | culoare + tip + grosime + nivel nu încăpeau în panoul de 400 px: câmpul nivelului ieșea în dreapta (văzut în Chrome la Stochastic RSI) | numele și nivelul pe primul rând, aspectul liniei pe al doilea; controalele liniilor se pot rupe pe rând nou; verificat în Chrome (Stochastic RSI, MACD): nimic nu iese din panou |
+
+Recitite fără alte probleme:
+- **Butonul `>>`:**
+  - ultima lumânare se compară cu indexul ei logic, nu cu `n − 1`;
+  - verificarea are loc la fiecare schimbare a vederii și după datele noi;
+  - colțul celui mai de jos panou; caseta TP / SL urcă doar când împart colțul;
+  - `scrollToRealTime` păstrează zoom-ul.
+- **Descrierile:** 118 traduse, plus testul care prinde engleza rămasă.
+- **Nivelurile:**
+  - schema;
+  - `styledEntry` (umplerea urmează nivelurile, pentru că renderer-ul ia prețurile din aceeași listă);
+  - validarea la „Salvează”;
+  - „Valorile implicite”;
+  - memoria setărilor le ține și pe ele.
+
+Verificat în Chrome:
+- butonul: lipsă la început; apare după o derulare înapoi; hover; click → la ultima lumânare, butonul dispare;
+- descrierile în listă;
+- Stochastic RSI la 90 / 10, salvat și desenat; un nivel gol e refuzat cu numele liniei.
+
+## Runda 75 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `CandleChart` (butonul `>>`) | la schimbarea perechii sau a timeframe-ului, verificarea de după datele noi rula pe vederea veche (cea nouă vine un cadru mai târziu): butonul putea clipi un cadru | la o schimbare de cheie butonul se ascunde, iar vederea nouă îl verifică la aplicare; la datele aceleiași perechi, verificarea rulează la finalul efectului de date (nu într-un efect separat); TD |
+
+## Runda 76 — zero probleme
+Recitite, full scope:
+- `CandleChart` după reparația rundei 75 (cele trei momente în care se verifică butonul, colțul, caseta TP / SL);
+- `catalog-meta.ts` (118 descrieri);
+- nivelurile (schema, `styledEntry`, „Stil”, validarea);
+- documentele (FD / TD / ghidul / `vendor/README.md`).
+
+Verificat:
+- suita completă: 55 de fișiere, 549 de teste;
+- în Chrome, butonul: BTC derulat înapoi (apare) → ETH cu vederea lui (nu apare) → BTC din nou (apare, vederea ținută minte) → click (dispare); fără erori în consolă.
+
+# FD-TICKETMEMORY
+
+## Runda 77 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `OrderTicket` (aplicarea memoriei) | dacă setările se încărcau după deschiderea formularului și după o alegere deja făcută, efectul aplica memoria peste alegerea respectivă | o alegere marchează contul ca aplicat (`appliedFor`) |
+| 2 | Schema (`accounts`, cel mult 50) | un patch nu poate șterge chei: după 50 de conturi diferite (chiar șterse între timp), fiecare salvare ar fi fost refuzată pe tăcute (eroarea e ignorată, ca la celelalte alegeri) | limita 200, departe de numărul real de conturi; testul și TD |
+
+Recitite fără alte probleme:
+- **`ticket-memory.ts`:** seed-ul câștigă; închiderea nu citește și nu scrie; contul inițial.
+- **`OrderTicket`:**
+  - stările inițiale din memorie, când conturile și setările sunt deja încărcate;
+  - efectul la schimbarea contului;
+  - cele 10 alegeri salvate;
+  - `fill()` nu se ține minte;
+  - levierul doar ca întreg valid;
+  - contul folosit, după „Verifică ordinul”.
+- **Schema și recuperarea pe server.**
+
+Verificat:
+- teste: helper-ele și schema (6), serverul (35, inclusiv unirea câmp cu câmp);
+- în Chrome, pe o schemă de test:
+  - Futures + Short + limită + levier 10 + Cross, închis fără trimitere, redeschis: aceleași, cu cantitatea goală;
+  - după reîncărcare, pe ETH: aceleași;
+  - formularul „Închide” al unei poziții nu schimbă memoria.
+
+## Runda 78 — zero probleme (TICKETMEMORY)
+Recitite:
+- reparațiile rundei 77: o alegere marchează contul ca aplicat; limita de 200;
+- `OrderTicket` în întregime: cele 10 alegeri, contul folosit, formularele de închidere, `fill()`.
+
+Suita completă: 56 de fișiere, 556 de teste.
+
+# FD-KEYTEXT, FD-KEYIPS, FD-ETOROUNITS
+
+## Runda 79 — 4 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Wizard (lista IP-urilor) | `.num` păstrează textul pe un rând (`nowrap`): lista lățea coloana, iar fereastra se derula lateral, cu textul tăiat (văzut în Chrome) | `font-mono` în loc de `.num`, coloana cu `min-w-0` |
+| 2 | Wizard (lista IP-urilor) | cu `break-all`, adresele se rupeau la mijloc („68.” / „210.131.71”) | rupere doar după virgule (`<wbr>`), fără caractere în plus: textul selectat sau copiat rămâne „a,b,c” (verificat) |
+| 3 | `OrderTicket` (unitățile eToro) | indiciul afișa codul intern „FD-ETOROUNITS” | scos |
+| 4 | `etoro.ts` (avertismentul planului) | „(1 unități)” | „1 unitate” / „N unități”; testul |
+
+Recitite fără alte probleme:
+- **Pașii celor 11 platforme și `tradeSteps`:** nicio interdicție veche („Nu bifa Trade”, „Nu alege Write”), niciun „IP-ul tău”.
+- **Textele din Setări / Tranzacții / ghid:** passkey-ul pomenit la pornirea tranzacționării.
+- **`closePlan`:**
+  - ordinea, restul, toleranța;
+  - pozițiile sărite;
+  - recitirea portofoliului la trimitere;
+  - cererile pe poziție, cu planul gol refuzat.
+
+Verificat:
+- teste (brokeri 11, platforme);
+- în Chrome: wizard-ul KuCoin pe 1280 și 390 px (pașii, caseta, lista, „Copiază lista” cu selecția de rezervă, avertismentul local) și Alpaca fără casetă; fără erori în consolă.
+
+## Runda 80 — zero probleme (KEYTEXT, KEYIPS, ETOROUNITS)
+Recitite, full scope:
+- pașii celor 11 platforme și `tradeSteps`;
+- `ServerIps` (lista, copierea, selecția de rezervă, avertismentul local);
+- `closePlan` și `place` la eToro;
+- textele din Setări / Tranzacții / ghid;
+- FD / TD.
+
+Teste:
+- Suita completă a avut 26 de eșecuri în lanț, ca în runda 71. Azure SQL răspundea în 70–490 ms pe interogare (măsurat), iar un test din `users.test.ts` a depășit 60 s și a continuat în fundal peste celelalte.
+- Fișierele afectate, rulate separat: 44 + 3 teste trec (inclusiv passkey-urile, rulate a doua oară separat).
+- Restul suitei trece.
+- Producția nu e afectată: `/api/ping` 200, nicio eroare în jurnalul de azi.
+
+# FD-ETOROPICK
+
+## Runda 81 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Lista pozițiilor | procentul cu punct zecimal („+33.33%”), lângă suma în stil românesc („+75,00 USD”) | `fmtPct` („+33,33%”) |
+| 2 | Confirmarea | nu spunea ce poziții se închid sau ce profit iese din ele; se vedea doar cantitatea | rândurile „Poziții: 2 din 3: 20 nov. 2025, 2 mar. 2026” și „Profit / pierdere (nerealizat)” (al doilea doar fără unități parțiale) |
+
+Recitite fără alte probleme:
+- `EtoroTrader.portfolio` / `instrument` (profitul din `unrealizedPnL.pnL`, altfel `netProfit`; data; suma investită);
+- `close-picker.ts`;
+- `OrderTicket` (cele alese în ordinea listei, deci `closePlan` le împarte la fel; cantitatea fără unități = suma celor alese; verificarea dezactivată fără alegere; fără listă: formularul de până acum).
+
+Verificat:
+- teste (`close-picker` 3, brokeri 9, inclusiv pozițiile cu profitul lor);
+- în Chrome, pe o schemă de test, cu un eToro simulat (trei poziții AAPL, două pe plus):
+  - lista, de la cea mai veche;
+  - „Doar profitabile” → 2 din 3, 3,5 unități, +115 USD;
+  - „Niciuna” → verificarea dezactivată, cu mesajul;
+  - confirmarea cu pozițiile și profitul;
+  - eToro primește închiderea doar pentru cele două alese;
+  - pe 390 px, rândurile se rup curat.
+
+## Runda 82 — zero probleme (ETOROPICK)
+Recitite:
+- `OrderTicket` după runda 81: lista, alegerea, confirmarea, alias-ul `closeRowsList` (`rows` e umbrit în pasul de confirmare);
+- o reîncărcare a pozițiilor care scoate o poziție închisă între timp: alegerea se filtrează pe listă;
+- FD / TD / ghidul.
+
+Suita completă: 57 de fișiere, 561 de teste.
+
+# FD-ETOROROWS
+
+## Runda 83 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Cheia unei vânzări (rândurile) | cu o cheie pe versiune (`Map` semnătură → cheie), a doua vânzare a acelorași unități din aceeași poziție, după „Înapoi la poziții”, ar fi refolosit cheia primei vânzări: serverul ar fi răspuns cu ordinul deja trimis, fără o vânzare nouă | „Înapoi la poziții” golește cheile (o rundă nouă de vânzări) |
+| 2 | Formularul de închidere | contul și simbolul ca text stăteau fiecare pe rândul lui (văzut în Chrome) | pe același rând cu piața (3 coloane la futures, 2 la acțiuni) |
+| 3 | Formularul de închidere futures | „Reduce-only” era o bifă blocată, nu text | „Reduce-only: da” ca text |
+
+Recitite fără alte probleme:
+- `check` cu corpul ca variabilă (formularul de rezervă trimite `ticketBody()`, rândul trimite `rowBody`);
+- `send` folosește cheia previzualizării;
+- „Vinde” e dezactivat cât rulează o verificare sau cu unități invalide;
+- confirmarea, din `preview.ticket.close.positionIds`;
+- `ReadOnly` pentru cont (închidere sau un singur cont), simbol, piață și direcție;
+- formularul de rezervă fără `ins.positions`;
+- lățimea de 900 doar cu tabelul.
+
+Verificat:
+- teste (`close-picker` 3);
+- în Chrome, cu eToro simulat:
+  - tabelul cu coloanele cerute și „Vinde” pe rând;
+  - 9 unități pe o poziție de 1,5 → „Vinde” dezactivat;
+  - vânzarea poziției profitabile (confirmarea cu poziția și profitul), „Înapoi la poziții” (rămân două rânduri), 1 unitate din ultima;
+  - eToro primește exact cele două cereri (`null`, apoi 1);
+- închiderea unei poziții futures KuCoin: contul, piața, perechea, direcția și reduce-only ca text; fără erori în consolă.
+
+## Runda 84 — zero probleme (ETOROROWS)
+Recitite:
+- `OrderTicket` după runda 83: tabelul, `rowBody`, cheile, „Înapoi la poziții”, `ReadOnly`, reduce-only ca text, formularul de rezervă;
+- `close-picker.ts`;
+- FD / TD / ghidul.
+
+Suita completă: 57 de fișiere, 561 de teste.
+
+# FD-INDEXNEWS
+
+## Runda 85 — 5 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Aliasurile (instantaneu) | „U.S.” (U.S. Bancorp) și „Nasdaq” (Nasdaq Inc.) ar fi etichetat aproape orice știre despre SUA sau bursă; „Edison”, „Everest”, „Regions”, „Waters”, „Hartford”, „Jacobs”, „Rollins”, „Lennox”, „Microchip”, „Motorola”, „EQT”, „PTC”, „Old Dominion” sunt și alte lucruri | nume complete curate; tickerele ambigue în `MEMBER_TICKER_BLACKLIST`; testul instantaneului verifică aceste nume |
+| 2 | Parserul Wikipedia | când numele companiei nu are link, lua primul link de pe rând, sediul (Insulet → „Acton, Massachusetts”) | celulele rândului: numele e celula de după ticker (S&P 500) sau prima (Dow) |
+| 3 | Aliasurile | „Deere & Co.” → „Deere &”, „Mosaic Company (The)” rămânea cu „(The)” | curățare de „&” și „(The)”; nume curate pentru companiile mari (SpaceX, MicroStrategy, T-Mobile, Chipotle, Micron …) |
+| 4 | Detectorul | numele sub 3 caractere erau ignorate: „3M” nu se recunoștea după nume | două caractere pentru o companie, doar cu o cifră; test |
+| 5 | FD §6 | promitea data listelor în „Stare sistem” (acolo e doar eroarea job-ului) | data e în Setări; FD |
+
+Plus:
+- un test vechi (FD-INDICES) cerea ca S&P 500 să dispară din etichete după scoaterea din favorite; acum cei trei indici ai filtrului sunt etichetați mereu (FD-INDEXNEWS §7); testul.
+
+Recitite fără alte probleme:
+- **Parametrii SQL** în lista de știri (cu AI propriu: `limit`, `userId`, apoi filtrele), în contextul Rezumatului și în scorul per utilizator.
+- **Marcajele `#`:** ascunse în listă, în Rezumat, în iconițele scorului și în grupare (`findCluster`).
+- **Job-urile:** re-etichetarea reluabilă, cu cursor (30 min); producția are ~9.200 de știri, deci ~20 s.
+- **Scorul per utilizator:** începutul istoricului pentru filtru fără AI e știrile comune; `resetUser` la schimbare.
+
+Verificat:
+- teste: 15 noi (listele, aliasurile, instantaneul, detectorul, serviciul, filtrul, scorul per utilizator) + serverul;
+- detectorul: ~2 ms pe știre;
+- în Chrome: secțiunea din Setări (radio, bife, „Alege cel puțin un indice”, salvare) și nota din Știri.
+
+## Runda 86 — zero probleme (INDEXNEWS)
+Recitite, full scope:
+- `index-members.ts`, `coins.ts`, `coin-registry.ts`, `stock-scope.ts`;
+- `query.ts`, `summary/context.ts`, `sentiment/daily.ts`;
+- job-urile, ruta de setări și `/api/stock-indices`;
+- `StockNewsSettings`, nota din Știri;
+- scriptul instantaneului;
+- FD / TD / ghidul (în TD, numele datelor job-ului de re-etichetare, corectat).
+
+Suita completă: 58 de fișiere, 575 de teste.
+
+# FD-BROKERSTATS, FD-CHARTSTEADY
+
+## Runda 87 — 7 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Statisticile brokerilor, „parțial” | la prima citire pe 90z, istoricul era cerut cu un `Date.now()` luat cu câteva milisecunde după începutul perioadei, deci perioada părea mai lungă decât istoricul („parțial: istoric prea lung” la IBKR, găsit în Chrome) | istoricul se cere cu ceasul statisticilor (`brokerClosed(…, now, …)`) |
+| 2 | IBKR, memoria | rapoartele pe perioadă (90 de zile de tranzacții) aveau o cheie nouă în fiecare zi și nu se ștergeau niciodată | la fiecare raport nou se șterg cele expirate; test |
+| 3 | IBKR, „Azi” cerut direct | cu `from` azi (sau în weekendul de după ultima închidere), `td` ajungea înaintea lui `fd` și se cerea raportul zilei curente | fără cerere: nicio tranzacție, `asOf` = închiderea ultimei zile lucrătoare; test |
+| 4 | Alpaca, vânzările short | execuțiile `sell_short` erau ignorate, iar cumpărarea care închidea short-ul devenea o poziție long falsă | `sell_short` e vânzare și deschide short oricât de complet ar fi istoricul; teste |
+| 5 | Antetul graficului, pe telefon | rândul cu intervalele se mișca totuși: prețul „—” e mai îngust decât cel încărcat, iar partea din stânga trecea de pe un rând pe două (găsit în Chrome, 390 px) | cât se încarcă, fiecare valoare ține lățimea celei de dinainte (`useLatched`, `Holding`); variația are un singur loc pentru monede și acțiuni |
+| 6 | Antetul graficului | o deplasare de 1 px: textul sursei era gol cât se încărca, iar un rând gol mută linia de bază | textul sursei nu e niciodată gol |
+| 7 | Textele | „profitul lor” lângă „1 tranzacție”; TD-ul descria un parametru `force` pe care adaptorul nu-l are; explicația Alpaca era greu de citit | texte și TD corectate |
+
+Recitite fără alte probleme:
+- **Adaptorii:**
+  - eToro: paginile de la 1, oprirea, `seen` pentru rândurile repetate;
+  - Trading 212: oprirea la începutul perioadei, `coveredFrom`, comisionul din lista de taxe;
+  - IBKR: `fd` / `td`, coada pe token, gruparea pe ordin, „C;O”, `CASH`, cursul;
+  - Alpaca: FIFO, opțiunile ×100.
+- **Serviciul:**
+  - un singur istoric pentru toate perioadele;
+  - `force`;
+  - `invalidate` / `delete` uită și statisticile;
+  - moneda din portofoliu când lipsește.
+- **Interfața:**
+  - selectorul la toate conturile;
+  - `BrokerCards`, cu nota „parțial” și titlurile pe broker;
+  - IBKR „Azi” → „—”, cu data în ziua din New York;
+  - serverul vechi.
+- **Legenda:** butoanele înaintea valorilor, la indicatori și la LMA.
+- **FD / TD / ghidul.**
+
+Verificat în Chrome:
+- **Statisticile:** eToro, Trading 212 (EUR), IBKR (Flex simulat), Alpaca (FIFO) și KuCoin, pe toate perioadele, cu numerele calculate de mână.
+- **Antetul:** la trecerea ETH → SOL → AAPL → SPX → BTC, poziția rândului cu intervalele e una singură, eșantionată la 25 ms:
+  - în ecran complet, la 1440 și 1920 px;
+  - normal, la 1280 și 390 px.
+- **Legenda:** butonul X al fiecărui indicator rămâne la același x / y cu cursorul în trei locuri.
+
+Suita completă (rulată în timpul reparațiilor): 58 de fișiere, 591 de teste; 30 picate. Cauzele:
+- 4 în `brokers.test.ts`, rulate pe versiunea de dinainte a `brokers.ts` (fișierele s-au schimbat în timpul rulării);
+- 26 în `users.test.ts` și `trading/service.test.ts`: un timeout de 60 s la Azure SQL, apoi cascada cunoscută.
+
+Rulate din nou separat, pe codul curent (brokerii, numărarea, serviciul de tranzacționare, utilizatorii): 4 fișiere, 78 de teste, toate trec.
+
+## Runda 88 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Cardurile IBKR, textul | data raportului se termina cu două puncte: „până la închiderea bursei din 16 oct..” (luna scurtă are deja punct) | ziua întreagă, în New York: „de vineri, 16 octombrie”; TD |
+
+Recitite fără alte probleme:
+- **`BrokerCards`:** cardurile condiționate, cheile, nota „parțial” și titlurile, IBKR „Azi”, serverul vechi.
+- **`useRefreshAccount`:** un eșec al statisticilor nu oprește reîmprospătarea portofoliului.
+- **Testele noi:** eToro, Trading 212, IBKR (raport, „Azi”, cache, coadă), Alpaca (FIFO, `sell_short`, paginare), numărarea, API-ul.
+- **Ghidul:** IBKR, cu „Azi” → „—”.
+
+## Runda 89 — zero probleme (BROKERSTATS, CHARTSTEADY)
+Recitite, full scope:
+- `brokers.ts`: tipurile, `utcTime`, `t212Taxes`, cei patru `closedTrades`, coada și cache-ul Flex, `fifoResults`;
+- `trade-stats.ts` (`summarizeResults`, `summarizeClosed` pe ea), `accounts.ts` (`TradeStats`, `loadBrokerStats`, `brokerClosed`, `forgetStats`);
+- `Trades.tsx` (selectorul, `useRefreshAccount`, `BrokerCards`), `providers.ts` (pasul IBKR);
+- `Charts.tsx` (antetul, `useLatched`, `Holding`, legenda LMA), `StudyLegend.tsx`;
+- testele noi; FD / TD / ghidul / PROGRESS;
+- niciun alt consumator al `TradeStats` (căutat în `src` și `scripts`).
+
+Notă: la un cont IBKR de consilier, cu subconturi în monede de bază diferite, suma folosește moneda primului subcont, la fel ca portofoliul de până acum. Nu e o schimbare.
+
+# FD-GOLATESTMAIN
+
+## Runda 90 — zero probleme
+Recitite:
+- **`CandleChart`:** butonul în `boxes.panes.main`, ținut în panou și când acesta e foarte scund; fără `main`, nu apare.
+- **Caseta TP / SL:** urcă oricând se vede butonul. Ridicată, se termină la 12 px deasupra butonului.
+- **Restul:** butonul, cu `z-10`, stă deasupra legendelor; nu mai rămâne nicio referință la „cel mai de jos panou”.
+- **FD / TD / ghidul.**
+
+Verificat în Chrome, la 1440 px:
+- cu LMA și RSI dedesubt: butonul la 717–749 px, panoul LMA de la 766 px;
+- fără panouri: deasupra axei timpului;
+- click → ultima lumânare, iar butonul dispare.
+
+# FD-SCROLLLOCK
+
+## Runda 91 — zero probleme
+Recitite:
+- `scroll-lock.ts`:
+  - contorul și eliberarea dublă;
+  - locul barei;
+  - dubla montare din StrictMode (blocare → eliberare → blocare: contorul 1).
+- Unde se folosește:
+  - `Modal` și cele trei ferestre pe care le servește, `AccountWizard`, `CommandPalette` (hook-ul înaintea lui `return null`, ordinea hook-urilor e constantă), `DaySummary`, `SummaryFailed`;
+  - `SettingsDrawer`, care se demontează la schimbarea paginii, deci deblochează;
+  - `useFullscreen` (doar modul `css`; în cel nativ pagina nu se vede).
+- `overscroll-contain` pe zonele care derulează (ferestre, panou, ecran complet, listele de căutare).
+- FD / TD / ghidul.
+
+Verificat în Chrome, la 1440 px:
+- **panoul Slingshot:** formularul derulat până la capăt (804 / 804 px), iar pagina rămâne la 200 px; la fel cu rotița lângă panou;
+- **⌘K deschis peste panou și închis:** pagina rămâne blocată;
+- **după închiderea panoului:** pagina derulează din nou;
+- **fereastra Indicatori:** fundalul nu se mișcă;
+- **ecran complet + panou:** blocarea ține până la ieșirea din ecranul complet.
+- **Control:** fără nimic deschis, rotița derulează pagina; peste grafic face zoom.
+
+Suita completă (după FD-BROKERSTATS, FD-CHARTSTEADY, FD-GOLATESTMAIN, FD-SCROLLLOCK): 59 de fișiere, 593 de teste, toate trec.
+
+# FD-PICKERSORT
+
+## Runda 92 — zero probleme
+Recitite:
+- **`order.ts`:** colația `ro`, fără majuscule / diacritice / punctuație, numerele după valoare.
+- **`IndicatorPicker`:**
+  - fiecare ramură (căutare, Toți, Favorite, Premium, categorie) dă un tablou nou, sortat la final;
+  - lista de favorite salvată nu se schimbă;
+  - steaua scoate rândul fără să strice ordinea.
+- **Comentariul `PREMIUM` din `Charts.tsx`; FD / TD / ghidul.**
+- **Ordinea indicatorilor pe grafic și în legendă:** neatinsă.
+
+Teste: `order.test.ts` (2), verificarea de tipuri, build-ul web.
+
+Verificat în Chrome, la 1440 px, cu favoritele marcate în altă ordine (RSI, Slingshot, BB, EMA, LMA, ADR): Favorite, Premium, Toți (120), Medii mobile, Oscilatori, Volum și căutarea „average”, toate alfabetic.
+
+# FD-HLINE, FD-DENAMES
+
+## Runda 93 — 5 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Panoul liniei | un click pe linia al cărei panou e deschis ștergea previzualizarea, deși formularul își păstra modificările | un click pe linia cu panoul deschis nu schimbă nimic; verificat în Chrome |
+| 2 | Tragerea cu panoul deschis | ciorna din panou (cu prețul vechi) acoperea prețul nou, linia sărea înapoi, iar „Salvează” punea la loc prețul vechi | ciorna se mută odată cu linia (în aceeași randare), iar formularul ia prețul nou; verificat (81982.9 → 81238.7, apoi salvat cu textul și culoarea din panou) |
+| 3 | Salvările | salvarea din panou (cu răspunsul serverului) și o adăugare sau o tragere făcută între timp (optimiste) puteau să se suprascrie | toate salvările liniilor sunt optimiste: o schimbare pornește de la cea de dinainte; panoul verifică aceeași schemă ca serverul |
+| 4 | Ghidul | liniile orizontale și cursorul lipseau | secțiunea din Grafice |
+| 5 | FD §3 | Alt+H la limita de 50 de linii nu era descris | nu adaugă nimic (meniul „+” spune de ce) |
+
+Recitite fără alte probleme:
+- **`hlines.ts`:** schema, limitele, eliminarea listelor goale, salvarea parțială, vizibilitatea pe cele 13 intervale.
+- **Setările:** cheile noi în `USER_KEYS`, salvarea parțială pe cheie.
+- **`HLines`:**
+  - linia, întreruperea pentru textul „Mijloc”, alinierile, rândurile textului;
+  - eticheta de pe axă, ascunsă în afara panoului;
+  - `hitTest` / `lineAt`.
+- **`CandleChart`:**
+  - liniile cursorului și tema;
+  - „+”: ținut sub mouse, ascuns după 150 ms, meniul cu Esc și click în afară;
+  - tragerea: `preventDefault` pe `pointerdown`, deci fără `mousedown` pentru grafic; atingerea doar deschide; `pointercancel`;
+  - Alt+H, ignorat cât scrii într-un câmp.
+- **`HLineSettings` și legătura cu pagina:** previzualizarea, Anulează / Esc, închiderea la schimbarea simbolului.
+- **Numele `[DE]`:** constantele, legenda, panoul, lista, testul de ordine.
+
+Teste: `hlines.test.ts` (5), `order.test.ts` (2), serverul (liniile și șablonul fiecăruia).
+
+Notă: `order.test.ts` avea „[DI] Slingshot System 3.3” în așteptări, la 14:03, fără să fi fost scris în această sesiune (testul ar fi picat). Fișierul a fost rescris pentru numele `[DE]`.
+
+## Runda 94 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Meniul „+” | cu meniul și panoul liniei deschise, Esc ar fi închis și panoul, cu modificările lui | meniul ascultă Esc în faza de captură și îl oprește. În Chrome, „+” stă sub panoul lateral cât acesta e deschis, deci cazul se atinge doar așa; Esc cu panoul singur îl închide fără să salveze, verificat |
+| 2 | `saveHlines` | un parametru rămas nefolosit după ce toate salvările au devenit optimiste | scos |
+
+## Runda 95 — zero probleme (HLINE, DENAMES)
+Recitite, full scope:
+- `hlines.ts`, setările (schema, `USER_KEYS`, salvarea parțială);
+- `HLines`, `CandleChart` („+”, tragerea, Alt+H, liniile cursorului);
+- `HLineSettings`:
+  - sincronizarea prețului după o tragere;
+  - previzualizarea doar cu o ciornă validă;
+  - Anulează / Esc;
+- legătura cu pagina:
+  - salvările optimiste;
+  - click pe linia deschisă;
+  - închiderea la schimbarea simbolului;
+- numele `[DE]`;
+- FD / TD / ghidul.
+
+Suita completă (după HLINE și DENAMES): 61 de fișiere, 601 teste, toate trec.

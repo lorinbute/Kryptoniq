@@ -1,0 +1,91 @@
+// @ts-nocheck
+/**
+ * Detrended Price Oscillator (DPO) Indicator
+ *
+ * Removes trend from price to identify cycles.
+ * DPO = Close - SMA(Close, length)[length/2 + 1]
+ */
+
+import { Series, ta, type IndicatorResult, type InputConfig, type PlotConfig, type HLineConfig, type Bar } from 'oakscriptjs';
+
+export interface DPOInputs {
+  /** Period length */
+  length: number;
+  /** Whether to center the DPO */
+  centered: boolean;
+}
+
+export const defaultInputs: DPOInputs = {
+  length: 21,
+  centered: false,
+};
+
+export const inputConfig: InputConfig[] = [
+  { id: 'length', type: 'int', title: 'Length', defval: 21, min: 1 },
+  { id: 'centered', type: 'bool', title: 'Centered', defval: false, tooltip: 'When the DPO is centered, the DPO line stays offset towards the left. When it is not centered, it shifts back to the right to match current price.', display: 'none' },
+];
+
+export const plotConfig: PlotConfig[] = [
+  { id: 'plot0', title: 'DPO', color: '#43A047', lineWidth: 1 },
+];
+
+export const hlineConfig: HLineConfig[] = [
+  { id: 'hline_zero', price: 0, color: '#787B86', linestyle: 'solid', title: 'Zero Line' },
+];
+
+export const metadata = {
+  title: 'Detrended Price Oscillator',
+  shortTitle: 'DPO',
+  overlay: false,
+};
+
+export function calculate(bars: Bar[], inputs: Partial<DPOInputs> = {}): IndicatorResult {
+  const { length, centered } = { ...defaultInputs, ...inputs };
+
+  const close = new Series(bars, b => b.close);
+  const ma = ta.sma(close, length);
+  const maArr = ma.toArray();
+  const closeArr = close.toArray();
+
+  const barsback = Math.floor(length / 2) + 1;
+
+  // DPO = close - ma[barsback] (non-centered)
+  // Centered: visually equivalent to Pine's close[barsback] - ma with offset = -barsback
+  // Which means at display position i: close[i] - ma[i + barsback]
+  const dpoData = bars.map((bar, i) => {
+    if (centered) {
+      const maIndex = i + barsback;
+      if (maIndex >= bars.length || maArr[maIndex] == null) {
+        return { time: bar.time, value: NaN };
+      }
+      return { time: bar.time, value: closeArr[i]! - maArr[maIndex]! };
+    } else {
+      // non-centered: close - ma[barsback]
+      const maIndex = i - barsback;
+      if (maIndex < 0 || maArr[maIndex] == null) {
+        return { time: bar.time, value: NaN };
+      }
+      return { time: bar.time, value: closeArr[i]! - maArr[maIndex]! };
+    }
+  });
+
+  return {
+    metadata: {
+      title: metadata.title,
+      shorttitle: metadata.shortTitle,
+      overlay: metadata.overlay,
+    },
+    plots: {
+      'plot0': dpoData,
+    },
+  };
+}
+
+export const DPO = {
+  calculate,
+  metadata,
+  defaultInputs,
+  inputConfig,
+  plotConfig,
+  hlineConfig,
+};

@@ -5,7 +5,7 @@
 // - an activation link sets an account's first password: never logged; the admin who approved has it on the page;
 // - a password-reset link is a temporary password for that account: logged only when there is no key at all (the
 //   one case where nobody could ever use it otherwise), never after a refused or failed send (Serento's rule);
-// - the admin's notice of a new request carries no secret.
+// - the admin's notice of a new request carries no secret, nor do the notices of a change of two-factor (FD-2FA §5).
 import { httpRequest } from '../net/http.ts';
 import type { Logger } from '../log.ts';
 
@@ -14,7 +14,7 @@ export interface MailSettings {
   from: string;
 }
 
-export type MailKind = 'activate' | 'request' | 'reset' | 'reset-done';
+export type MailKind = 'activate' | 'request' | 'reset' | 'reset-done' | 'totp-on' | 'totp-changed' | 'totp-reset';
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
 
@@ -37,6 +37,22 @@ function content(kind: MailKind, name: string, link: string): { subject: string;
     return {
       subject: 'Sentiq · setează o parolă nouă',
       html: `<p>${hi}</p><p>Cineva a cerut o parolă nouă pentru contul tău Sentiq. Linkul e valabil o oră.</p>${button('Setează parola')}<p>Dacă nu tu ai cerut-o, ignoră acest email: parola rămâne aceeași.</p>`,
+    };
+  // FD-2FA §5: every change of the second factor is told out of band (OWASP), without a link or a code.
+  if (kind === 'totp-on')
+    return {
+      subject: 'Sentiq · autentificarea în doi pași e activă',
+      html: `<p>${hi}</p><p>Autentificarea în doi pași tocmai a fost configurată pe contul tău Sentiq: de acum, la intrare, după parolă îți cerem codul din aplicația de autentificare.</p><p>Dacă nu tu ai făcut asta, cere cât mai repede o parolă nouă din „Am uitat parola” (închide toate sesiunile), apoi scrie-i adminului.</p>`,
+    };
+  if (kind === 'totp-changed')
+    return {
+      subject: 'Sentiq · aplicația de autentificare a fost schimbată',
+      html: `<p>${hi}</p><p>Aplicația de autentificare a contului tău Sentiq tocmai a fost schimbată: codurile vin de acum din aplicația nouă, iar cea veche nu mai merge.</p><p>Dacă nu tu ai făcut asta, cere cât mai repede o parolă nouă din „Am uitat parola” (închide toate sesiunile), apoi scrie-i adminului.</p>`,
+    };
+  if (kind === 'totp-reset')
+    return {
+      subject: 'Sentiq · autentificarea în doi pași a fost resetată',
+      html: `<p>${hi}</p><p>Adminul a resetat autentificarea în doi pași a contului tău Sentiq, iar sesiunile deschise au fost închise. La următoarea intrare, după parolă, îți configurezi din nou aplicația de autentificare.</p><p>Dacă nu ai cerut asta, scrie-i adminului.</p>`,
     };
   return {
     subject: 'Sentiq · parola a fost schimbată',

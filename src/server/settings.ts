@@ -1,8 +1,51 @@
-import { settingsSchema, type Settings, type SettingsView } from '../shared/settings.ts';
+import { AI_PROVIDERS, type AiProvider } from '../shared/ai.ts';
+import { CHART_SYMBOL_RE, settingsSchema, type AiKeyView, type Settings, type SettingsView } from '../shared/settings.ts';
+import { salvageChartLines } from '../shared/hlines.ts';
+import { isFavoriteId, STUDY_MAX, studyMemoryEntrySchema, studySchema, type FavoriteId, type Study, type StudyMemoryEntry } from '../shared/studies.ts';
+import { salvageOrderTicket } from '../shared/trading.ts';
 import { isValidTimeZone, systemTimeZone } from '../shared/time.ts';
 import { parsePublicUrl, type AppConfig } from './config.ts';
 import type { Db } from './db/database.ts';
+import { tdPlanKey, tdUsageKey } from './market/stocks.ts';
 import { secretHint, type SecretBox } from './secrets/crypto.ts';
+
+/**
+ * The indicators of a list that no longer parses as a whole (FD-INDICATORS §6): each one that still does, once per uid,
+ * at most STUDY_MAX. An indicator a newer catalog dropped goes; the others stay.
+ */
+export function salvageStudies(stored: unknown): Study[] {
+  if (!Array.isArray(stored)) return [];
+  const out: Study[] = [];
+  const seen = new Set<string>();
+  for (const item of stored) {
+    const r = studySchema.safeParse(item);
+    if (!r.success || seen.has(r.data.uid)) continue;
+    seen.add(r.data.uid);
+    out.push(r.data);
+    if (out.length === STUDY_MAX) break;
+  }
+  return out;
+}
+
+/** The known favourites of a stored list, once each (FD-STUDYUX §1: one id dropped from the catalog leaves the rest). */
+export function salvageFavorites(stored: unknown): FavoriteId[] {
+  if (!Array.isArray(stored)) return [];
+  return [...new Set(stored.filter(isFavoriteId))];
+}
+
+/** The valid entries of a stored memory, the first for each indicator (FD-STUDYMEMORY). */
+export function salvageStudyMemory(stored: unknown): StudyMemoryEntry[] {
+  if (!Array.isArray(stored)) return [];
+  const out: StudyMemoryEntry[] = [];
+  const seen = new Set<string>();
+  for (const item of stored) {
+    const r = studyMemoryEntrySchema.safeParse(item);
+    if (!r.success || seen.has(r.data.id)) continue;
+    seen.add(r.data.id);
+    out.push(r.data);
+  }
+  return out;
+}
 
 /** Short, human summary of zod issues: "retentionDays: Too small…; indicator.lenFastEma: …". */
 export function formatIssues(issues: readonly { path: readonly PropertyKey[]; message: string }[]): string {
@@ -21,16 +64,23 @@ export class ValidationError extends Error {
 }
 
 const KEY = 'app';
-const CLAUDE_KEY = 'claude_key';
+/** The admin's Claude key before FD-AIKEYS: moved to the admin's own keys at start-up (`AiService.migrateLegacy`). */
+export const LEGACY_CLAUDE_KEY = 'claude_key';
 const RESEND_KEY = 'resend_key';
 const RESEND_FROM = 'resend_from';
 /** Resend's test sender: works without a verified domain, delivers only to the Resend account's own address. */
 export const RESEND_DEV_FROM = 'onboarding@resend.dev';
 /** Mail that reaches only the Resend account's owner: no key, or Resend's test sender ("Sentiq <onboarding@resend.dev>" too). */
+/** What an AI key looks like before it is sent to its provider to be checked (FD-AIKEYS). */
+const AI_KEY_RE = /^[\x21-\x7e]{20,300}$/;
+export function checkAiKeyShape(key: string): void {
+  if (!AI_KEY_RE.test(key)) throw new ValidationError('Cheia API nu pare validă (20–300 de caractere, fără spații)');
+}
+
 export const isDevMail = (r: { apiKey: string | null; from: string }) => !r.apiKey || /(^|<)onboarding@resend\.dev>?$/i.test(r.from.trim());
 
 /** Settings each user has for themselves (FD-USERS §2); the rest are global and only the admin changes them. */
-export const USER_KEYS = ['timezone', 'market', 'scanner', 'calendar', 'indicator', 'lma', 'charts'] as const;
+export const USER_KEYS = ['timezone', 'market', 'scanner', 'calendar', 'indicator', 'lma', 'charts', 'ai', 'studies', 'studyFavorites', 'studyMemory', 'orderTicket', 'stockNews', 'chartLines', 'hlineTemplate'] as const;
 type UserKey = (typeof USER_KEYS)[number];
 const isUserKey = (k: string): k is UserKey => (USER_KEYS as readonly string[]).includes(k);
 
@@ -39,7 +89,10 @@ export class SettingsForbiddenError extends Error {
   readonly statusCode = 403;
   readonly code = 'FORBIDDEN';
 }
-const TWELVEDATA_KEY = 'twelvedata_key';
+/** The Twelve Data key before FD-TDKEYS (everyone's): moved to the admin's own keys at start-up. */
+const LEGACY_TWELVEDATA_KEY = 'twelvedata_key';
+/** A user's Twelve Data key in `user_keys`. */
+const TWELVEDATA = 'twelvedata';
 /** What a Twelve Data key looks like (checked before it is sent anywhere). */
 export const TWELVEDATA_KEY_RE = /^[A-Za-z0-9]{16,64}$/;
 export const TWELVEDATA_KEY_INVALID = 'Cheia Twelve Data nu pare validă (litere și cifre, 16–64 de caractere)';
@@ -157,22 +210,15 @@ export class SettingsService {
     for (const key of Object.keys(base) as (keyof Settings)[]) {
       const candidate = settingsSchema.safeParse({ ...base, [key]: stored[key] });
       if (candidate.success) out[key] = candidate.data[key];
+      else if (key === 'studies') out.studies = salvageStudies(stored.studies);
+      else if (key === 'studyFavorites') out.studyFavorites = salvageFavorites(stored.studyFavorites);
+      else if (key === 'studyMemory') out.studyMemory = salvageStudyMemory(stored.studyMemory);
+      else if (key === 'orderTicket') out.orderTicket = salvageOrderTicket(stored.orderTicket);
+      else if (key === 'chartLines') out.chartLines = salvageChartLines(stored.chartLines, CHART_SYMBOL_RE);
     }
     return out as Settings;
   }
 
-  async view(): Promise<SettingsView> {
-    const [claude, td, base] = await Promise.all([this.db.get<{ value: string }>('SELECT value FROM settings WHERE [key] = ?', [CLAUDE_KEY]), this.getTwelveDataKey(), this.get()]);
-    let hint: string | null = null;
-    if (claude) {
-      try {
-        hint = secretHint(this.box.decrypt(claude.value));
-      } catch {
-        hint = null;
-      }
-    }
-    return { ...base, claudeKeySet: Boolean(claude), claudeKeyHint: hint, twelveDataKeySet: td !== null, twelveDataKeyHint: td ? secretHint(td) : null };
-  }
 
   private validate(merged: unknown): Settings {
     const res = settingsSchema.safeParse(merged);
@@ -331,14 +377,18 @@ export class SettingsService {
     else this.userCache.delete(userId);
   }
 
-  /** What the API returns: secrets only as "set" flags; their hints and the mail settings only for the admin. */
+  /**
+   * What the API returns: secrets only as "set" flags with a hint; the user's own keys (AI, Twelve Data: FD-AIKEYS,
+   * FD-TDKEYS) for them alone; the mail settings (everyone's) only for the admin.
+   */
   async viewFor(userId: number, isAdmin: boolean): Promise<SettingsView> {
-    const [v, resend, own] = await Promise.all([this.view(), isAdmin ? this.getResend() : null, this.forUser(userId)]);
+    const [resend, own, aiKeys, td] = await Promise.all([isAdmin ? this.getResend() : null, this.forUser(userId), this.aiKeyViews(userId), this.getTwelveDataKey(userId)]);
     return {
-      ...v,
       ...own,
-      claudeKeyHint: isAdmin ? v.claudeKeyHint : null,
-      twelveDataKeyHint: isAdmin ? v.twelveDataKeyHint : null,
+      aiKeys,
+      // The user's own Twelve Data key (FD-TDKEYS): its hint for them alone.
+      twelveDataKeySet: td !== null,
+      twelveDataKeyHint: td ? secretHint(td) : null,
       // The mail settings are the admin's alone (FD-ADMINSET §1).
       ...(resend
         ? { resendKeySet: resend.apiKey !== null, resendKeyHint: resend.apiKey ? secretHint(resend.apiKey) : null, resendFrom: resend.from, resendDev: isDevMail(resend) }
@@ -389,42 +439,95 @@ export class SettingsService {
     });
   }
 
-  async setClaudeKey(key: string | null): Promise<void> {
-    if (key === null || key.trim() === '') {
-      await this.db.run('DELETE FROM settings WHERE [key] = ?', [CLAUDE_KEY]);
+  // ── Each user's own keys: AI providers (FD-AIKEYS), Twelve Data (FD-TDKEYS) ──────────────────────────
+
+  /** The user's keys by name, decrypted (a key that no longer decrypts counts as absent). */
+  private async userKeys(userId: number): Promise<Map<string, string>> {
+    const rows = await this.db.all<{ name: string; secret: string }>('SELECT name, secret FROM user_keys WHERE user_id = ?', [userId]);
+    const out = new Map<string, string>();
+    for (const r of rows) {
+      try {
+        out.set(r.name, this.box.decrypt(r.secret));
+      } catch {
+        // a key saved under another master key: as if none
+      }
+    }
+    return out;
+  }
+
+  /** Saves (encrypted) or, with null / empty, removes one of the user's keys; its shape is the caller's to check. */
+  private async setUserKey(userId: number, name: string, key: string): Promise<void> {
+    if (!key) {
+      await this.db.run('DELETE FROM user_keys WHERE user_id = ? AND name = ?', [userId, name]);
       return;
     }
-    const k = key.trim();
-    if (k.length < 20 || k.length > 300 || /\s/.test(k)) throw new ValidationError('Cheia API Anthropic nu pare validă');
-    await this.db.run(UPSERT_SETTING, { k: CLAUDE_KEY, v: this.box.encrypt(k) });
+    await this.db.run(
+      'UPDATE user_keys SET secret = @s, updated_at = @t WHERE user_id = @u AND name = @n; IF @@ROWCOUNT = 0 INSERT INTO user_keys(user_id, name, secret, updated_at) VALUES (@u, @n, @s, @t)',
+      { u: userId, n: name, s: this.box.encrypt(key), t: this.now() },
+    );
   }
 
-  /** The Twelve Data key (FD-SENTIQ §4.3), encrypted like the Claude key; null removes it. */
-  async setTwelveDataKey(key: string | null): Promise<void> {
-    if (key === null || key.trim() === '') {
-      await this.db.run('DELETE FROM settings WHERE [key] = ?', [TWELVEDATA_KEY]);
-      return;
-    }
-    const k = key.trim();
-    if (!TWELVEDATA_KEY_RE.test(k)) throw new ValidationError(TWELVEDATA_KEY_INVALID);
-    await this.db.run(UPSERT_SETTING, { k: TWELVEDATA_KEY, v: this.box.encrypt(k) });
+  /** The enabled users who have a key of this name. */
+  async usersWithKey(name: string): Promise<number[]> {
+    return (
+      await this.db.all<{ id: number }>('SELECT u.id FROM users u JOIN user_keys k ON k.user_id = u.id WHERE k.name = ? AND u.disabled_at IS NULL ORDER BY u.id', [name])
+    ).map((r) => r.id);
   }
 
-  private async secret(name: string): Promise<string | null> {
-    const row = await this.db.get<{ value: string }>('SELECT value FROM settings WHERE [key] = ?', [name]);
-    if (!row) return null;
-    try {
-      return this.box.decrypt(row.value);
-    } catch {
-      return null;
-    }
+  /** The user's AI keys. */
+  async getAiKeys(userId: number): Promise<Partial<Record<AiProvider, string>>> {
+    const keys = await this.userKeys(userId);
+    return Object.fromEntries(AI_PROVIDERS.filter((p) => keys.has(p)).map((p) => [p, keys.get(p)])) as Partial<Record<AiProvider, string>>;
   }
 
-  getTwelveDataKey(): Promise<string | null> {
-    return this.secret(TWELVEDATA_KEY);
+  async aiKeyViews(userId: number): Promise<Record<AiProvider, AiKeyView>> {
+    const keys = await this.getAiKeys(userId);
+    return Object.fromEntries(AI_PROVIDERS.map((p) => [p, { set: keys[p] !== undefined, hint: keys[p] ? secretHint(keys[p]) : null }])) as Record<AiProvider, AiKeyView>;
   }
 
-  getClaudeKey(): Promise<string | null> {
-    return this.secret(CLAUDE_KEY);
+  /** Saves or, with null / empty, removes a user's key of one AI provider; checked only for its shape here. */
+  async setAiKey(userId: number, provider: AiProvider, key: string | null): Promise<void> {
+    const k = (key ?? '').trim();
+    if (k) checkAiKeyShape(k);
+    await this.setUserKey(userId, provider, k);
+  }
+
+  /** The user's Twelve Data key (FD-TDKEYS), or null. */
+  async getTwelveDataKey(userId: number): Promise<string | null> {
+    return (await this.userKeys(userId)).get(TWELVEDATA) ?? null;
+  }
+
+  /** Saves or, with null / empty, removes the user's Twelve Data key; checked only for its shape here. */
+  async setTwelveDataKey(userId: number, key: string | null): Promise<void> {
+    const k = (key ?? '').trim();
+    if (k && !TWELVEDATA_KEY_RE.test(k)) throw new ValidationError(TWELVEDATA_KEY_INVALID);
+    await this.setUserKey(userId, TWELVEDATA, k);
+  }
+
+  /**
+   * Run once at start-up (FD-TDKEYS §4): the Twelve Data key, until now everyone's, becomes the admin's own, with its
+   * plan and the day's credits. Nothing to do once the global key is gone. True when it moved it.
+   */
+  async migrateTwelveData(adminId: number): Promise<boolean> {
+    return this.db.tx(async () => {
+      const row = await this.db.get<{ value: string }>('SELECT value FROM settings WHERE [key] = ?', [LEGACY_TWELVEDATA_KEY]);
+      if (!row) return false;
+      await this.db.run(
+        `IF NOT EXISTS (SELECT 1 FROM user_keys WHERE user_id = @u AND name = @n) INSERT INTO user_keys(user_id, name, secret, updated_at) VALUES (@u, @n, @s, @t)`,
+        { u: adminId, n: TWELVEDATA, s: row.value, t: this.now() },
+      );
+      // The plan read for it and the credits it used today are the admin's now.
+      for (const [from, to] of [
+        [tdPlanKey(), tdPlanKey(String(adminId))],
+        [tdUsageKey(), tdUsageKey(String(adminId))],
+      ] as const) {
+        await this.db.run(
+          'IF NOT EXISTS (SELECT 1 FROM market_cache WHERE [key] = @to) UPDATE market_cache SET [key] = @to WHERE [key] = @from; DELETE FROM market_cache WHERE [key] = @from',
+          { from, to },
+        );
+      }
+      await this.db.run('DELETE FROM settings WHERE [key] = ?', [LEGACY_TWELVEDATA_KEY]);
+      return true;
+    });
   }
 }

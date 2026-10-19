@@ -17,6 +17,7 @@ import { UserError, UserMissingError } from '../auth/users.ts';
 import { PasskeyError } from '../auth/passkeys.ts';
 import { SummaryCooldownError, SummaryFailedError, SummaryUnavailableError } from '../summary/service.ts';
 import { DbUnavailableError } from '../db/database.ts';
+import { TradingError } from '../exchange/trading/types.ts';
 
 export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 256 * 1024, trustProxy: false });
@@ -47,10 +48,15 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
     if (err instanceof UserError) return reply.code(400).send({ error: { code: 'USER', message: err.message } });
     if (err instanceof UserMissingError) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: err.message } });
     if (err instanceof PasskeyError) return reply.code(400).send({ error: { code: 'PASSKEY', message: err.message } });
-    if (err instanceof SummaryUnavailableError) return reply.code(400).send({ error: { code: 'NO_CLAUDE_KEY', message: err.message } });
+    if (err instanceof SummaryUnavailableError) return reply.code(400).send({ error: { code: 'NO_AI_KEY', message: err.message } });
     if (err instanceof SummaryCooldownError) return reply.code(429).send({ error: { code: 'TOO_SOON', message: err.message, details: { retryAt: err.retryAt } } });
     if (err instanceof SummaryFailedError) return reply.code(502).send({ error: { code: 'SUMMARY_FAILED', message: err.message } });
     if (err instanceof NotFoundError) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: err.message } });
+    // FD-TRADING: a trading failure, with the platform's words; an order whose fate is unknown is a 502.
+    if (err instanceof TradingError) {
+      const status = err.code === 'RATE_LIMIT' ? 429 : err.code === 'UNKNOWN_OUTCOME' ? 502 : err.code === 'IN_PROGRESS' ? 409 : err.code === 'NO_ACCOUNT' ? 404 : 400;
+      return reply.code(status).send({ error: { code: err.code, message: err.message } });
+    }
     if (err instanceof ConflictError) return reply.code(409).send({ error: { code: 'CONFLICT', message: err.message } });
     if (err instanceof MarketError) {
       const status = err.code === 'UNKNOWN_SYMBOL' ? 404 : err.code === 'EXCHANGE_ERROR' ? 502 : 400;

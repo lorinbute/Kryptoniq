@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { TIMEFRAMES } from '../time.ts';
 
 export const SLINGSHOT_VERSION = '3.3';
+/** FD-DENAMES: "[DE]" for Dusty Enterprise; the title in lists and the settings panel, the short one on the chart. */
+export const SLINGSHOT_TITLE = `[DE] Slingshot System ${SLINGSHOT_VERSION}`;
+export const SLINGSHOT_SHORT_TITLE = `[DE] Slingshot ${SLINGSHOT_VERSION}`;
 
 /** Pine `color.red` in v5. */
 export const PINE_RED = '#FF5252';

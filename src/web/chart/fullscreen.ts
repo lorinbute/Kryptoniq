@@ -1,6 +1,7 @@
 // Full screen for the chart (TD-CHARTUX §5): the system's full screen when the browser allows it, otherwise the
 // element covers the app window ("css" mode). Esc leaves the css mode; in the native mode the browser handles Esc.
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { lockScroll } from '../scroll-lock.ts';
 
 export type FullscreenMode = 'off' | 'native' | 'css';
 
@@ -96,16 +97,8 @@ export function useFullscreen(ref: RefObject<HTMLElement | null>, opts: { blockE
     };
   }, [mode, exit]);
 
-  // The page behind the covering element must not scroll.
-  useEffect(() => {
-    if (mode !== 'css') return;
-    const html = document.documentElement;
-    const before = html.style.overflow;
-    html.style.overflow = 'hidden';
-    return () => {
-      html.style.overflow = before;
-    };
-  }, [mode]);
+  // The page behind the covering element must not scroll (the lock shared with panels and windows, FD-SCROLLLOCK).
+  useEffect(() => (mode === 'css' ? lockScroll() : undefined), [mode]);
 
   // Leaving the page while in full screen.
   useEffect(

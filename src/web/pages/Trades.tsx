@@ -2,16 +2,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ChartCandlestick, Coins, History, ListChecks, Plus, RefreshCw, Wallet } from 'lucide-react';
-import type { AccountView, BalanceRow, Portfolio, StatsPeriod, TradeStats } from '../../shared/api-types.ts';
+import { ArrowRightLeft, ChartCandlestick, Coins, History, ListChecks, Plus, Power, RefreshCw, Wallet } from 'lucide-react';
+import type { AccountView, BalanceRow, OrderRow, PositionRow, Portfolio, StatsPeriod, TradeStats } from '../../shared/api-types.ts';
 import { api, errorMessage, qs } from '../api.ts';
-import { autoDigits, fmtAgo, fmtDateTime, fmtMoney, fmtNum, fmtPct, fmtPrice, fmtUsd } from '../format.ts';
+import { autoDigits, fmtAgo, fmtDateTime, fmtMoney, fmtNum, fmtPct, fmtPrice, fmtUsd, fmtWeekday } from '../format.ts';
 import { useTz } from '../hooks.ts';
 import { Empty, ErrorNote, Loading, Panel, Warning } from '../components/ui.tsx';
 import { CoinLogo } from '../components/icons.tsx';
 import { AccountWizard } from '../components/AccountWizard.tsx';
 import { ProviderLogo } from '../components/ProviderLogo.tsx';
 import { providerById } from '../../shared/providers.ts';
+import { OrderTicket, type TicketSeed } from '../components/OrderTicket.tsx';
+import { CancelOrderButton, EnableTradingDialog, FundsRiskNote, TradeJournal, useDisableTrading } from '../components/TradingControls.tsx';
 
 const SECTION_RO: Record<string, string> = { balances: 'Solduri', positions: 'Poziții', orders: 'Ordine', fills: 'Tranzacții', prices: 'Prețuri', mode: 'Tip cont', futures: 'Cont futures' };
 /** `who`: „exchange-ul” or „brokerul”. */
@@ -69,16 +71,12 @@ function Stat({ label, value, tone, title, hint }: { label: string; value: strin
   );
 }
 
-/** „Reîmprospătează” in the page's top row (FD-TRADESTATS §2): the account's portfolio and its stats for the period. */
+/** „Reîmprospătează” in the page's top row (FD-TRADESTATS §2, FD-BROKERSTATS): the account's portfolio and its stats for the period. */
 function useRefreshAccount(account: AccountView, period: StatsPeriod) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      const crypto = account.kind !== 'stocks';
-      const [p, st] = await Promise.all([
-        api.get<Portfolio>(`/api/portfolio/${account.id}?force=1`),
-        crypto ? api.get<TradeStats>(statsUrl(account.id, period, true)).catch(() => null) : Promise.resolve(null),
-      ]);
+      const [p, st] = await Promise.all([api.get<Portfolio>(`/api/portfolio/${account.id}?force=1`), api.get<TradeStats>(statsUrl(account.id, period, true)).catch(() => null)]);
       qc.setQueryData(['portfolio', account.id], p);
       if (st) qc.setQueryData(statsKey(account.id, period), st);
     },
@@ -196,7 +194,146 @@ function CryptoCards({
   );
 }
 
-function PortfolioView({ account, period }: { account: AccountView; period: StatsPeriod }) {
+/** FD-BROKERSTATS §2: what a closed trade is at each broker, and its result. */
+const BROKER_STATS_NOTE: Record<string, string> = {
+  etoro: 'pozițiile închise (o închidere parțială e o tranzacție separată), după profitul net dat de eToro',
+  trading212: 'vânzările executate (un ordin e o tranzacție), după profitul realizat dat de Trading 212',
+  ibkr: 'ordinele care au închis sau redus o poziție, după Realized P/L (FIFO, cu comisioane) din raportul Flex',
+  alpaca: 'ordinele care au închis sau redus o poziție; rezultatul e calculat de Sentiq din execuții (FIFO), fără taxele regulatorii',
+};
+
+/** FD-BROKERSTATS §3: why a closed trade can have no known result. */
+const UNKNOWN_WHY: Record<string, string> = {
+  etoro: 'eToro nu a dat profitul net',
+  trading212: 'Trading 212 nu a dat profitul realizat',
+  alpaca: 'cumpărarea e mai veche decât istoricul citit, acțiunile au venit prin transfer sau split, ori contul nu permite short',
+};
+
+/** „1 tranzacție”, „5 tranzacții”, „20 de tranzacții”. */
+const tradesRo = (n: number): string => (n === 1 ? '1 tranzacție' : `${n}${n % 100 >= 20 || (n > 0 && n % 100 === 0) ? ' de' : ''} tranzacții`);
+
+/** IBKR's reports follow the New York trading day. */
+const ET = 'America/New_York';
+
+const BROKER_GRID: Record<number, string> = { 5: 'xl:grid-cols-5', 6: 'xl:grid-cols-6', 7: 'xl:grid-cols-7' };
+
+/** FD-BROKERSTATS §1: a broker's cards (holdings, cash, open positions' PnL, then the closed trades of the period). */
+function BrokerCards({
+  p,
+  account,
+  stats,
+  period,
+  updated,
+}: {
+  p: Portfolio;
+  account: AccountView;
+  stats: { data?: TradeStats; isPending: boolean; isError: boolean };
+  period: StatsPeriod;
+  updated: React.ReactNode;
+}) {
+  const name = providerById(account.exchange)?.name ?? account.exchange;
+  const st = stats.data;
+  // IBKR's report has finished days only: before today's, „Azi” cannot be counted.
+  const notYet = !!st && !st.error && st.asOf != null && st.asOf < st.from;
+  const statDash = (): string | undefined => {
+    if (stats.isPending) return undefined;
+    if (stats.isError || !st) return 'Statisticile nu s-au putut citi.';
+    // A server from before FD-BROKERSTATS sends no `currency` and no broker stats.
+    if (!st.supported) return st.currency === undefined ? 'Serverul Sentiq nu are încă statisticile pentru brokeri.' : `${name} nu dă prin API istoricul tranzacțiilor închise.`;
+    if (st.error) return `Istoricul tranzacțiilor: ${codeRo(st.error.code, 'brokerul')}`;
+    if (notYet) return `${name} trimite tranzacțiile unei zile după închiderea ei (raportul Flex are datele până la închiderea bursei de ${fmtWeekday(st.asOf as number, ET)}). Alege 7z, 30z sau 90z.`;
+    return undefined;
+  };
+  const why = statDash();
+  const count = (v: number | null | undefined) => (stats.isPending ? '…' : v === null || v === undefined ? '—' : fmtNum(v, 0));
+  const periodLabel = PERIODS.find((x) => x.id === period)?.label ?? period;
+  // The New York day, in full („vineri, 16 octombrie”): a short month („oct.”) would end the sentence with two dots.
+  const through = st?.asOf != null && !notYet ? ` Datele: până la închiderea bursei de ${fmtWeekday(st.asOf, ET)}.` : '';
+  const what = BROKER_STATS_NOTE[account.exchange] ?? 'tranzacțiile închise';
+  const closedTitle = (label: string) => why ?? `${label}: ${what}, în perioada aleasă (${periodLabel}).${through}`;
+  const counted = st && st.wins !== null && !why;
+  const partial = !counted
+    ? undefined
+    : st.netPartial
+      ? 'parțial: fără curs valutar'
+      : st.limited
+        ? 'parțial: istoric prea lung'
+        : st.unknownResults
+          ? `${tradesRo(st.unknownResults)} fără rezultat`
+          : undefined;
+  const partialTitle = !counted
+    ? ''
+    : [
+        st.netPartial ? ' Unele rezultate sunt în altă monedă, fără curs de schimb: sunt numărate, dar nu intră în sumă.' : '',
+        st.limited ? ` ${name} dă istoricul pe pagini; Sentiq citește un număr limitat, iar perioada are mai multe tranzacții decât au încăput.` : '',
+        st.unknownResults
+          ? ` Fără rezultat cunoscut, deci nenumărate: ${tradesRo(st.unknownResults)}${UNKNOWN_WHY[account.exchange] ? ` (${UNKNOWN_WHY[account.exchange]})` : ''}.`
+          : '',
+      ].join('');
+  const cards: React.ReactNode[] = [
+    <Stat key="value" label="Valoare dețineri" value={fmtMoney(p.totals.spotValue, p.currency)} />,
+    p.cash !== null && <Stat key="cash" label="Numerar disponibil" value={fmtMoney(p.cash, p.currency)} />,
+    p.positions.length > 0 && (
+      <Stat key="upnl" label="PnL nerealizat (poziții)" value={fmtMoney(p.totals.unrealizedPnl, p.currency)} tone={pnlClass(p.totals.unrealizedPnl)} title="Profitul sau pierderea pozițiilor cu levier sau short încă deschise." />
+    ),
+    <Stat key="wins" label="Tranzacții profitabile" value={count(st?.wins)} tone={st?.wins ? 'text-bull' : undefined} title={closedTitle('Profitabile')} />,
+    <Stat key="losses" label="Tranzacții cu pierdere" value={count(st?.losses)} tone={st?.losses ? 'text-bear' : undefined} title={closedTitle('Cu pierdere')} />,
+    <Stat
+      key="rate"
+      label="Rata de succes"
+      value={stats.isPending ? '…' : st?.successRate === null || st?.successRate === undefined ? '—' : `${fmtNum(st.successRate, 1)} %`}
+      title={why ?? 'Profitabile din profitabile + cu pierdere; tranzacțiile închise pe zero nu intră.'}
+    />,
+    <Stat
+      key="net"
+      label="Câștig net"
+      value={stats.isPending ? '…' : why ? '—' : fmtMoney(st?.net, st?.currency ?? p.currency)}
+      tone={why ? undefined : pnlClass(st?.net ?? null)}
+      title={why ?? `Suma rezultatelor: ${what}, în moneda contului.${through}${partialTitle}`}
+      hint={partial}
+    />,
+  ].filter(Boolean);
+  return (
+    <div className="flex flex-col gap-2.5">
+      <div className={clsx('grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4', BROKER_GRID[cards.length])}>{cards}</div>
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1">
+        {st?.error && <span className="text-[12px] text-bear">{why}</span>}
+        <div className="ml-auto">{updated}</div>
+      </div>
+    </div>
+  );
+}
+
+/** FD-TRADING §4: what "Închide" opens for a position (a market order that only reduces it; eToro: the positions). */
+function closeSeed(account: AccountView, pos: PositionRow): TicketSeed | null {
+  const base = pos.symbol.split('/')[0] ?? pos.symbol;
+  if (account.exchange === 'etoro') return pos.ref?.positionIds ? { kind: 'stocks', accountId: account.id, symbol: base, side: 'sell', close: { positionIds: pos.ref.positionIds }, amount: pos.size ?? pos.contracts, title: `Închide poziția ${base}` } : null;
+  if (account.kind === 'stocks') return { kind: 'stocks', accountId: account.id, symbol: base, side: pos.side === 'short' ? 'buy' : 'sell', amount: pos.size ?? pos.contracts, title: `Închide poziția ${base}` };
+  // Only where trading was switched on for futures (a spot-only key shows its positions without the button).
+  if (!account.trading.markets.includes('futures')) return null;
+  const mode = pos.marginMode === 'cross' || pos.marginMode === 'isolated' ? pos.marginMode : undefined;
+  return { kind: 'crypto', accountId: account.id, market: 'futures', symbol: pos.symbol, side: pos.side === 'short' ? 'buy' : 'sell', amount: pos.size ?? pos.contracts, reduceOnly: true, marginMode: mode, title: `Închide ${pos.symbol}` };
+}
+
+/** Whether "Anulează" can go out: the order's market (as the server reads it) is one trading was switched on for. */
+function cancellable(account: AccountView, o: OrderRow): boolean {
+  if (o.cancellable === false) return false;
+  // A perpetual's order (BTC/USDT:USDT) is futures wherever it is listed (KuCoin's unified account lists it with spot).
+  const market = account.kind === 'stocks' ? 'stock' : o.symbol.includes(':') ? 'futures' : o.market;
+  return account.trading.markets.includes(market);
+}
+
+/** What "Vinde" opens for a holding (eToro: closing its positions; IBKR: nothing). */
+function sellSeed(account: AccountView, b: BalanceRow): TicketSeed | null {
+  if (account.exchange === 'ibkr') return null;
+  if (account.exchange === 'etoro') return b.ref?.positionIds ? { kind: 'stocks', accountId: account.id, symbol: b.asset, side: 'sell', close: { positionIds: b.ref.positionIds }, amount: b.total, title: `Vinde ${b.asset} (închide pozițiile)` } : null;
+  if (account.kind === 'stocks') return { kind: 'stocks', accountId: account.id, symbol: b.ref?.ticker ?? b.asset, side: 'sell', amount: b.free, title: `Vinde ${b.asset}` };
+  if (!account.trading.markets.includes('spot')) return null;
+  return { kind: 'crypto', accountId: account.id, market: 'spot', symbol: `${b.asset}/USDT`, side: 'sell', amount: b.free, title: `Vinde ${b.asset}` };
+}
+
+function PortfolioView({ account, period, onTicket }: { account: AccountView; period: StatsPeriod; onTicket: (seed: TicketSeed) => void }) {
+  const trades = account.trading.enabled;
   const tz = useTz();
   const q = useQuery({ queryKey: ['portfolio', account.id], queryFn: () => api.get<Portfolio>(`/api/portfolio/${account.id}`), refetchInterval: 30_000 });
   const statsQ = useQuery({
@@ -204,7 +341,6 @@ function PortfolioView({ account, period }: { account: AccountView; period: Stat
     queryFn: () => api.get<TradeStats>(statsUrl(account.id, period)),
     staleTime: 60_000,
     refetchInterval: 5 * 60_000,
-    enabled: account.kind !== 'stocks',
     retry: 1,
   });
   if (!q.data && !q.isError) return <Loading label={account.kind === 'stocks' ? 'Se citesc datele de la broker…' : 'Se citesc datele de pe exchange…'} />;
@@ -226,25 +362,7 @@ function PortfolioView({ account, period }: { account: AccountView; period: Stat
   return (
     <div className="flex flex-col gap-3.5">
       {stocks ? (
-        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-3">
-          <div className="panel px-5 py-3.5">
-            <div className="text-[12.5px] text-muted">Valoare dețineri</div>
-            <div className="num mt-0.5 text-[24px] tracking-[-0.02em]">{money(p.totals.spotValue)}</div>
-          </div>
-          {p.cash !== null && (
-            <div className="panel px-5 py-3.5">
-              <div className="text-[12.5px] text-muted">Numerar disponibil</div>
-              <div className="num mt-0.5 text-[24px] tracking-[-0.02em]">{money(p.cash)}</div>
-            </div>
-          )}
-          {p.positions.length > 0 && (
-            <div className="panel px-5 py-3.5">
-              <div className="text-[12.5px] text-muted">PnL nerealizat (poziții)</div>
-              <div className={clsx('num mt-0.5 text-[24px] tracking-[-0.02em]', pnlClass(p.totals.unrealizedPnl))}>{money(p.totals.unrealizedPnl)}</div>
-            </div>
-          )}
-          {updated}
-        </div>
+        <BrokerCards p={p} account={account} stats={statsQ} period={period} updated={updated} />
       ) : (
         <CryptoCards p={p} account={account} stats={statsQ} period={period} updated={updated} />
       )}
@@ -281,6 +399,11 @@ function PortfolioView({ account, period }: { account: AccountView; period: Stat
                 <th className="text-right">PnL</th>
                 <th className="text-right">Lichidare</th>
                 <th className="text-right">Levier</th>
+                {trades && (
+                  <th className="relative text-right">
+                    <span className="sr-only">Acțiuni</span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -305,6 +428,18 @@ function PortfolioView({ account, period }: { account: AccountView; period: Stat
                     </td>
                     <td className="num text-right text-warn">{fmtPrice(pos.liquidationPrice, d)}</td>
                     <td className="num text-right">{pos.leverage ? `${fmtNum(pos.leverage, 1)}×` : '—'}</td>
+                    {trades && (
+                      <td className="text-right">
+                        {(() => {
+                          const seed = closeSeed(account, pos);
+                          return seed ? (
+                            <button className="btn h-8 px-2 text-[12px]" onClick={() => onTicket(seed)}>
+                              Închide
+                            </button>
+                          ) : null;
+                        })()}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -329,6 +464,11 @@ function PortfolioView({ account, period }: { account: AccountView; period: Stat
                 <th className="text-right">Valoare</th>
                 <th className="text-right">Preț mediu</th>
                 <th className="text-right">{stocks ? 'PnL' : 'PnL estimat'}</th>
+                {trades && (
+                  <th className="relative text-right">
+                    <span className="sr-only">Acțiuni</span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -383,6 +523,20 @@ function PortfolioView({ account, period }: { account: AccountView; period: Stat
                         '—'
                       )}
                     </td>
+                    {trades && (
+                      <td className="text-right">
+                        {(() => {
+                          // Stablecoins and instruments without a symbol are not sold from here; nor a KuCoin "main" balance
+                          // (it trades only once moved to the trading account, and Sentiq never moves funds).
+                          const seed = STABLE_ASSETS.has(b.asset) || b.asset.startsWith('#') || b.free <= 0 || b.account === 'main' ? null : sellSeed(account, b);
+                          return seed ? (
+                            <button className="btn h-8 px-2 text-[12px]" onClick={() => onTicket(seed)}>
+                              Vinde
+                            </button>
+                          ) : null;
+                        })()}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -408,6 +562,11 @@ function PortfolioView({ account, period }: { account: AccountView; period: Stat
                 <th className="text-right">Declanșare</th>
                 <th className="text-right">Cantitate</th>
                 <th>Plasat</th>
+                {trades && (
+                  <th className="relative text-right">
+                    <span className="sr-only">Acțiuni</span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -432,6 +591,7 @@ function PortfolioView({ account, period }: { account: AccountView; period: Stat
                     {o.filled ? <div className="text-[11.5px] text-faint">{fmtNum(o.filled, 8)} executat</div> : null}
                   </td>
                   <td className="num text-[12px] text-muted">{o.timestamp ? fmtDateTime(o.timestamp, tz) : '—'}</td>
+                  {trades && <td className="text-right">{cancellable(account, o) && <CancelOrderButton account={account} order={o} />}</td>}
                 </tr>
               ))}
             </tbody>
@@ -501,12 +661,13 @@ export default function TradesPage() {
         <Panel title="Tranzacțiile tale" icon={Wallet}>
           <div className="max-w-[70ch] space-y-3 text-[14px]">
             <p>
-              Conectează un exchange crypto sau un broker de acțiuni ca să vezi deținerile, pozițiile și ordinele deschise. Sentiq doar citește date: nu poate plasa, modifica sau anula
-              ordine.
+              Conectează un exchange crypto sau un broker de acțiuni ca să vezi deținerile, pozițiile și ordinele deschise. Implicit Sentiq doar citește; poți porni tranzacționarea pe un
+              cont (cu passkey-ul sau cu parola și codul 2FA), apoi trimite ordine din Sentiq, fiecare cu o confirmare.
             </p>
             <p className="text-muted">
-              Crypto: KuCoin, Binance, Bybit, OKX, Kraken, Coinbase, Bitget. Acțiuni: Trading 212, eToro, Interactive Brokers, Alpaca. Pentru fiecare, wizard-ul arată cum creezi o
-              cheie doar pentru citire.
+              Crypto: KuCoin, Binance, Bybit, OKX, Kraken, Coinbase, Bitget. Acțiuni: Trading 212, eToro, Interactive Brokers, Alpaca. Pentru fiecare, wizard-ul arată cum creezi
+              cheia: pentru citire și, dacă vrei să tranzacționezi din Sentiq, cu tranzacționare; niciodată cu retrageri. Restricționează cheia la IP-urile serverului Sentiq,
+              afișate acolo.
             </p>
             <button className="btn btn-primary" onClick={() => setWizard(true)}>
               <Plus size={15} aria-hidden /> Adaugă un cont
@@ -532,6 +693,12 @@ function AccountsView({ list, current, onSelect, onAdd, wizardEl }: { list: Acco
   // A failed refresh belongs to the account it was for: switching accounts clears its warning.
   const resetRefresh = refresh.reset;
   useEffect(() => resetRefresh(), [current.id, resetRefresh]);
+  // FD-TRADING: the order form (from a button or a row) and the switch.
+  const [ticket, setTicket] = useState<TicketSeed | null>(null);
+  const [enabling, setEnabling] = useState(false);
+  const disable = useDisableTrading(current);
+  const closeTicket = useCallback(() => setTicket(null), []);
+  const closeEnabling = useCallback(() => setEnabling(false), []);
   return (
     <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-3.5">
       <div className="flex flex-wrap items-center gap-3">
@@ -544,21 +711,42 @@ function AccountsView({ list, current, onSelect, onAdd, wizardEl }: { list: Acco
             </button>
           ))}
         </div>
-        {/* FD-TRADESTATS §2, FD-UIPOLISH: the period of the closed trades and the buttons share the top row. */}
+        {/* FD-TRADESTATS §2, FD-UIPOLISH: the period of the closed trades and the buttons share the top row (FD-BROKERSTATS: every account). */}
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {current.kind !== 'stocks' && (
-            <div className="flex items-center gap-2">
-              <span id="trades-period" className="text-[12.5px] text-muted">
-                Tranzacții închise în
-              </span>
-              <div className="seg" role="group" aria-labelledby="trades-period">
-                {PERIODS.map((x) => (
-                  <button key={x.id} type="button" aria-pressed={x.id === period} onClick={() => x.id !== period && choosePeriod(x.id)}>
-                    {x.label}
-                  </button>
-                ))}
-              </div>
+          <div className="flex items-center gap-2">
+            <span id="trades-period" className="text-[12.5px] text-muted">
+              Tranzacții închise în
+            </span>
+            <div className="seg" role="group" aria-labelledby="trades-period">
+              {PERIODS.map((x) => (
+                <button key={x.id} type="button" aria-pressed={x.id === period} onClick={() => x.id !== period && choosePeriod(x.id)}>
+                  {x.label}
+                </button>
+              ))}
             </div>
+          </div>
+          {current.trading.enabled ? (
+            <>
+              <button className="btn btn-primary" onClick={() => setTicket({ accountId: current.id, kind: current.kind })}>
+                <ArrowRightLeft size={14} aria-hidden /> Ordin nou
+              </button>
+              <button
+                className="btn"
+                disabled={disable.isPending}
+                title="Oprește tranzacționarea pe acest cont"
+                onClick={() => {
+                  if (window.confirm(`Oprești tranzacționarea pe „${current.label}”? Ordinele deja plasate rămân pe platformă.`)) disable.mutate();
+                }}
+              >
+                <Power size={14} aria-hidden /> Oprește tranzacționarea
+              </button>
+            </>
+          ) : (
+            current.trading.supported && (
+              <button className="btn" onClick={() => setEnabling(true)}>
+                <ArrowRightLeft size={14} aria-hidden /> Pornește tranzacționarea
+              </button>
+            )
           )}
           <button className="btn" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
             <RefreshCw size={14} className={clsx(refresh.isPending && 'animate-spin')} aria-hidden /> Reîmprospătează
@@ -569,14 +757,25 @@ function AccountsView({ list, current, onSelect, onAdd, wizardEl }: { list: Acco
         </div>
       </div>
       {refresh.isError && <Warning>Reîmprospătarea nu a reușit: {errorMessage(refresh.error)}</Warning>}
-      {current.permissionWarning && (
-        <Warning>
-          Cheia „{current.label}” are permisiuni în plus față de citire ({current.permissions}). Recomandat: creează o cheie doar pentru citire.
-        </Warning>
+      {disable.isError && <Warning>Tranzacționarea nu a putut fi oprită: {errorMessage(disable.error)}</Warning>}
+      {current.fundsRisk ? (
+        <FundsRiskNote account={current} />
+      ) : (
+        current.permissionWarning &&
+        !current.trading.enabled && (
+          <Warning>
+            Cheia „{current.label}” poate face mai mult decât citire ({current.permissions}). Ca să tranzacționezi cu ea din Sentiq, pornește tranzacționarea; dacă nu vrei,
+            ajunge o cheie doar pentru citire.
+          </Warning>
+        )
       )}
+      {current.trading.reason && <p className="text-[12.5px] text-faint">{current.trading.reason} Contul rămâne doar pentru citire.</p>}
       {current.lastError && <Warning>Ultima eroare: {current.lastError}</Warning>}
-      <PortfolioView key={current.id} account={current} period={period} />
+      <PortfolioView key={current.id} account={current} period={period} onTicket={setTicket} />
+      <TradeJournal account={current} />
       {wizardEl}
+      {ticket && <OrderTicket seed={ticket} onClose={closeTicket} />}
+      {enabling && <EnableTradingDialog account={current} onClose={closeEnabling} />}
     </div>
   );
 }

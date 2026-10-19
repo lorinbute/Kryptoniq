@@ -13,6 +13,7 @@ const dbNearlyFull = (db: Health['db']) => db.sizeBytes != null && !!db.maxSizeB
 const JOB_RO: Record<string, string> = {
   'news.fetch': 'Descărcare știri',
   'sentiment.score': 'Scorare sentiment',
+  'sentiment.ai': 'Scorare cu AI-ul utilizatorilor',
   'sentiment.daily': 'Indicele zilei',
   'calendar.ff': 'Calendar ForexFactory',
   'calendar.tv': 'Calendar TradingView',
@@ -38,7 +39,7 @@ export default function HealthPage() {
       <Panel title="Sentiment și date" icon={Database}>
         <dl className="grid gap-x-8 gap-y-2 text-[13px] sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <dt className="text-faint">Motor activ</dt>
+            <dt className="text-faint">Scorul comun</dt>
             <dd>{h.sentiment.engine}</dd>
           </div>
           <div>
@@ -49,14 +50,11 @@ export default function HealthPage() {
               {m.error && <div className="text-[12px] text-bear">{m.error}</div>}
             </dd>
           </div>
-          {h.sentiment.claude && (
+          {typeof h.sentiment.aiUsers === 'number' && (
             <div>
-              <dt className="text-faint">Claude ({h.sentiment.claude.model})</dt>
-              <dd className={clsx(h.sentiment.claude.lastError ? 'text-bear' : 'text-bull')}>
-                {h.sentiment.claude.lastError
-                  ? `${h.sentiment.claude.lastError.message}; ${h.sentiment.claude.lastError.permanent ? 'se folosește motorul local până schimbi cheia' : 'se reîncearcă în câteva minute'}`
-                  : 'funcționează'}
-              </dd>
+              {/* FD-AIKEYS: their own AI, on their own key; how it goes each sees in their settings. */}
+              <dt className="text-faint">Scor cu AI-ul propriu</dt>
+              <dd>{h.sentiment.aiUsers === 0 ? 'niciun utilizator' : `${h.sentiment.aiUsers} ${h.sentiment.aiUsers === 1 ? 'utilizator' : 'utilizatori'}`}</dd>
             </div>
           )}
           <div>
@@ -109,12 +107,11 @@ export default function HealthPage() {
               <dd>{fmtAgo(h.calendar.earn, now)}</dd>
             </div>
           )}
-          {h.twelveData && (
+          {typeof h.twelveData?.users === 'number' && (
             <div>
+              {/* FD-TDKEYS: each user's own key; their credits are in their settings. */}
               <dt className="text-faint">Twelve Data (acțiuni)</dt>
-              <dd className="num">
-                {h.twelveData.hasKey ? `${h.twelveData.used}${h.twelveData.perDay === null ? '' : ` / ${h.twelveData.perDay}`} cereri azi (UTC)${h.twelveData.perDay === null ? ', fără limită zilnică' : ''}` : 'fără cheie: grafice zilnice de la Nasdaq'}
-              </dd>
+              <dd>{h.twelveData.users === 0 ? 'nimeni nu are cheie: acțiunile pe 1d și 1w (Nasdaq)' : `${h.twelveData.users} ${h.twelveData.users === 1 ? 'utilizator cu cheie' : 'utilizatori cu cheie'}`}</dd>
             </div>
           )}
         </dl>

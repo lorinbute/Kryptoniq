@@ -1,6 +1,7 @@
-// Users (FD-USERS, TD-USERS §2, FD-INVITE): accounts only on request, approved by the admin and activated from a
-// link (which also proves the address), password + TOTP (with recovery codes), the one-time links, the admin's
-// first password, and the admin's tools. The rules are Serento.Web's AdminAuthService,
+// Users (FD-USERS, TD-USERS §2, FD-INVITE, FD-2FA): accounts only on request, approved by the admin and activated from
+// a link (which also proves the address), password + TOTP (with recovery codes; required of every account since
+// FD-2FA, so it can be changed but never turned off), the one-time links, the admin's first password, and the admin's
+// tools. The rules are Serento.Web's AdminAuthService,
 // for many accounts:
 // - the password is checked BEFORE a second factor, so a wrong password never burns a recovery code;
 // - a reset link never clears two-factor (whoever holds the mailbox would otherwise hold both factors);
@@ -39,6 +40,8 @@ export interface UserRow {
   totp_secret: string | null;
   totp_confirmed_at: number | null;
   totp_last_step: number;
+  /** The new authenticator's secret while the user changes it (FD-2FA §3); the old one works until it is confirmed. */
+  totp_next_secret: string | null;
   recovery_codes: string | null;
   passkey_user_handle: Uint8Array | null;
 }
@@ -69,6 +72,8 @@ export interface AccountRequest {
 
 export type LoginResult = { status: 'ok' | '2fa'; user: UserRow } | { status: 'unverified' | 'disabled'; user: UserRow } | { status: 'invalid' };
 export type SecondFactor = 'totp' | 'recovery' | 'invalid';
+/** A step-up's verdict (FD-TRADEUNLOCK): which factor was wrong, so the message can say it. */
+export type StepUp = 'ok' | 'password' | 'code';
 
 /** An error the person can act on (400). */
 export class UserError extends Error {}
@@ -366,31 +371,55 @@ export class UserService {
     });
   }
 
+  /**
+   * Both factors again for a sensitive action of a signed-in user (FD-TRADING §1: switching trading on): the password
+   * first (a wrong one never spends a recovery code), then a code from the app or a recovery code. Says which one was
+   * wrong: the person is signed in, and the sign-in itself tells the password apart from the code.
+   */
+  async stepUp(userId: number, password: unknown, code: unknown): Promise<StepUp> {
+    const u = await this.byId(userId);
+    if (!u || u.totp_confirmed_at === null || typeof password !== 'string' || !(await verifyPassword(password, u.password_hash))) return 'password';
+    return (await this.verifySecondFactor(userId, code)) === 'invalid' ? 'code' : 'ok';
+  }
+
   // ── Two-factor (TOTP) ────────────────────────────────────────────────────────────────────────────────
 
-  private secretOf(u: UserRow): string | null {
-    if (!u.totp_secret) return null;
+  private secretOf(u: UserRow, secret = u.totp_secret): string | null {
+    if (!secret) return null;
     try {
-      return this.box.decrypt(u.totp_secret);
+      return this.box.decrypt(secret);
     } catch {
       return null; // fails closed: two-factor stays on, only a recovery code gets in
     }
   }
 
-  /** The pending secret is shown only before confirmation; a confirmed one never leaves the database again. */
-  async twoFactorState(userId: number): Promise<{ enabled: boolean; confirmedAt: number | null; pendingSecret: string | null; uri: string | null; recoveryCodesLeft: number }> {
+  /**
+   * The secret shown is the one not confirmed yet: the enrolment's, or the new authenticator's during a change
+   * (FD-2FA §3). A confirmed one never leaves the database again.
+   */
+  async twoFactorState(userId: number): Promise<{
+    enabled: boolean;
+    confirmedAt: number | null;
+    replacing: boolean;
+    pendingSecret: string | null;
+    uri: string | null;
+    recoveryCodesLeft: number;
+  }> {
     const u = (await this.byId(userId)) as UserRow;
-    const pending = u.totp_confirmed_at === null ? this.secretOf(u) : null;
+    const enabled = u.totp_confirmed_at !== null;
+    const replacing = enabled && u.totp_next_secret !== null;
+    const pending = replacing ? this.secretOf(u, u.totp_next_secret) : enabled ? null : this.secretOf(u);
     return {
-      enabled: u.totp_confirmed_at !== null,
+      enabled,
       confirmedAt: u.totp_confirmed_at,
+      replacing,
       pendingSecret: pending,
       uri: pending ? buildUri(TOTP_ISSUER, u.email ?? `user-${u.id}`, pending) : null,
       recoveryCodesLeft: countRecoveryCodes(u.recovery_codes),
     };
   }
 
-  /** Starts (or restarts) enrolment; refused while two-factor is on (turn it off first). */
+  /** Starts (or restarts) enrolment; refused while two-factor is on (it is changed with `beginReplace`). */
   async beginTwoFactor(userId: number, restart: boolean): Promise<boolean> {
     return this.db.tx(async () => {
       const u = (await this.byId(userId)) as UserRow;
@@ -400,16 +429,15 @@ export class UserService {
     });
   }
 
-  /** Abandons an unconfirmed enrolment; never turns a live one off. */
-  async cancelTwoFactor(userId: number): Promise<void> {
-    await this.db.run('UPDATE users SET totp_secret = NULL, totp_last_step = 0 WHERE id = ? AND totp_confirmed_at IS NULL', [userId]);
-  }
-
-  /** Proves the enrolment, turns two-factor on and returns the recovery codes: the only time they exist in clear. */
-  async confirmTwoFactor(userId: number, code: unknown): Promise<string[] | null> {
+  /**
+   * Proves the enrolment, turns two-factor on and returns the recovery codes: the only time they exist in clear.
+   * `'on'`: it was on already (finished in another tab); null: a wrong code, or no enrolment started.
+   */
+  async confirmTwoFactor(userId: number, code: unknown): Promise<string[] | 'on' | null> {
     return this.db.tx(async () => {
       const u = (await this.byId(userId)) as UserRow;
-      if (u.totp_confirmed_at !== null || !u.totp_secret) return null;
+      if (u.totp_confirmed_at !== null) return 'on';
+      if (!u.totp_secret) return null;
       const step = verifyTotp(this.secretOf(u), code, u.totp_last_step, this.now());
       if (step === null) return null;
       const codes = newRecoveryCodes();
@@ -419,15 +447,39 @@ export class UserService {
     });
   }
 
-  /** Both factors (a recovery code counts as the second), the password first. */
-  async disableTwoFactor(userId: number, password: unknown, code: unknown): Promise<boolean> {
+  /**
+   * Starts a change of authenticator (FD-2FA §3): both factors (a recovery code counts as the second), the password
+   * first. A change already started is replaced by a fresh secret.
+   */
+  async beginReplace(userId: number, password: unknown, code: unknown): Promise<boolean> {
     const u = (await this.byId(userId)) as UserRow;
     if (u.totp_confirmed_at === null || typeof password !== 'string' || !(await verifyPassword(password, u.password_hash))) return false;
     return this.db.tx(async () => {
       if ((await this.verifySecondFactor(userId, code)) === 'invalid') return false;
-      await this.db.run('UPDATE users SET totp_secret = NULL, totp_confirmed_at = NULL, totp_last_step = 0, recovery_codes = NULL WHERE id = ?', [userId]);
+      await this.db.run('UPDATE users SET totp_next_secret = ? WHERE id = ?', [this.box.encrypt(newSecret()), userId]);
       return true;
     });
+  }
+
+  /**
+   * The new authenticator's first code: it takes the old one's place (the recovery codes stay). Checked against a
+   * threshold of 0: the new secret was never used, and the old one's last step would refuse a code of the same
+   * 30 seconds as the one that started the change.
+   */
+  async confirmReplace(userId: number, code: unknown): Promise<'done' | 'none' | 'invalid'> {
+    return this.db.tx(async () => {
+      const u = (await this.byId(userId)) as UserRow;
+      if (u.totp_confirmed_at === null || !u.totp_next_secret) return 'none';
+      const step = verifyTotp(this.secretOf(u, u.totp_next_secret), code, 0, this.now());
+      if (step === null) return 'invalid';
+      await this.db.run('UPDATE users SET totp_secret = totp_next_secret, totp_next_secret = NULL, totp_last_step = ?, totp_confirmed_at = ? WHERE id = ?', [step, this.now(), userId]);
+      return 'done';
+    });
+  }
+
+  /** Abandons a change of authenticator: the old one stays. */
+  async cancelReplace(userId: number): Promise<void> {
+    await this.db.run('UPDATE users SET totp_next_secret = NULL WHERE id = ?', [userId]);
   }
 
   async regenerateRecoveryCodes(userId: number, password: unknown, code: unknown): Promise<string[] | null> {
@@ -506,7 +558,7 @@ export class UserService {
   async resetTwoFactor(id: number): Promise<void> {
     await this.db.tx(async () => {
       await this.target(id);
-      await this.db.run('UPDATE users SET totp_secret = NULL, totp_confirmed_at = NULL, totp_last_step = 0, recovery_codes = NULL WHERE id = ?', [id]);
+      await this.db.run('UPDATE users SET totp_secret = NULL, totp_next_secret = NULL, totp_confirmed_at = NULL, totp_last_step = 0, recovery_codes = NULL WHERE id = ?', [id]);
     });
   }
 

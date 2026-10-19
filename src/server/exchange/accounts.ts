@@ -1,5 +1,6 @@
-// Exchange accounts (read-only keys, encrypted at rest) and portfolio snapshots (FD §6, TD §10).
-// This module only READS from exchanges: it never places, edits or cancels orders and never moves funds.
+// Exchange accounts (keys encrypted at rest) and portfolio snapshots (FD §6, TD §10).
+// This module only READS from exchanges: orders are sent only by exchange/trading/ (FD-TRADING), on accounts where
+// trading was switched on, and nothing anywhere moves funds.
 import ccxt, { type Exchange } from 'ccxt';
 import { accountSchemaFor, providerById, type ProviderDef } from '../../shared/providers.ts';
 import type { Db } from '../db/database.ts';
@@ -8,9 +9,11 @@ import { HttpError } from '../net/http.ts';
 import { secretHint, type SecretBox } from '../secrets/crypto.ts';
 import { ValidationError } from '../settings.ts';
 import { costBasis, STABLES, type FillLike } from './cost-basis.ts';
-import { fetchClosedPositions, HISTORY, historyFetch, periodStart, settleCoins, summarizeClosed, type StatsPeriod } from './trade-stats.ts';
-import { isRateLimitError, withRetry } from './retry.ts';
-import { BROKER_IDS, BrokerError, brokerAdapter, type BrokerAdapter, type BrokerId, type BrokerOptions } from './brokers.ts';
+import { fetchClosedPositions, HISTORY, historyFetch, periodStart, settleCoins, summarizeClosed, summarizeResults, type StatsPeriod } from './trade-stats.ts';
+import { isRateLimitError, isTransientError, withRetry } from './retry.ts';
+import { BROKER_IDS, BrokerError, brokerAdapter, type BrokerAdapter, type BrokerId, type BrokerOptions, type ClosedTrades } from './brokers.ts';
+import { TRADING, type TradeMarket } from '../../shared/trading.ts';
+import { tradeRights } from './trading/rights.ts';
 
 /** Exchanges read through ccxt (the rest are the stock brokers in brokers.ts). */
 export const CCXT_PROVIDERS = ['kucoin', 'binance', 'bybit', 'okx', 'kraken', 'coinbase', 'bitget'] as const;
@@ -29,7 +32,12 @@ export interface AccountView {
   lastOkAt: number | null;
   lastError: string | null;
   permissions: string | null;
+  /** The key may do more than read (trade, move funds). */
   permissionWarning: boolean;
+  /** FD-TRADING: the key may withdraw or transfer funds (such a key never trades through Sentiq). */
+  fundsRisk: boolean;
+  /** FD-TRADING: whether the platform trades through Sentiq, and whether trading is on for this account. */
+  trading: { supported: boolean; enabled: boolean; markets: TradeMarket[]; reason: string | null };
 }
 
 export type ErrorCode = 'AUTH' | 'PERMISSION' | 'RATE_LIMIT' | 'NETWORK' | 'MAINTENANCE' | 'EXCHANGE';
@@ -69,6 +77,15 @@ export interface BalanceRow {
   note?: string;
   /** A coin held at a broker (eToro, IBKR, Alpaca): its chart is the crypto one, not a share's. */
   crypto?: boolean;
+  /** FD-TRADING: the platform's own handles for selling it (Trading 212's ticker, eToro's positions). */
+  ref?: TradeRef;
+}
+
+/** The platform's own handles of a holding or position, for trading it (FD-TRADING). */
+export interface TradeRef {
+  ticker?: string;
+  instrumentId?: number;
+  positionIds?: string[];
 }
 
 export interface PositionRow {
@@ -84,6 +101,8 @@ export interface PositionRow {
   leverage: number | null;
   marginMode: string | null;
   notional: number | null;
+  /** FD-TRADING: the platform's own handles for closing it. */
+  ref?: TradeRef;
 }
 
 export interface OrderRow {
@@ -101,6 +120,8 @@ export interface OrderRow {
   reduceOnly: boolean;
   /** Direction that triggers a stop order: `down` (KuCoin futures `down`, spot `loss`) or `up` (`up` / `entry`). */
   stop: 'down' | 'up' | null;
+  /** FD-TRADING: false for rows that are not orders on the platform (an eToro position's SL / TP). */
+  cancellable?: boolean;
 }
 
 /** KuCoin's stop direction from the raw order (futures: down / up; spot: loss / entry). */
@@ -163,7 +184,7 @@ export interface ExchangeClients {
  * How the free USDT of the futures account is read (TD-TRADESTATS §1): ccxt params for `fetchBalance`, 'spot' when the
  * account read for the balances already is the one (unified accounts), absent without futures (Kraken, Coinbase).
  */
-const FUTURES_BALANCE: Record<string, Record<string, unknown> | 'spot'> = {
+export const FUTURES_BALANCE: Record<string, Record<string, unknown> | 'spot'> = {
   kucoin: { type: 'contract', code: 'USDT' },
   binance: { type: 'future' },
   bybit: 'spot',
@@ -171,24 +192,72 @@ const FUTURES_BALANCE: Record<string, Record<string, unknown> | 'spot'> = {
   bitget: { type: 'swap' },
 };
 
-/** The results of closed futures positions (FD-TRADESTATS): the counts for one period of one account. */
+/**
+ * FD-TRADING §4: the open orders the plain listing (no symbol, the client's default market) leaves out, so each can be
+ * cancelled: futures orders and stop (trigger) orders. ccxt params for `fetchOpenOrders` without a symbol.
+ */
+const EXTRA_ORDER_READS: Record<string, { params: Record<string, unknown>; limit?: number }[]> = {
+  binance: [{ params: { type: 'swap', subType: 'linear' } }, { params: { type: 'swap', subType: 'linear', trigger: true } }],
+  // A unified account lists every kind of order (stops included) per category.
+  bybit: [{ params: { type: 'swap', subType: 'linear', settleCoin: 'USDT' }, limit: 50 }],
+  // The plain listing already has every product's normal orders.
+  okx: [{ params: { trigger: true } }],
+  bitget: [{ params: { type: 'spot', trigger: true } }, { params: { type: 'swap', productType: 'USDT-FUTURES' } }, { params: { type: 'swap', productType: 'USDT-FUTURES', trigger: true } }],
+};
+
+/**
+ * The plain listings (open orders, fills) where the client's default market is not spot: Bybit's is linear, which
+ * left its spot orders and fills out and brought its futures fills in as spot ones. With the pages it allows, and the
+ * futures fills read on their own (`moreFills`).
+ */
+const SPOT_LISTING: Record<string, { params: Record<string, unknown>; orders: number; fills: number; moreFills?: Record<string, unknown> }> = {
+  bybit: { params: { type: 'spot' }, orders: 50, fills: 100, moreFills: { type: 'swap', subType: 'linear' } },
+};
+
+/**
+ * Binance's -2015 ("Invalid API-key, IP, or permissions for action": here, a key without futures), which ccxt raises
+ * as DDoSProtection once a call with the key has succeeded. Not retried.
+ */
+const binanceDenied = (err: unknown) => err instanceof ccxt.DDoSProtection && /-2015\b/.test(err.message);
+
+/** An extra order read the key or the account cannot do (no futures, the product not opened), or one asked wrongly. */
+const skippableOrderRead = (err: unknown) =>
+  binanceDenied(err) ||
+  err instanceof ccxt.NotSupported ||
+  err instanceof ccxt.PermissionDenied ||
+  err instanceof ccxt.AuthenticationError ||
+  err instanceof ccxt.AccountNotEnabled ||
+  err instanceof ccxt.ArgumentsRequired ||
+  err instanceof ccxt.BadRequest;
+
+/** The results of closed trades (FD-TRADESTATS, FD-BROKERSTATS): the counts for one period of one account. */
 export interface TradeStats {
   period: StatsPeriod;
   from: number;
   to: number;
-  /** The exchange gives a closed-position history (KuCoin, Bybit, OKX, Bitget). */
+  /** The platform gives a closed-trade history (KuCoin, Bybit, OKX, Bitget; the four brokers). */
   supported: boolean;
   wins: number | null;
   losses: number | null;
   breakeven: number | null;
   successRate: number | null;
-  /** In dollars. */
+  /** In `currency`. */
   net: number | null;
   netPartial: boolean;
+  /** Crypto: USD; a broker: the account's currency. */
+  currency: string;
+  /** IBKR Flex: the data ends at the close of this day (before `from`: the period cannot be counted yet). */
+  asOf: number | null;
+  /** The history read is shorter than the period (a broker's page limit). */
+  limited: boolean;
+  /** Closed trades whose result is unknown (not counted). */
+  unknownResults: number;
   error: { code: ErrorCode; message: string } | null;
   fetchedAt: number;
 }
 const STATS_TTL_MS = 5 * 60_000;
+/** FD-BROKERSTATS: a broker's history is read once for the longest period and serves all of them. */
+const BROKER_HISTORY_MS = 90 * 86_400_000;
 
 // KuCoin accepts at most 7 days per fills query; stay a minute inside the limit.
 const FILLS_WINDOW_MS = 7 * 86_400_000 - 60_000;
@@ -229,6 +298,9 @@ interface AccountRow {
   last_ok_at: number | null;
   last_error: string | null;
   permissions: string | null;
+  user_id: number;
+  trading_enabled_at: number | null;
+  trading_markets: string | null;
 }
 
 /** The provider's fields as entered (crypto: apiKey, secret and, where needed, password). */
@@ -340,6 +412,18 @@ export async function keyPermissions(exchange: string, client: Exchange): Promis
       const known = list.map(String).filter((a) => /^(readonly|read|trade|withdraw|transfer)$/i.test(a));
       return known.join(',') || null;
     }
+    if (exchange === 'coinbase') {
+      // FD-TRADING: the CDP key's view / trade / transfer flags.
+      const fn = call('v3PrivateGetBrokerageKeyPermissions');
+      const r = fn ? await fn() : null;
+      if (!r || typeof r !== 'object') return null;
+      const flags: [string, string][] = [
+        ['can_view', 'read'],
+        ['can_trade', 'trade'],
+        ['can_transfer', 'transfer'],
+      ];
+      return flags.filter(([k]) => field(r, k) === true).map(([, v]) => v).join(',') || null;
+    }
   } catch {
     // Not readable with this key (or the endpoint changed): no warning rather than a wrong one.
   }
@@ -353,6 +437,8 @@ export class AccountsService {
   private readonly inflight = new Map<number, Promise<Portfolio>>();
   private readonly stats = new Map<string, { data: TradeStats; at: number }>();
   private readonly statsInflight = new Map<string, Promise<TradeStats>>();
+  private readonly brokerHistory = new Map<number, { data: ClosedTrades; at: number }>();
+  private readonly brokerHistoryInflight = new Map<number, Promise<ClosedTrades>>();
   /** Last successful data per section, shown (marked stale) when a later refresh of that section fails. */
   private readonly lastGood = new Map<number, LastGood>();
   /** Latest good ticker list per exchange, and the request in flight for it. */
@@ -364,6 +450,8 @@ export class AccountsService {
   private readonly log: Logger;
   private readonly factory: ClientFactory;
   private readonly retryDelaysMs: readonly number[] | undefined;
+  /** Extra order reads skipped for a while (FD-TRADING §4): `account|params` → until when. */
+  private readonly skippedReads = new Map<string, number>();
   private readonly brokerFactory: BrokerFactory;
 
   constructor(db: Db, box: SecretBox, log: Logger, factory: ClientFactory, opts: { retryDelaysMs?: readonly number[]; brokerFactory?: BrokerFactory } = {}) {
@@ -398,6 +486,8 @@ export class AccountsService {
   }
 
   private toView(r: AccountRow): AccountView {
+    const platform = TRADING[r.exchange as keyof typeof TRADING];
+    const enabledMarkets = (r.trading_markets ?? '').split(',').filter((m): m is TradeMarket => m === 'spot' || m === 'futures' || m === 'stock');
     return {
       id: r.id,
       exchange: r.exchange,
@@ -410,7 +500,78 @@ export class AccountsService {
       lastError: r.last_error,
       permissions: r.permissions,
       permissionWarning: hasRiskyPermissions(r.permissions),
+      fundsRisk: tradeRights(r.exchange, r.permissions).funds === true,
+      trading: {
+        supported: platform?.supported === true,
+        enabled: r.trading_enabled_at !== null && platform?.supported === true,
+        markets: r.trading_enabled_at !== null ? enabledMarkets : [],
+        reason: platform?.supported === false ? (platform.reason ?? null) : null,
+      },
     };
+  }
+
+  /**
+   * What the trading service needs about an account (FD-TRADING): its owner, platform, switch, and either the
+   * exchange clients (crypto; the same ones the portfolio reads with) or the broker's fields.
+   */
+  async tradingAccess(id: number): Promise<{
+    id: number;
+    userId: number;
+    exchange: string;
+    env: string;
+    label: string;
+    permissions: string | null;
+    enabled: boolean;
+    markets: TradeMarket[];
+    clients: ExchangeClients | null;
+    creds: Credentials | null;
+  } | null> {
+    const row = await this.row(id);
+    if (!row) return null;
+    const view = this.toView(row);
+    return {
+      id,
+      userId: row.user_id,
+      exchange: row.exchange,
+      env: row.env ?? 'live',
+      label: row.label,
+      permissions: row.permissions,
+      enabled: view.trading.enabled,
+      markets: view.trading.markets,
+      clients: isBroker(row.exchange) ? null : this.clientsFor(id, row),
+      creds: isBroker(row.exchange) ? this.credsOf(row) : null,
+    };
+  }
+
+  /**
+   * Reads the key's permissions again (FD-TRADING §1). A read that gives nothing (the platform does not say, or the
+   * endpoint failed just now) keeps the list already known: a key known to withdraw never looks unknown.
+   */
+  async refreshPermissions(id: number): Promise<string | null> {
+    const row = await this.row(id);
+    if (!row || isBroker(row.exchange)) return null;
+    const { spot } = this.clientsFor(id, row);
+    const permissions = await keyPermissions(row.exchange, spot);
+    if (permissions === null) return row.permissions;
+    await this.db.run('UPDATE exchange_accounts SET permissions = ? WHERE id = ?', [permissions, id]);
+    return permissions;
+  }
+
+  /** Switches trading on (with the markets the key may trade) or off. */
+  async setTrading(id: number, markets: TradeMarket[] | null): Promise<AccountView> {
+    await this.db.run('UPDATE exchange_accounts SET trading_enabled_at = ?, trading_markets = ? WHERE id = ?', [markets ? Date.now() : null, markets ? markets.join(',') : null, id]);
+    return this.toView((await this.row(id)) as AccountRow);
+  }
+
+  /** After an order, a cancellation or a close: the next read of the portfolio (and of its closed trades) goes to the platform. */
+  invalidate(id: number): void {
+    this.portfolios.delete(id);
+    this.forgetStats(id);
+  }
+
+  private forgetStats(id: number): void {
+    this.brokerHistory.delete(id);
+    for (const key of this.stats.keys()) if (key.startsWith(`${id}|`)) this.stats.delete(key);
   }
 
   /** A user's own accounts (FD-USERS §2: nobody sees anybody else's). */
@@ -492,10 +653,17 @@ export class AccountsService {
     return adapter;
   }
 
+  /** Asks the skipped extra order reads again (the key was tested, maybe with futures now; or the account is gone). */
+  private forgetSkippedReads(id: number): void {
+    for (const key of this.skippedReads.keys()) if (key.startsWith(`${id}|`)) this.skippedReads.delete(key);
+  }
+
   async delete(id: number): Promise<boolean> {
+    this.forgetSkippedReads(id);
     this.clients.delete(id);
     this.brokers.delete(id);
     this.portfolios.delete(id);
+    this.forgetStats(id);
     this.lastGood.delete(id);
     return (await this.db.run('DELETE FROM exchange_accounts WHERE id = ?', [id])).changes > 0;
   }
@@ -528,11 +696,15 @@ export class AccountsService {
       return this.toView((await this.row(id)) as AccountRow);
     }
     const { spot } = this.clientsFor(id, row);
+    this.forgetSkippedReads(id);
     try {
       await this.ensureMarkets(spot);
       await this.retryOn(spot, () => spot.fetchBalance());
-      const permissions = await keyPermissions(row.exchange, spot);
+      // A read that gives nothing keeps the list already known (FD-TRADING §1: a key known to withdraw stays known).
+      const permissions = (await keyPermissions(row.exchange, spot)) ?? row.permissions;
       await this.db.run('UPDATE exchange_accounts SET last_ok_at = ?, last_error = NULL, permissions = ? WHERE id = ?', [Date.now(), permissions, id]);
+      // FD-TRADING §1: a key that may now move funds never trades: its switch goes off.
+      if (tradeRights(row.exchange, permissions).funds === true) await this.db.run('UPDATE exchange_accounts SET trading_enabled_at = NULL, trading_markets = NULL WHERE id = ?', [id]);
     } catch (err) {
       const e = mapExchangeError(err);
       const text = e.code === 'RATE_LIMIT' ? 'exchange-ul limitează temporar cererile; încearcă din nou peste un minut' : e.message;
@@ -568,14 +740,14 @@ export class AccountsService {
     return p;
   }
 
-  /** FD-TRADESTATS: closed futures positions of one period, kept 5 minutes per account and period. */
+  /** FD-TRADESTATS, FD-BROKERSTATS: closed trades of one period, kept 5 minutes per account and period. */
   async tradeStats(id: number, period: StatsPeriod, tz: string, force = false): Promise<TradeStats> {
     const key = `${id}|${period}|${tz}`;
     const cached = this.stats.get(key);
     if (!force && cached && Date.now() - cached.at < STATS_TTL_MS) return cached.data;
     const pending = this.statsInflight.get(key);
     if (pending) return pending;
-    const p = this.loadStats(id, period, tz)
+    const p = this.loadStats(id, period, tz, force)
       .then((data) => {
         if (!data.error) this.stats.set(key, { data, at: Date.now() });
         return data;
@@ -585,13 +757,14 @@ export class AccountsService {
     return p;
   }
 
-  private async loadStats(id: number, period: StatsPeriod, tz: string): Promise<TradeStats> {
+  private async loadStats(id: number, period: StatsPeriod, tz: string, force: boolean): Promise<TradeStats> {
     const row = await this.row(id);
     if (!row) throw new ValidationError(`Contul ${id} nu există`);
     const now = Date.now();
     const from = periodStart(period, now, tz);
-    const base = { period, from, to: now, wins: null, losses: null, breakeven: null, successRate: null, net: null, netPartial: false, error: null, fetchedAt: now };
-    if (isBroker(row.exchange) || !HISTORY[row.exchange]) return { ...base, supported: false };
+    const base = { period, from, to: now, wins: null, losses: null, breakeven: null, successRate: null, net: null, netPartial: false, currency: 'USD', asOf: null, limited: false, unknownResults: 0, error: null, fetchedAt: now };
+    if (isBroker(row.exchange)) return this.loadBrokerStats(id, row as AccountRow & { exchange: BrokerId }, base, force);
+    if (!HISTORY[row.exchange]) return { ...base, supported: false };
     const { spot } = this.clientsFor(id, row);
     const retry = <T>(fn: () => Promise<T>) => this.retryOn(spot, fn);
     try {
@@ -608,6 +781,45 @@ export class AccountsService {
       this.log.warn(`trade stats ${id} (${period}): ${error.code}`);
       return { ...base, supported: true, error };
     }
+  }
+
+  /**
+   * FD-BROKERSTATS: the trades the broker closed in the period, from its history of the last 90 days (read once for
+   * all periods, kept 5 minutes; `force` reads it again).
+   */
+  private async loadBrokerStats(id: number, row: AccountRow & { exchange: BrokerId }, base: Omit<TradeStats, 'supported'>, force: boolean): Promise<TradeStats> {
+    const adapter = this.brokerFor(id, row);
+    const read = adapter.closedTrades?.bind(adapter);
+    if (!read) return { ...base, supported: false };
+    try {
+      const h = await this.brokerClosed(id, read, base.to, force);
+      const currency = h.currency ?? (await this.portfolio(id).then((p) => p.currency, () => null)) ?? base.currency;
+      // IBKR before the day's report: nothing of the period can be counted yet.
+      if (h.asOf !== null && h.asOf < base.from) return { ...base, supported: true, currency, asOf: h.asOf };
+      const inPeriod = h.trades.filter((t) => t.closedAt >= base.from && t.closedAt <= base.to);
+      const known = inPeriod.flatMap((t) => (t.pnl === null ? [] : [{ pnl: t.pnl, net: t.net }]));
+      return { ...base, supported: true, currency, asOf: h.asOf, limited: base.from < h.coveredFrom, unknownResults: inPeriod.length - known.length, ...summarizeResults(known) };
+    } catch (err) {
+      const error = mapExchangeError(err);
+      this.log.warn(`trade stats ${id} (${base.period}): ${error.code}`);
+      return { ...base, supported: true, error };
+    }
+  }
+
+  /** `now`: the stats' own clock, so a history read for them covers their 90 days exactly. */
+  private brokerClosed(id: number, read: (from: number) => Promise<ClosedTrades>, now: number, force: boolean): Promise<ClosedTrades> {
+    const cached = this.brokerHistory.get(id);
+    if (!force && cached && Date.now() - cached.at < STATS_TTL_MS) return Promise.resolve(cached.data);
+    const pending = this.brokerHistoryInflight.get(id);
+    if (pending) return pending;
+    const p = read(now - BROKER_HISTORY_MS)
+      .then((data) => {
+        this.brokerHistory.set(id, { data, at: Date.now() });
+        return data;
+      })
+      .finally(() => this.brokerHistoryInflight.delete(id));
+    this.brokerHistoryInflight.set(id, p);
+    return p;
   }
 
   private async loadPortfolio(id: number): Promise<Portfolio> {
@@ -663,7 +875,7 @@ export class AccountsService {
     type OrderIn = { o: Awaited<ReturnType<Exchange['fetchOpenOrders']>>[number]; market: 'spot' | 'futures' };
     type FillIn = { t: Awaited<ReturnType<Exchange['fetchMyTrades']>>[number]; market: 'spot' | 'futures' };
     const futuresHow = FUTURES_BALANCE[row.exchange];
-    const [balancesRaw, positionsRaw, triggerOrders, futuresOrders, futuresFills, futuresOwn] = await Promise.all([
+    const [balancesRaw, positionsRaw, triggerOrders, futuresOrders, futuresFills, futuresOwn, extraOrders] = await Promise.all([
       call('balances', async () => {
         if (!isKucoin) return [{ account: 'spot', bal: await rs(() => spot.fetchBalance()) }];
         if (!classic) return [{ account: 'unified', bal: await rs(() => spot.fetchBalance()) }];
@@ -693,6 +905,29 @@ export class AccountsService {
       call('fills', async () => (classic && futures ? (await rf(() => futures.fetchMyTrades(undefined, since, 200))).map((t): FillIn => ({ t, market: 'futures' })) : [])),
       // FD-TRADESTATS §2: the free USDT of the futures account (its own read, unless it is the unified one above).
       futuresHow && futuresHow !== 'spot' ? call('futures', async () => usdtFree(await rs(() => spot.fetchBalance(futuresHow)))) : Promise.resolve(null),
+      // FD-TRADING §4: futures and stop orders, each read on its own. One the key or the account cannot do lists
+      // nothing there (a read asked wrongly is logged); any other failure marks the orders section, as the plain one.
+      call('orders', async () => {
+        const out: OrderIn[] = [];
+        for (const read of EXTRA_ORDER_READS[row.exchange] ?? []) {
+          const key = `${id}|${JSON.stringify(read.params)}`;
+          if ((this.skippedReads.get(key) ?? 0) > Date.now()) continue;
+          try {
+            const list = await withRetry(() => spot.fetchOpenOrders(undefined, undefined, read.limit, { ...read.params }), {
+              delaysMs: spot.markets ? this.retryDelaysMs : [],
+              retryIf: (e) => isTransientError(e) && !binanceDenied(e),
+            });
+            for (const o of list) out.push({ o, market: 'spot' });
+          } catch (err) {
+            if (!skippableOrderRead(err)) throw err;
+            // Not asked again for a while: a key without futures for 15 minutes, a read asked wrongly for 6 hours.
+            const wrong = err instanceof ccxt.ArgumentsRequired || err instanceof ccxt.BadRequest;
+            this.skippedReads.set(key, Date.now() + (wrong ? 6 * 3_600_000 : 15 * 60_000));
+            if (wrong) this.log.warn(`orders ${row.exchange} ${JSON.stringify(read.params)}: ${(err as Error).message.slice(0, 200)}`);
+          }
+        }
+        return out;
+      }),
     ]);
     const futuresAvailable = futuresHow === 'spot' ? (balancesRaw?.[0] ? usdtFree(balancesRaw[0].bal) : null) : (futuresOwn ?? null);
 
@@ -732,7 +967,8 @@ export class AccountsService {
     } else {
       spotOrders = await call('orders', async () => {
         try {
-          return (await rs(() => spot.fetchOpenOrders(undefined, undefined, 200))).map((o): OrderIn => ({ o, market: 'spot' }));
+          const plain = SPOT_LISTING[row.exchange];
+          return (await rs(() => spot.fetchOpenOrders(undefined, undefined, plain?.orders ?? 200, { ...(plain?.params ?? {}) }))).map((o): OrderIn => ({ o, market: 'spot' }));
         } catch (err) {
           if (needsSymbol(err)) return perSymbolOrders();
           throw err;
@@ -740,14 +976,17 @@ export class AccountsService {
       });
       spotFills = await call('fills', async () => {
         try {
-          return (await rs(() => spot.fetchMyTrades(undefined, since, 200))).map((t): FillIn => ({ t, market: 'spot' }));
+          const plain = SPOT_LISTING[row.exchange];
+          const list = [...(await rs(() => spot.fetchMyTrades(undefined, since, plain?.fills ?? 200, { ...(plain?.params ?? {}) })))];
+          if (plain?.moreFills) list.push(...(await rs(() => spot.fetchMyTrades(undefined, since, plain.fills, { ...plain.moreFills }))));
+          return list.map((t): FillIn => ({ t, market: 'spot' }));
         } catch (err) {
           if (needsSymbol(err)) return perSymbolFills();
           throw err;
         }
       });
     }
-    const ordersRaw: OrderIn[] = [...(spotOrders ?? []), ...(triggerOrders ?? []), ...(futuresOrders ?? [])];
+    const ordersRaw: OrderIn[] = [...(spotOrders ?? []), ...(triggerOrders ?? []), ...(futuresOrders ?? []), ...(extraOrders ?? [])];
     const fillsRaw: FillIn[] = [...(spotFills ?? []), ...(futuresFills ?? [])];
 
     // Prices: the shared ticker list; when it is refused, held assets one by one, then the last good list.
@@ -787,7 +1026,8 @@ export class AccountsService {
     const fills: FillRow[] = fillsRaw
       .map(({ t, market }) => ({
         id: String(t.id ?? `${t.order ?? ''}-${t.timestamp}`),
-        market,
+        // A perpetual's fill is futures whichever listing brought it: it never counts toward a spot cost.
+        market: String(t.symbol ?? '').includes(':') ? 'futures' : market,
         symbol: String(t.symbol ?? ''),
         side: String(t.side ?? ''),
         price: num(t.price) ?? NaN,
@@ -877,7 +1117,8 @@ export class AccountsService {
 
     const orders: OrderRow[] = ordersRaw.map(({ o, market }) => ({
       id: String(o.id),
-      market,
+      // A perpetual's order (BTC/USDT:USDT) is futures, whichever listing brought it (KuCoin's unified account, OKX).
+      market: String(o.symbol ?? '').includes(':') ? 'futures' : market,
       symbol: String(o.symbol ?? ''),
       type: String(o.type ?? ''),
       side: String(o.side ?? ''),

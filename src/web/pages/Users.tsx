@@ -1,5 +1,5 @@
 // The admin's Users page (FD-USERS §8, FD-INVITE §2): account requests to approve or refuse, the activation link of
-// an approved account, and the accounts: disable / enable, turn two-factor off, a new activation link, delete.
+// an approved account, and the accounts: disable / enable, reset two-factor (FD-2FA §4), a new activation link, delete.
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Copy, UserPlus, Users as UsersIcon } from 'lucide-react';
@@ -17,7 +17,8 @@ type Action = 'disable' | 'enable' | 'reset-2fa' | 'delete';
 
 const CONFIRM: Partial<Record<Action, (u: PublicUser) => string>> = {
   disable: (u) => `Dezactivezi contul ${u.email}? Sesiunile lui se închid și nu mai poate intra până îl reactivezi.`,
-  'reset-2fa': (u) => `Oprești autentificarea în doi pași pentru ${u.email}? Folosește asta doar dacă și-a pierdut telefonul și codurile de recuperare.`,
+  'reset-2fa': (u) =>
+    `Resetezi autentificarea în doi pași pentru ${u.email}? Sesiunile contului se închid; la următorul login, cu parola, își configurează din nou aplicația. Folosește asta doar dacă și-a pierdut telefonul și codurile de recuperare.`,
   delete: (u) => `Ștergi definitiv contul ${u.email}, cu favoritele, setările, conturile de exchange și evenimentele lui?`,
 };
 
@@ -181,7 +182,8 @@ export default function UsersPage() {
                 </td>
                 <td>{u.role === 'admin' ? <span className="text-accent">Admin</span> : <Status u={u} />}</td>
                 <td className="text-muted">
-                  {u.twoFactor ? '2FA' : 'fără 2FA'}
+                  {/* FD-2FA §4: required of everybody; an activated account without it sets it up at its next sign-in. */}
+                  {u.twoFactor ? '2FA' : u.activated ? <span className="text-warn">2FA neconfigurat</span> : '—'}
                   {u.passkeys > 0 ? `, ${u.passkeys} ${u.passkeys === 1 ? 'passkey' : 'passkey-uri'}` : ''}
                 </td>
                 <td className="num text-muted">{fmtDateTime(u.createdAt, tz)}</td>
@@ -207,7 +209,7 @@ export default function UsersPage() {
                       )}
                       {u.twoFactor && (
                         <button className="btn" onClick={() => run(u, 'reset-2fa')} disabled={act.isPending}>
-                          Oprește 2FA
+                          Resetează 2FA
                         </button>
                       )}
                       <button className="btn btn-danger" onClick={() => run(u, 'delete')} disabled={act.isPending}>

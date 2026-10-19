@@ -15,6 +15,7 @@ import { hostnameOf, isLocalHost, isLocalOrigin } from './http/security.ts';
 import { Scheduler } from './jobs/scheduler.ts';
 import type { NliScorer } from './sentiment/local.ts';
 import { costBasis } from './exchange/cost-basis.ts';
+import { BrokerError } from './exchange/brokers.ts';
 import { hasRiskyPermissions, keyPermissions, mapExchangeError, stopDirection, type ClientFactory } from './exchange/accounts.ts';
 import { isRateLimitError, isTransientError, withRetry } from './exchange/retry.ts';
 import { MarketData } from './market/market.ts';
@@ -88,6 +89,25 @@ function fakeClients(): ClientFactory {
   return () => ({ spot: spot as never, futures: futures as never });
 }
 
+/**
+ * The AI providers' model lists (FD-AIKEYS): a key with "refused" in it is refused, Anthropic cannot be reached.
+ * Nothing leaves the machine.
+ */
+const aiFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  const url = new URL(String(input));
+  const headers = new Headers(init?.headers);
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  if (url.hostname === 'api.openai.com' && url.pathname === '/v1/models') {
+    if (headers.get('authorization')?.includes('refused')) return json(401, { error: { message: 'Incorrect API key provided', type: 'invalid_request_error', code: 'invalid_api_key' } });
+    return json(200, { data: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-7-nova', 'gpt-4o', 'gpt-6-luna-2026-09-01', 'tts-1'].map((id) => ({ id, object: 'model' })) });
+  }
+  if (url.hostname === 'generativelanguage.googleapis.com') {
+    if (headers.get('x-goog-api-key')?.includes('refused')) return json(400, { error: { code: 400, message: 'API key not valid. Please pass a valid API key.', status: 'INVALID_ARGUMENT', details: [{ reason: 'API_KEY_INVALID' }] } });
+    return json(200, { models: [{ name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] }] });
+  }
+  throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+}) as typeof fetch;
+
 let dir: string;
 let ctx: AppContext;
 let app: FastifyInstance;
@@ -95,9 +115,17 @@ let app: FastifyInstance;
 beforeEach(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'kq-test-'));
   const config = { ...loadConfig({ KRYPTONIQ_DATA_DIR: dir } as NodeJS.ProcessEnv), webDist: path.join(dir, 'no-web') };
-  ctx = await createContext(config, silentLogger, { nli: fakeNli, clientFactory: fakeClients(), box: new SecretBox(Buffer.alloc(32, 7)), retryDelaysMs: [0, 0], db: await testDb() });
+  ctx = await createContext(config, silentLogger, {
+    nli: fakeNli,
+    clientFactory: fakeClients(),
+    box: new SecretBox(Buffer.alloc(32, 7)),
+    retryDelaysMs: [0, 0],
+    db: await testDb(),
+    ai: { http: { fetch: aiFetch, sleep: async () => {} } },
+  });
   app = await buildApp(ctx);
-  await ctx.db.run('UPDATE users SET email = ?, name = ?, password_hash = ? WHERE id = 1', [ADMIN_EMAIL, 'Admin', adminHash]);
+  // FD-2FA: a session reaches the app only for an account with two-factor.
+  await ctx.db.run('UPDATE users SET email = ?, name = ?, password_hash = ?, totp_confirmed_at = 1 WHERE id = 1', [ADMIN_EMAIL, 'Admin', adminHash]);
   H.cookie = M.cookie = `sentiq_session=${await ctx.sessions.create(1, 'full')}`;
 });
 
@@ -124,8 +152,9 @@ describe('security', () => {
     expect((await app.inject({ method: 'GET', url: '/api/health', headers: { ...H, origin: 'https://evil.com' } })).statusCode).toBe(403);
     const health = await app.inject({ method: 'GET', url: '/api/health', headers: H });
     expect(health.statusCode).toBe(200);
-    // FD-AICLARITY: what the Claude key was used for today, with the models.
-    expect(health.json().claudeUsage).toMatchObject({ sentiment: { calls: 0 }, summary: { calls: 0 }, sentimentModel: expect.any(String), summaryModel: 'claude-opus-5-5' });
+    // FD-AIKEYS: the common score is local; nobody has their own AI score the news yet; no key of Sentiq's to count.
+    expect(health.json().sentiment).toMatchObject({ engine: 'local', aiUsers: 0 });
+    expect(health.json()).not.toHaveProperty('claudeUsage');
   });
   it('requires the CSRF header and JSON for mutations', async () => {
     expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: { ...H, 'content-type': 'application/json' }, payload: {} })).statusCode).toBe(403);
@@ -157,12 +186,28 @@ describe('security', () => {
     expect(page.statusCode).toBe(404); // no web build in tests
     expect(page.body).toMatch(/web build missing/);
   });
-  it('the exchange module has no order-placing or fund-moving calls', () => {
-    const dirPath = fileURLToPath(new URL('./exchange/', import.meta.url));
-    for (const f of readdirSync(dirPath)) {
-      const p = path.join(dirPath, f);
-      if (!statSync(p).isFile() || f.endsWith('.test.ts')) continue;
-      expect(readFileSync(p, 'utf8')).not.toMatch(/\b(createOrder|cancelOrder|cancelAllOrders|editOrder|withdraw|transfer|setLeverage|setMarginMode)\s*\(/);
+  it('nothing moves funds; orders, leverage and margin only in exchange/trading/ (FD-TRADING, TD §2.7)', () => {
+    const root = fileURLToPath(new URL('./', import.meta.url));
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const f of readdirSync(dir)) {
+        const p = path.join(dir, f);
+        if (statSync(p).isDirectory()) walk(p);
+        else if (f.endsWith('.ts') && !f.endsWith('.test.ts')) files.push(p);
+      }
+    };
+    walk(root);
+    expect(files.length).toBeGreaterThan(50);
+    const tradingDir = path.join(root, 'exchange', 'trading') + path.sep;
+    for (const p of files) {
+      const text = readFileSync(p, 'utf8');
+      const rel = path.relative(root, p);
+      // Withdrawals, transfers and the blanket calls exist nowhere.
+      expect(text, rel).not.toMatch(/\b(withdraw|transfer|cancelAllOrders|editOrder|closeAllPositions)\s*\(/);
+      if (p.startsWith(tradingDir)) continue;
+      expect(text, rel).not.toMatch(/\b(createOrder|cancelOrder|setLeverage|setMarginMode)\s*\(/);
+      // The other exchange / broker modules only read.
+      if (rel.startsWith(`exchange${path.sep}`)) expect(text, rel).not.toMatch(/'(POST|DELETE|PUT)'/);
     }
   });
 });
@@ -210,7 +255,8 @@ describe('settings API', () => {
   it('returns defaults and merges partial updates with validation', async () => {
     const s = (await app.inject({ method: 'GET', url: '/api/settings', headers: H })).json();
     expect(s.indicator.lenFastEma).toBe(38);
-    expect(s.claudeKeySet).toBe(false);
+    expect(s.aiKeys).toEqual({ anthropic: { set: false, hint: null }, openai: { set: false, hint: null }, gemini: { set: false, hint: null } });
+    expect(s.ai).toEqual({ provider: 'anthropic', scoring: false });
     const r = await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { indicator: { lenFastEma: 21 }, scanner: { tf: '4h' } } });
     expect(r.statusCode).toBe(200);
     expect(r.json().indicator).toMatchObject({ lenFastEma: 21, lenSlowEma: 62 });
@@ -221,20 +267,49 @@ describe('settings API', () => {
     // nothing partially saved
     expect((await app.inject({ method: 'GET', url: '/api/settings', headers: H })).json().indicator.lenFastEma).toBe(21);
   });
-  it('stores the Claude key encrypted and only returns a hint', async () => {
-    const key = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz';
-    const r = await app.inject({ method: 'PUT', url: '/api/settings/claude-key', headers: M, payload: { key } });
-    expect(r.json()).toMatchObject({ claudeKeySet: true, claudeKeyHint: 'sk-a…wxyz' });
+  it("stores the user's own AI key encrypted once its provider accepts it, and only returns a hint (FD-AIKEYS)", async () => {
+    const put = (provider: string, key: string | null) => app.inject({ method: 'PUT', url: '/api/ai/key', headers: M, payload: { provider, key } });
+    const key = 'sk-proj-abcdefghijklmnopqrstuvwxyz';
+    const r = await put('openai', key);
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ aiKeys: { openai: { set: true, hint: 'sk-p…wxyz' }, anthropic: { set: false } }, aiKeyWarning: null });
     expect(JSON.stringify(r.json())).not.toContain(key);
-    const raw = await ctx.db.get<{ value: string }>("SELECT value FROM settings WHERE [key] = 'claude_key'");
-    expect(raw?.value).not.toContain('abcdefghij');
-    expect(await ctx.settings.getClaudeKey()).toBe(key);
-    await app.inject({ method: 'PUT', url: '/api/settings/claude-key', headers: M, payload: { key: null } });
-    expect(await ctx.settings.getClaudeKey()).toBeNull();
+    const raw = await ctx.db.get<{ secret: string }>("SELECT secret FROM user_keys WHERE user_id = 1 AND name = 'openai'");
+    expect(raw?.secret).not.toContain('abcdefghij');
+    expect((await ctx.settings.getAiKeys(1)).openai).toBe(key);
+    // The models the key can use: Sentiq's current ones first, then the others; no audio, old or dated ones.
+    expect((await app.inject({ url: '/api/ai/models?provider=openai', headers: H })).json()).toEqual({ models: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-7-nova'], source: 'key', error: null });
+    expect((await app.inject({ url: '/api/ai/models?provider=gemini', headers: H })).json()).toMatchObject({ source: 'default', models: ['gemini-3.8-flash', 'gemini-4-argon', 'gemini-3.5-flash-lite'] });
+    // A key the provider refuses is not saved; a malformed one is never sent.
+    const bad = await put('gemini', 'AIzaSy-refused-key-0123456789');
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error.message).toBe('Google nu a acceptat cheia: cheia API Google nu este validă.');
+    expect((await put('gemini', 'two words')).statusCode).toBe(400);
+    expect((await ctx.settings.getAiKeys(1)).gemini).toBeUndefined();
+    // A provider that cannot be reached now: the key is saved, with a warning.
+    const offline = await put('anthropic', 'sk-ant-api03-offline-abcdefghijklmnop');
+    expect(offline.statusCode).toBe(200);
+    expect(offline.json().aiKeyWarning).toMatch(/^Cheia s-a salvat, dar nu a putut fi verificată acum \(nu se poate conecta la Anthropic \(ECONNREFUSED\)\)\.$/);
+    // The user's AI: the provider chosen (Anthropic by default), its key; the scores stay local until they choose.
+    const status = async () => (await app.inject({ url: '/api/ai/status', headers: H })).json();
+    expect(await status()).toMatchObject({ provider: 'anthropic', model: 'claude-opus-5-5', keySet: true, scoring: false, scorer: null, usage: { summary: { calls: 0 } } });
+    expect((await app.inject({ method: 'POST', url: '/api/ai/rescore', headers: M, payload: {} })).statusCode).toBe(400);
+    await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { ai: { provider: 'openai', model: 'gpt-6-luna', scoring: true } } });
+    expect(await status()).toMatchObject({ provider: 'openai', model: 'gpt-6-luna', keySet: true, scoring: true, scorer: { provider: 'openai', model: 'gpt-6-luna', lastError: null } });
+    expect((await app.inject({ method: 'POST', url: '/api/ai/rescore', headers: M, payload: {} })).json()).toEqual({ reset: 0 });
+    // A model of another provider is not used: the provider's default is.
+    await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { ai: { model: 'claude-haiku-5-5' } } });
+    expect((await status()).model).toBe('gpt-6.1-sol');
+    expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { ai: { model: 'Bad Model!' } } })).statusCode).toBe(400);
+    // Removed: the scores go back to the local model, the summary waits for a key.
+    expect((await put('openai', null)).json().aiKeys.openai).toEqual({ set: false, hint: null });
+    expect(await status()).toMatchObject({ keySet: false, scorer: null });
+    // The old admin-only route is gone.
+    expect((await app.inject({ method: 'PUT', url: '/api/settings/claude-key', headers: M, payload: { key: null } })).statusCode).toBe(404);
   });
   it('remembers the chart settings and the LMA inputs (FD-CHARTUX)', async () => {
     const s = (await app.inject({ method: 'GET', url: '/api/settings', headers: H })).json();
-    expect(s.charts).toEqual({ symbol: '', showPositions: true, showLma: true, showSlingshot: true, lmaPane: 0.25 });
+    expect(s.charts).toEqual({ symbol: '', showPositions: true, showLma: true, showSlingshot: true, slingshotHidden: false, lmaHidden: false, lmaPane: 0.25 });
     expect(s.lma).toMatchObject({ preset: 'Default', period: 100, steepness: 2.5, maType: 'EMA', smooth: 10, colorBars: true });
     const r = await app.inject({
       method: 'PUT',
@@ -244,7 +319,7 @@ describe('settings API', () => {
     });
     expect(r.statusCode).toBe(200);
     // Both indicators off: a chart with candles only (FD-CHARTFAV §1).
-    expect(r.json().charts).toEqual({ symbol: 'SOL/USDT', showPositions: true, showLma: false, showSlingshot: false, lmaPane: 0.25 });
+    expect(r.json().charts).toEqual({ symbol: 'SOL/USDT', showPositions: true, showLma: false, showSlingshot: false, slingshotHidden: false, lmaHidden: false, lmaPane: 0.25 });
     expect(r.json().market.defaultTf).toBe('4h');
     expect(r.json().lma).toMatchObject({ preset: 'Scalping', maType: 'VWMA', period: 100 });
     for (const bad of [
@@ -338,7 +413,8 @@ describe('watchlist & sources API', () => {
     expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/%5ESPX', headers: M })).statusCode).toBe(200);
     expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/%5ESPX', headers: M })).statusCode).toBe(404);
     expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/SPX', headers: M })).statusCode).toBe(200);
-    expect(await ctx.db.all("SELECT coin FROM news_coins WHERE news_id = 'n-spx'")).toEqual([]);
+    // FD-INDEXNEWS §7: the S&P 500 is one of the filter indices, named for everybody's filter, in the favourites or not.
+    expect(await ctx.db.all("SELECT coin FROM news_coins WHERE news_id = 'n-spx'")).toEqual([{ coin: '^SPX' }]);
     await ctx.db.run("DELETE FROM news WHERE id = 'n-spx'");
   });
 
@@ -871,6 +947,46 @@ describe('accounts through the wizard (FD-SENTIQ §2)', () => {
     expect((await app.inject({ method: 'PUT', url: `/api/portfolio/${ok.json().id}/cost-basis/BRK.B`, headers: M, payload: { avgPrice: 400 } })).statusCode).toBe(200);
   });
 
+  it("a broker's closed trades: one history serves every period, in the account's currency (FD-BROKERSTATS)", async () => {
+    const HOUR = 3_600_000;
+    const DAY = 24 * HOUR;
+    const now = Date.now();
+    const sold = (id: number, ago: number, pnl: number) => ({ order: { id, ticker: 'AAPL_US_EQ', side: 'SELL' }, fill: { id: id * 10, type: 'TRADE', filledAt: new Date(now - ago).toISOString(), quantity: -1, price: 100, walletImpact: { currency: 'EUR', realisedProfitLoss: pnl } } });
+    let history = 0;
+    route((u) => {
+      if (u.pathname.endsWith('/account/summary')) return { body: { currency: 'EUR', cash: { availableToTrade: 50 } } };
+      if (u.pathname.endsWith('/equity/positions') || u.pathname.endsWith('/equity/orders')) return { body: [] };
+      if (u.pathname.endsWith('/history/orders')) {
+        history++;
+        return { body: { items: [sold(5, HOUR, 12), sold(4, 2 * DAY, -3), sold(3, 3 * DAY, 0), sold(2, 20 * DAY, 40), sold(1, 100 * DAY, 1)] } };
+      }
+      return undefined;
+    });
+    const acc = (await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: t212 })).json();
+    const stats = async (q: string) => (await app.inject({ method: 'GET', url: `/api/portfolio/${acc.id}/stats?${q}`, headers: H })).json();
+    const before = history;
+    expect(await stats('period=7d')).toMatchObject({ period: '7d', supported: true, wins: 1, losses: 1, breakeven: 1, successRate: 50, net: 9, netPartial: false, currency: 'EUR', limited: false, unknownResults: 0, asOf: null, error: null });
+    expect(await stats('period=30d')).toMatchObject({ wins: 2, losses: 1, breakeven: 1, net: 49, currency: 'EUR' });
+    // One read of the history for both periods; "Reîmprospătează" reads it again.
+    expect(history - before).toBe(1);
+    await stats('period=30d&force=1');
+    expect(history - before).toBe(2);
+
+    // A broker whose report ends before the period (IBKR, „Azi”): no numbers, with the day the data ends.
+    const brokers = (ctx.accounts as unknown as { brokers: Map<number, { adapter: unknown; at: number }> }).brokers;
+    const asOf = now - 2 * DAY;
+    const fake = (extra: object) => brokers.set(acc.id, { adapter: { test: async () => {}, load: async () => ({ currency: 'USD', balances: [], positions: [], orders: [], fills: [], cash: null, errors: {} }), ...extra }, at: Date.now() });
+    fake({ closedTrades: async () => ({ currency: 'USD', trades: [{ id: 'x', closedAt: now - 3 * DAY, pnl: 5, net: 5 }, { id: 'y', closedAt: now - 3 * DAY, pnl: null, net: null }], coveredFrom: now - 4 * DAY, asOf }) });
+    expect(await stats('period=today&force=1')).toMatchObject({ supported: true, wins: null, net: null, asOf, error: null });
+    // Counted where the report reaches; a period longer than the history read is marked.
+    expect(await stats('period=7d&force=1')).toMatchObject({ wins: 1, net: 5, currency: 'USD', asOf, limited: true, unknownResults: 1 });
+    fake({ closedTrades: async () => Promise.reject(new BrokerError('PERMISSION', 'Trading 212: activează permisiunea „history:orders” la cheia API')) });
+    expect(await stats('period=7d&force=1')).toMatchObject({ supported: true, wins: null, error: { code: 'PERMISSION' } });
+    // An adapter without a closed-trade history.
+    fake({});
+    expect(await stats('period=7d&force=1')).toMatchObject({ supported: false, wins: null });
+  });
+
   it('a crypto exchange that needs a symbol for fills is read pair by pair', async () => {
     const r = await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: { exchange: 'binance', label: 'BN', credentials: { apiKey: 'k1234567', secret: 's1234567' } } });
     expect(r.statusCode).toBe(200);
@@ -890,6 +1006,88 @@ describe('accounts through the wizard (FD-SENTIQ §2)', () => {
     expect(p.fills.length).toBeGreaterThan(0);
     expect(p).toMatchObject({ kind: 'crypto', currency: 'USDT', mode: 'unknown' });
     expect(p.balances.map((b: { account: string }) => b.account)).toEqual(expect.arrayContaining(['spot']));
+  });
+});
+
+describe('open orders of the other exchanges (FD-TRADING §4)', () => {
+  type Params = Record<string, unknown> | undefined;
+  const add = async (exchange: string) =>
+    (await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: { exchange, label: exchange, credentials: { apiKey: 'k1234567', secret: 's1234567' } } })).json().id as number;
+  const spotOf = (id: number) => (ctx.accounts as unknown as { clients: Map<number, { clients: { spot: Record<string, unknown> } }> }).clients.get(id)!.clients.spot;
+  const order = (id: string, symbol: string, extra: object = {}) => ({ id, symbol, type: 'limit', side: 'buy', price: 60000, amount: 0.01, filled: 0, status: 'open', timestamp: 1, ...extra });
+  const portfolio = async (id: number) => (await app.inject({ method: 'GET', url: `/api/portfolio/${id}?force=1`, headers: H })).json();
+
+  it('lists futures and stop orders too, each under its market; a key without futures keeps the spot ones, without an error', async () => {
+    const bn = await add('binance');
+    const asked: Params[] = [];
+    spotOf(bn).fetchOpenOrders = async (_s?: string, _since?: number, _l?: number, params?: Params) => {
+      asked.push(params);
+      if (params?.type === 'swap') return [params.trigger ? order('f2', 'BTC/USDT:USDT', { type: 'market', side: 'sell', price: null, triggerPrice: 70000 }) : order('f1', 'BTC/USDT:USDT')];
+      return [order('s1', 'BTC/USDT')];
+    };
+    const p = await portfolio(bn);
+    expect(p.errors.orders).toBeUndefined();
+    expect(p.orders.map((o: { market: string; id: string }) => `${o.market}:${o.id}`).sort()).toEqual(['futures:f1', 'futures:f2', 'spot:s1']);
+    expect(asked).toEqual(expect.arrayContaining([{}, { type: 'swap', subType: 'linear' }, { type: 'swap', subType: 'linear', trigger: true }]));
+    spotOf(bn).fetchOpenOrders = async (_s?: string, _since?: number, _l?: number, params?: Params) => {
+      if (params?.type === 'swap') throw new ccxt.PermissionDenied('binance {"code":-2015,"msg":"Invalid API-key, IP, or permissions for action."}');
+      return [order('s1', 'BTC/USDT')];
+    };
+    const p2 = await portfolio(bn);
+    expect(p2.errors.orders).toBeUndefined();
+    expect(p2.orders.map((o: { id: string }) => o.id)).toEqual(['s1']);
+    // Not asked again for a while; "Testează" asks again.
+    let asks = 0;
+    spotOf(bn).fetchOpenOrders = async (_s?: string, _since?: number, _l?: number, params?: Params) => {
+      if (params?.type === 'swap') asks++;
+      return [order('s1', 'BTC/USDT')];
+    };
+    await portfolio(bn);
+    expect(asks).toBe(0);
+    await app.inject({ method: 'POST', url: `/api/accounts/${bn}/test`, headers: M });
+    await portfolio(bn);
+    expect(asks).toBe(2);
+    // Binance's -2015 once a call has succeeded (ccxt raises it as DDoSProtection): skipped at once, not retried.
+    let tries = 0;
+    const bn2 = await add('binance');
+    spotOf(bn2).fetchOpenOrders = async (_s?: string, _since?: number, _l?: number, params?: Params) => {
+      if (params?.type === 'swap') {
+        tries++;
+        throw new ccxt.DDoSProtection('binance {"code":-2015,"msg":"Invalid API-key, IP, or permissions for action."}');
+      }
+      return [order('s1', 'BTC/USDT')];
+    };
+    expect((await portfolio(bn2)).errors.orders).toBeUndefined();
+    expect(tries).toBe(2);
+    // Any other failure marks the section, as for the plain listing.
+    const bn3 = await add('binance');
+    spotOf(bn3).fetchOpenOrders = async (_s?: string, _since?: number, _l?: number, params?: Params) => {
+      if (params?.type === 'swap') throw new ccxt.ExchangeNotAvailable('binance 503');
+      return [order('s1', 'BTC/USDT')];
+    };
+    expect((await portfolio(bn3)).errors.orders).toBeDefined();
+  });
+
+  it('Bybit: the plain listings ask for spot (its client defaults to linear); the linear orders come on their own', async () => {
+    const by = await add('bybit');
+    const orders: unknown[] = [];
+    const fills: unknown[] = [];
+    spotOf(by).fetchOpenOrders = async (_s?: string, _since?: number, limit?: number, params?: Params) => {
+      orders.push({ limit, ...params });
+      return params?.type === 'spot' ? [order('s1', 'BTC/USDT')] : [order('f1', 'BTC/USDT:USDT')];
+    };
+    spotOf(by).fetchMyTrades = async (_s?: string, _since?: number, limit?: number, params?: Params) => {
+      fills.push({ limit, ...params });
+      const symbol = params?.type === 'spot' ? 'BTC/USDT' : 'BTC/USDT:USDT';
+      return [{ id: `x-${symbol}`, symbol, side: 'buy', price: 60000, amount: 0.01, cost: 600, timestamp: Date.now() - 3_600_000 }];
+    };
+    const p = await portfolio(by);
+    expect(orders).toHaveLength(2);
+    expect(orders).toEqual(expect.arrayContaining([{ limit: 50, type: 'spot' }, { limit: 50, type: 'swap', subType: 'linear', settleCoin: 'USDT' }]));
+    expect(fills).toEqual([{ limit: 100, type: 'spot' }, { limit: 100, type: 'swap', subType: 'linear' }]);
+    expect(p.orders.map((o: { market: string; id: string }) => `${o.market}:${o.id}`).sort()).toEqual(['futures:f1', 'spot:s1']);
+    // A perpetual's fill is never a spot one (it does not count toward a spot cost).
+    expect(p.fills.map((f: { market: string; symbol: string }) => `${f.market}:${f.symbol}`).sort()).toEqual(['futures:BTC/USDT:USDT', 'spot:BTC/USDT']);
   });
 });
 
@@ -1174,7 +1372,7 @@ describe('stocks API (FD-SENTIQ §4)', () => {
     expect(d.json().candles).toHaveLength(100);
     const h = await app.inject({ method: 'GET', url: '/api/market/candles?asset=stock&symbol=AAPL&tf=1h&limit=100', headers: H });
     expect(h.statusCode).toBe(400);
-    expect(h.json().error.message).toMatch(/cheia gratuită Twelve Data/);
+    expect(h.json().error.message).toMatch(/cheia ta Twelve Data \(Setări → Ale mele → Date pentru acțiuni/);
     expect((await app.inject({ method: 'GET', url: '/api/market/candles?asset=stock&symbol=aa%20pl&tf=1d', headers: H })).statusCode).toBe(400);
     const info = (await app.inject({ method: 'GET', url: '/api/stocks/info', headers: H })).json();
     expect(info).toMatchObject({ timeframes: ['1d', '1w'], hasKey: false, market: { state: 'open' }, budget: { used: 0, perDay: 800 } });
@@ -1208,15 +1406,20 @@ describe('stocks API (FD-SENTIQ §4)', () => {
     const info = (await app.inject({ method: 'GET', url: '/api/stocks/info', headers: H })).json();
     expect(info.timeframes).toContain('1h');
     expect(info.budget).toMatchObject({ perMinute: 55, perDay: null, plan: { category: 'grow', assumed: false } });
-    expect((await app.inject({ method: 'GET', url: '/api/health', headers: H })).json().twelveData).toMatchObject({ hasKey: true, used: 3, perDay: null });
-    // Read again on request (after an upgrade): the admin only.
+    // FD-TDKEYS: the key and its credits are the user's; the health page only counts who has one.
+    // The new key's day: its check, then its plan (the refused key's check is not its).
+    expect(info.budget.used).toBe(2);
+    expect((await app.inject({ method: 'GET', url: '/api/health', headers: H })).json().twelveData).toEqual({ users: 1 });
+    expect(await ctx.db.get("SELECT 1 AS x FROM user_keys WHERE user_id = 1 AND name = N'twelvedata'")).toBeDefined();
+    // Read again on request (after an upgrade).
     serveJson((u) => (u.pathname === '/api_usage' ? { timestamp: 'x', current_usage: 0, plan_limit: 610, plan_category: 'pro' } : null));
     const reread = await app.inject({ method: 'POST', url: '/api/settings/twelvedata-plan', headers: M });
     expect(reread.json().budget).toMatchObject({ perMinute: 610, plan: { category: 'pro' } });
     const cleared = await app.inject({ method: 'PUT', url: '/api/settings/twelvedata-key', headers: M, payload: { key: null } });
     expect(cleared.json()).toMatchObject({ twelveDataKeySet: false });
     expect((await app.inject({ method: 'GET', url: '/api/stocks/info', headers: H })).json().budget).toMatchObject({ perMinute: 8, perDay: 800, plan: { assumed: true } });
-    expect((await app.inject({ method: 'POST', url: '/api/settings/twelvedata-plan', headers: M })).json().error.message).toBe('Cheia Twelve Data lipsește');
+    expect((await app.inject({ method: 'POST', url: '/api/settings/twelvedata-plan', headers: M })).json().error.message).toBe('Cheia ta Twelve Data lipsește');
+    expect((await app.inject({ method: 'GET', url: '/api/health', headers: H })).json().twelveData).toEqual({ users: 0 });
   });
 
   it('serves an index: daily candles, quotes and the spark line (FD-INDICES)', async () => {

@@ -4,7 +4,10 @@
 export interface ChartView {
   /** Pixels per bar (lightweight-charts `barSpacing`). */
   barSpacing: number;
-  /** Bars between the last bar and the right edge (`timeScale().scrollPosition()`). */
+  /**
+   * Bars between the last candle and the right edge (FD-INDICATORS: measured from the candle, not from the time scale's
+   * last point, which an indicator drawing ahead of the candles moves; the same as `scrollPosition()` without one).
+   */
   scroll: number;
   at: number;
 }

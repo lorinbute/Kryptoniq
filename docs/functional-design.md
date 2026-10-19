@@ -12,11 +12,11 @@
 
 ## 0. Scop și principii
 
-Sentiq (de la *sentiment* + *IQ*) este un **asistent de day-trading** pentru crypto și acțiunile americane. Adună într-un singur loc ce se întâmplă în piață (știri crypto, acțiuni, macro, geopolitică), calculează **sentimentul zilei**, arată **calendarul economic** (cu rezultatele companiilor), **indicatorii economici pe țări**, **grafice cu indicatorii Slingshot System și LMA** și **portofoliile** de la exchange-uri crypto și brokeri. Opțional, Claude scrie **rezumatul zilei**.
+Sentiq (de la *sentiment* + *IQ*) este un **asistent de day-trading** pentru crypto și acțiunile americane. Adună într-un singur loc ce se întâmplă în piață (știri crypto, acțiuni, macro, geopolitică), calculează **sentimentul zilei**, arată **calendarul economic** (cu rezultatele companiilor), **indicatorii economici pe țări**, **grafice cu indicatorii Slingshot System și LMA și cu oricare dintre cei 117 indicatori standard TradingView** și **portofoliile** de la exchange-uri crypto și brokeri. Opțional, Claude scrie **rezumatul zilei**.
 
 Principii:
 1. **Datele stau în Azure SQL Database** (FD-AZURE). Aplicația rulează online pe Azure App Service, la **https://sentiq.money** (pași în [deploy-azure.md](deploy-azure.md)), și pe Mac, pe aceeași bază. Fiecare persoană are **contul ei** (parolă, 2FA, passkey); conturile se dau doar la cerere, aprobate de admin.
-2. **Informează, nu tranzacționează.** Aplicația nu plasează și nu anulează ordine. Cheile de exchange / broker trebuie să fie doar de citire.
+2. **Informează; tranzacționează doar la cerere** (FD-TRADING). Implicit doar citește. Ordinele pleacă numai de pe conturile unde utilizatorul a pornit tranzacționarea (cu parola și 2FA), după o confirmare a fiecărui ordin. Nu mută niciodată fonduri (fără retrageri sau transferuri).
 3. **Transparentă.** Fiecare cifră (sentimentul zilei, scorul unei știri, culoarea unui indicator) poate fi „deschisă” ca să vezi de unde vine.
 4. **Robustă.** O sursă căzută nu strică restul. Ultimele date bune rămân vizibile, cu ora lor.
 5. **Ușor de citit.** Temă întunecată (implicită) și temă luminoasă, contrast de cel puțin 4,5:1 pentru orice text, interfață în română, termeni de trading în engleză (LONG, TAKE PROFIT, CPI…).
@@ -156,10 +156,10 @@ Se mai văd: **încrederea** (scăzută / medie / ridicată), sub-indicii **Cryp
 - Se actualizează automat; fără grilă și fără liniile cursorului (prețul și ora pe axe); graficul stă pe placa lui, nu pe culoarea paginii.
 - **Slingshot System Long 3.3** (indicatorul utilizatorului), portat 1:1 din Pine: norul EMA 38/62, semnalele **LONG** (verzi cât sunt valide sau au atins TP, roșii când au fost invalidate sau au atins SL), previzualizarea LONG, **TAKE PROFIT**, liniile TP/SL ATR cu tabelul lor, **Market Structure** (și pe un timeframe superior), lista **alertelor** și istoricul **semnalelor** (intrare, SL, TP, rezultat).
 - **[DI] Logarithmic Moving Average (LMA)** în panoul de jos (linia de semnal, pragurile, starea BULLISH / BEARISH / NEUTRAL); „Color Price Bars” colorează lumânările după LMA.
-- Bifele „Slingshot”, „LMA” și „Pozițiile mele” arată / ascund indicatorii și pozițiile; setările ambilor indicatori au aceleași nume și valori implicite ca în TradingView.
+- **Indicatori** (FD-INDICATORS): lista cu cei 117 indicatori standard TradingView plus Volume, pe categorii și cu căutare; Slingshot și LMA sus, la „Premium”, cu eticheta PREMIUM. Fiecare indicator adăugat are legenda lui (valori, ochi, setări, ×), panoul lui dacă nu e „pe grafic” și setările Intrări / Stil cu numele și valorile implicite din TradingView. Bifa „Pozițiile mele” arată / ascunde pozițiile.
 - **Pozițiile și ordinele** tale pe moneda afișată apar ca linii, cu PnL la SL, TP și la prețul curent.
 - Favoritele de deasupra graficului se reordonează prin tragere (sau Alt + ← / →); ordinea e aceeași peste tot.
-- Se țin minte: perechea, timeframe-ul, bifele, înălțimea panoului LMA, setările indicatorilor; zoom-ul pe fiecare pereche și timeframe, în browser. **Ecran complet**, cu ieșire prin buton sau Esc.
+- Se țin minte: perechea, timeframe-ul, „Pozițiile mele”, indicatorii de pe grafic (aceiași pe toate graficele), înălțimea fiecărui panou, setările indicatorilor; zoom-ul pe fiecare pereche și timeframe, în browser. **Ecran complet**, cu ieșire prin buton sau Esc.
 
 ### 5.2 Diferențe intenționate față de TradingView
 - Prețurile din etichete / tabel au **precizia pieței** (ex. `0.00001234`), nu `#.##`.
@@ -185,7 +185,8 @@ Pentru fiecare favorit, pe timeframe-ul ales pe Azi, deasupra favoritelor („Se
 ## 6. Tranzacții / portofoliu (FD-TRADE, FD-SENTIQ, FD-NOAPI)
 
 ### 6.1 Ce face
-- „Adaugă un cont” (pagina Tranzacții sau Setări) deschide un asistent: alegi platforma după logo (filtru Crypto / Acțiuni, căutare), urmezi pașii pentru o cheie doar de citire (cu linkul spre pagina furnizorului), completezi exact câmpurile cerute; contul se salvează doar dacă testul conexiunii reușește.
+- „Adaugă un cont” (pagina Tranzacții sau Setări) deschide un asistent: alegi platforma după logo (filtru Crypto / Acțiuni, căutare), urmezi pașii pentru o cheie doar de citire (sau, separat, cu tranzacționare, dar fără retrageri) cu linkul spre pagina furnizorului, completezi exact câmpurile cerute; contul se salvează doar dacă testul conexiunii reușește.
+- **Tranzacționare** (FD-TRADING): pe conturile unde e pornită, „Ordin nou” (spot, futures, acțiuni), „Anulează” pe ordine, „Închide” pe poziții, „Vinde” pe dețineri și „Tranzacționează” pe grafic, fiecare ordin cu fereastra de confirmare; jurnalul ordinelor trimise din Sentiq. Toate platformele în afară de Interactive Brokers.
 - Platforme (doar cele cu API): **KuCoin, Binance, Bybit, OKX, Kraken, Coinbase, Bitget** (crypto) și **Trading 212, eToro, Interactive Brokers, Alpaca** (acțiuni).
 - Pe fiecare cont, cu logo-ul lui: poziții (futures / cu levier), dețineri cu preț mediu și PnL, numerar (la brokeri), ordine deschise, tranzacțiile recente (7 zile). Reîmprospătare la 30 s cât pagina e deschisă + butonul „Reîmprospătează” din bara paginii, lângă „Adaugă un cont”.
 - **Cardurile unui cont crypto** (FD-TRADESTATS): Disponibil în futures · Valoare în contul spot · PnL nerealizat (futures) · Tranzacții profitabile · Tranzacții cu pierdere · Rata de succes · Câștig net. Ultimele patru numără pozițiile futures închise în perioada aleasă în bara paginii (Azi · 7z · 30z · 90z), după rezultatul lor net; KuCoin, Bybit, OKX, Bitget (Binance nu dă istoricul prin API).
@@ -193,8 +194,8 @@ Pentru fiecare favorit, pe timeframe-ul ales pe Azi, deasupra favoritelor („Se
 
 ### 6.2 Securitate
 - Cheile se salvează **criptat**; după salvare se vede doar un indiciu (`abcd…wxyz`).
-- Aplicația **nu are cod** care plasează sau anulează ordine.
-- Dacă platforma raportează că o cheie are drepturi de tranzacționare sau retragere, apare un avertisment.
+- Ordinele pleacă doar de pe conturile cu tranzacționarea pornită (parola + 2FA), după confirmare; aplicația nu are cod de retrageri sau transferuri.
+- Dacă platforma raportează că o cheie poate retrage sau transfera fonduri, apare un avertisment, iar tranzacționarea nu poate fi pornită cu ea.
 
 ### 6.3 Cazuri limită
 | Situație | Comportament |
@@ -230,7 +231,7 @@ Pentru fiecare favorit, pe timeframe-ul ales pe Azi, deasupra favoritelor („Se
 - Fiecare sursă de știri: ultimul succes, ultima știre nouă, următoarea verificare, eroarea.
 
 ## 9. Ce NU face (candidați pentru mai târziu)
-- Plasare de ordine (exclus prin design).
+- Ordine prin Interactive Brokers (cer Client Portal Gateway sau OAuth, nu cheia Flex; FD-TRADING); futures pe Kraken și Coinbase.
 - Notificări desktop / sonore (alerte de indicator, reminder înainte de CPI).
 - Evenimente crypto automate (unlock-uri, upgrade-uri): doar ca evenimente personale.
 - Backtesting.
@@ -241,10 +242,11 @@ Pentru fiecare favorit, pe timeframe-ul ales pe Azi, deasupra favoritelor („Se
 - **Ale fiecăruia:** favoritele, setările graficelor, ale calendarului și timeframe-ul semnalelor, alegerea exchange-ului de prețuri (dintre cele conectate), fusul orar, conturile de exchange / broker, evenimentele personale, rezumatul zilei, conexiunile Claude. **Comune:** știrile, sentimentul zilei, calendarul economic, indicatorii economici, datele de piață.
 - **Doar adminul:** sursele de știri, motorul de sentiment și cheia Claude, cheia Twelve Data, emailul (Resend), retenția (toate în Setări → Admin), *Stare sistem* și *Utilizatori*.
 - **Cont nou doar la cerere:** „Cere un cont” (nume și email) → adminul primește email și vede un punct pe inițiala lui → *Utilizatori* → Aprobă (sau Respinge) → persoana primește linkul de activare (7 zile), își alege parola → login. O cerere fără răspuns dispare după 30 de zile.
-- **Login:** email + parolă (minimum 12 caractere, literă mare, literă mică, cifră), apoi codul TOTP (5 minute) sau un cod de recuperare dacă 2FA e pornit; sau **passkey** (merge pe adresa pe care a fost creat: https://sentiq.money sau `http://localhost:4317` pe Mac; niciodată pe o adresă IP). 3 încercări greșite de pe același dispozitiv → pauză 15 minute. Sesiunea ține 30 de zile de la ultima folosire.
+- **2FA obligatoriu (FD-2FA):** fiecare cont, adminul inclus, își configurează aplicația de autentificare (cod QR + 10 coduri de recuperare) înainte să intre în aplicație: contul nou imediat după activare, celelalte la primul login fără 2FA. Până atunci nu se deschide nimic altceva.
+- **Login:** email + parolă (minimum 12 caractere, literă mare, literă mică, cifră), apoi codul TOTP (5 minute) sau un cod de recuperare; sau **passkey** (merge pe adresa pe care a fost creat: https://sentiq.money sau `http://localhost:4317` pe Mac; niciodată pe o adresă IP). 3 încercări greșite de pe același dispozitiv → pauză 15 minute. Sesiunea ține 30 de zile de la ultima folosire.
 - **Parola uitată:** link valabil o oră; parola nouă închide toate sesiunile.
-- **Securitate** (meniul contului): nume, parolă, 2FA (cod QR + 10 coduri de recuperare), passkey-uri, „Ieși de pe toate dispozitivele”.
-- **Utilizatori** (admin): cereri de cont, link nou de activare, dezactivare / reactivare, oprirea 2FA, ștergerea contului (cu datele lui).
+- **Securitate** (meniul contului): nume, parolă, 2FA („Schimbă aplicația de autentificare”, „Coduri de recuperare noi”; nu se poate opri), passkey-uri, „Ieși de pe toate dispozitivele”.
+- **Utilizatori** (admin): cereri de cont, link nou de activare, dezactivare / reactivare, resetarea 2FA (contul și-l configurează din nou la login), ștergerea contului (cu datele lui).
 - **Acces din rețea:** serverul ascultă pe toate interfețele, dar răspunde doar la numele și adresele Mac-ului (plus `SENTIQ_ALLOWED_HOSTS`); `SENTIQ_BIND=127.0.0.1` îl ține doar pe Mac. Pe Azure răspunde la adresa `*.azurewebsites.net` și la adresa publică (FD-AZURE §1).
 - Emailurile (cerere nouă, activare, parolă uitată) pleacă prin **Resend**; cu expeditorul de test ajung doar la admin, care copiază linkul de activare din pagina de aprobare. Linkurile folosesc adresa publică (https://sentiq.money), și când adminul aprobă de pe Mac (FD-ONLINE §2).
 
@@ -960,6 +962,8 @@ Model: Serento.Web (`Auth/*`, `AccountController`): aceleași reguli de securita
 - **Parola nouă** închide celelalte sesiuni ale contului. 2FA rămâne pornit: resetarea parolei nu ocolește al doilea factor; pentru telefonul pierdut există codurile de recuperare.
 
 ### 7. Pagina „Securitate” (meniul contului)
+> Din **FD-2FA**: 2FA e obligatoriu; „Dezactivează” și „Renunță” dispar, apare „Schimbă aplicația de autentificare”.
+
 - **Contul tău:** numele (se poate schimba), emailul și rolul.
 - **Schimbă parola:** parola actuală și cea nouă de două ori. Celelalte sesiuni se închid.
 - **Autentificare în doi pași (TOTP):**
@@ -974,6 +978,8 @@ Model: Serento.Web (`Auth/*`, `AccountController`): aceleași reguli de securita
 - **Sesiuni:** „Ieși de pe toate dispozitivele”.
 
 ### 8. Pagina „Utilizatori” (doar admin)
+> Din **FD-2FA** §4: „Oprește 2FA” devine „Resetează 2FA” (închide și sesiunile contului).
+
 - **Tabel:** nume, email, rol, email confirmat, 2FA, număr de passkey-uri, creat, ultimul login, stare.
 - **Acțiuni:**
   - „Confirmă emailul” (pentru varianta de dezvoltare);
@@ -1038,7 +1044,7 @@ Interpretare: „0,8” e **ponderea de relevanță** a știrilor geopolitice (a
 ### 1. Importanța fiecărei știri (cât cântărește în indexul zilei)
 - **Știre notată de Claude:** importanța dată de Claude (1 = minoră, 2 = notabilă, 3 = mișcă piața), judecată din tot titlul.
 - **Știre notată local** (motorul local ales, sau rezerva când Claude nu răspunde): cuvintele-cheie, ca până acum (1; 1,5; 2; 3).
-- **„De ce acest scor?”** (pagina Știri) arată importanța folosită și de unde vine; când diferă, și ce ar fi dat cuvintele-cheie.
+- **„De ce acest scor?”** (pagina Știri) arată importanța folosită și de unde vine; când diferă, și ce ar fi dat cuvintele-cheie, ca valoare separată, fiecare cu sursa ei în paranteză: „Relevanță 1, importanță 2 (Claude), importanță 3 (cuvinte-cheie)”. Prima e cea care intră în sentimentul zilei.
 
 ### 2. Știrile geopolitice
 - Cele legate de piețe (război, sancțiuni, tarife, petrol, alegeri etc.): relevanța urcă de la **0,6 la 0,8**, deci cântăresc cu o treime mai mult.
@@ -1319,6 +1325,8 @@ Cererea utilizatorului: „vreau să elimin funcționalitatea de creare de cont 
 - Linkul folosește adresa publică (`SENTIQ_PUBLIC_URL`) când există, altfel adresa din care adminul folosește Sentiq; dacă aceea e `localhost`, panoul avertizează că linkul merge doar pe Mac-ul lui.
 
 ### 3. Activarea (cel aprobat)
+> Din **FD-2FA** §1: după parolă urmează direct configurarea 2FA, deja în cont (fără „Intră în cont”).
+
 - Emailul „Sentiq · contul tău a fost aprobat”: „Setează-ți parola ca să intri. Linkul e valabil 7 zile.” cu butonul **„Activează contul”**.
 - Pagina „Activează-ți contul”: numele și emailul (fixe), **parola** de două ori (aceeași regulă: minimum 12 caractere, literă mare, mică și cifră). Linkul dispare din bara de adrese.
 - După salvare: „Contul e activ” cu **„Intră în cont”**, care deschide login-ul cu emailul completat. Adresa e confirmată prin chiar folosirea linkului.
@@ -2236,3 +2244,1313 @@ Cererea utilizatorului: „caută pe net soluții pentru indecși. măcar pt 1h.
 | Weekend, sărbătoare, noapte | ultima ședință; fără „Date vechi” (piața e închisă) |
 | Bara curentă (ședința în desfășurare) | apare, deschisă, și se actualizează la minut |
 | Timeframe salvat 6h / 8h / 12h | graficul arată cel mai apropiat (4h sau 1d), cu nota „Indicii nu au …” |
+
+## FD-AIKEYS — Cheia AI a fiecărui utilizator: Claude, ChatGPT sau Gemini (16 oct 2026)
+
+Cererile utilizatorului:
+- „Vreau să știu dacă Gemini și ChatGPT au API keys ca să putem să le adăugăm ca fiecare client să-și treacă API key-ul în aplicație ca să nu-mi consume mie creditele.”
+- „implementează integrarea cu Gemini și OpenAI ca să suporte API key-uri de la ei, și această setare de API key devine una personală, pentru fiecare utilizator. Deci chiar și în cazul meu […] din zona de setări de admin în zona de setări de utilizator. Utilizatorul când introduce acest API key poate să folosească prin API modelul respectiv pe care și-l alege, pentru score și pentru rezumat. Dacă nu-și dorește pentru score, folosește modelul local, dar rezumatul tot trebuie să folosească API key.”
+- „Motorul de sentiment va folosi modelul local implicit până când utilizatorul își adaugă API key-ul. Și atunci are de ales.”
+
+Context: cheia Claude era una singură, a adminului, pusă în Setări → Admin. Plătea scorul tuturor știrilor (cu motorul Claude) și Rezumatul oricărui utilizator. OpenAI și Google dau chei API ca Anthropic, facturate separat de abonamentele ChatGPT și Gemini (la fel ca la Claude).
+
+### 1. Ce se schimbă
+- **Setări → Ale mele → „Inteligență artificială”** (nou, pentru oricine, adminul inclus):
+  - **furnizorul**: Claude (Anthropic), ChatGPT (OpenAI) sau Gemini (Google); un ✓ verde arată furnizorii la care ai cheie salvată;
+  - **cheia API** a furnizorului ales, cu „Salvează cheia” / „Înlocuiește cheia”, „Șterge cheia” (cu confirmare) și linkul „Fă o cheie la …”. La salvare, Sentiq cere furnizorului lista de modele (gratuit). O cheie refuzată nu se salvează („Google nu a acceptat cheia: …”); dacă furnizorul nu răspunde, cheia se salvează cu un avertisment;
+  - **modelul**: lista cheii (doar modelele de text pe care le poate folosi), cu cele recomandate primele; fără cheie, lista Sentiq. Implicit: `claude-opus-5-5`, `gpt-6.1-sol`, `gemini-3.8-flash`;
+  - **scorul de sentiment al știrilor**: „Model local” (implicit, gratuit) sau AI-ul tău (activ doar cu cheia salvată). Textul spune ce se trimite (titlurile din ultimele 48 h, în loturi de 25) și că scorurile calculate așa le vede doar utilizatorul;
+  - **„Ce a consumat cheia ta azi”** (ziua UTC): titluri, apeluri, tokeni și modelul, separat pentru scor și Rezumat; „Prețul în dolari îl arată consola furnizorului”, plus ce se trimite și ce nu (niciodată conturile, cheile, portofoliile);
+  - eroarea AI-ului, dacă scorul are una („cheia API OpenAI nu este validă. Până schimbi cheia sau modelul, vezi scorul modelului local.”);
+  - „Scorează din nou ultimele 48 h” (doar cu scorul pe AI-ul tău).
+  - Pe Gemini, o notă: pe nivelul gratuit, Google poate folosi datele trimise.
+- **Scorul comun** e mereu al modelului local, pentru toți. Un utilizator cu scorul pe AI-ul său vede, **numai în contul său**, scorurile acestui AI în Știri, în sentimentul zilei (Azi, istoric, pe ore) și în Rezumat. Unde AI-ul n-a dat încă un scor, rămâne cel local.
+- **Rezumatul zilei** e scris de AI-ul fiecăruia, cu cheia și modelul său. Fără cheie: „Rezumatul îl scrie AI-ul tău (Claude, ChatGPT sau Gemini), cu cheia ta API…” și butonul „Pune cheia în Setări” (pentru oricine, nu doar pentru admin). Subsolul spune cine l-a scris și cu ce model.
+- **Setări → Admin → „Sentimentul știrilor”** (fostul „Motorul de sentiment”): fără alegerea motorului, fără cheie, fără consum. Rămân textul despre scorul comun (cu trimitere la setările fiecăruia), câți utilizatori își scorează știrile cu AI-ul lor, „Rescorează ultimele 48 h” și „Recalculează istoricul zilnic” (scorul comun).
+- **Stare sistem:** „Scorul comun: local”, „Scor cu AI-ul propriu: n utilizatori” și jobul nou „Scorare cu AI-ul utilizatorilor”.
+- **Știri → „De ce acest scor?”:** motorul („ChatGPT (gpt-6-luna)”, „Gemini (…)”, „Claude (…)”) și importanța dată de AI-ul respectiv.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Utilizator fără cheie | scorul local; Rezumatul cere cheia |
+| Cheie la OpenAI, dar furnizorul ales e Gemini | contează doar cheia furnizorului ales: ca fără cheie (scorul local, Rezumatul cere cheia) |
+| Scorul pe AI ales, cheia ștearsă apoi | scorul local, cu avertisment în panou; alegerea rămâne, pentru când pui o cheie |
+| Cheie refuzată (401 / 403) sau model inexistent | nu se mai cere nimic până schimbi cheia sau modelul; între timp, scorul local |
+| Cont fără credit (OpenAI `insufficient_quota`, Anthropic „credit balance”, Gemini limita zilnică) | pauză de 30 de minute; scorul local între timp |
+| Furnizor supraîncărcat, limită pe minut, rețea | 2 reîncercări (1 s, 4 s sau cât cere `Retry-After`, cel mult 20 s), apoi pauză de 5 minute |
+| AI-ul refuză un lot, răspunsul nu se poate citi sau sare titluri | acele titluri rămân cu scorul local și nu se mai trimit (nu se plătesc de două ori) |
+| Titlul unei știri se schimbă la sursă | scorurile AI ale tuturor pentru ea se șterg și se refac |
+| Știri vechi de peste 48 h, sau cu relevanță 0 | nu se trimit (nu contează în indicele zilelor care se mai schimbă) |
+| Un model al altui furnizor rămas salvat | se folosește modelul implicit al furnizorului ales |
+| Utilizator dezactivat | AI-ul său nu mai scorează |
+| Utilizator șters | cheile, scorurile, istoricul și consumul său se șterg |
+| Rezumat: AI-ul refuză / răspunsul e prea lung / furnizorul dă eroare | „Claude a refuzat…”, „Rezumatul a ieșit prea lung…”, „Rezumatul nu s-a putut genera: contul Google nu mai are credit…”; tokenii se numără oricum |
+| Mac-ul și Azure | totul e în bază: cheile, scorurile, consumul și starea scorării (eroarea se vede în panou oricare instanță ar servi pagina); scorarea rulează pe instanța cu joburile |
+
+### 3. Ce pleacă la furnizor
+- **Scorul:** titlurile știrilor (fără rezumat, fără sursă), numerotate.
+- **Rezumatul:** ce primea și înainte Claude (sentimentul, știrile importante, calendarul, indicatorii, contextul pieței, favoritele utilizatorului din scanner).
+- OpenAI: cu `store: false` (OpenAI nu păstrează răspunsul). Gemini: cheia în antet, nu în adresă.
+
+### 4. Mutarea cheii comune (o singură dată, la pornire)
+- Cheia Claude a adminului devine cheia Anthropic **personală** a adminului (aceeași cheie criptată).
+- Motorul și modelul alese pentru toți devin alegerea adminului: motorul Claude cu cheie înseamnă scorul pe Claude, doar pentru admin.
+- Scorurile Claude de până atunci devin scorurile AI ale adminului. Știrile din ultimele 4 zile (zilele care se mai pot schimba) se scorează din nou cu modelul local, pentru ceilalți; zilele mai vechi, deja închise, rămân cum erau.
+- Consumul cheii comune de azi se șterge (era al tuturor).
+- Ceilalți utilizatori trebuie să-și pună cheia lor pentru Rezumat.
+
+### 5. Conflicte cu ce exista
+- FD-AICLARITY („La ce folosește Sentiq cheia Claude”, în Admin) se mută în panoul fiecăruia, ca „Ce a consumat cheia ta azi”.
+- FD-SUMMARY: Rezumatul nu mai e „mereu cu `claude-opus-5-5`, pentru oricine”, ci cu AI-ul și modelul fiecăruia.
+- FD-IMPACT: importanța dată de AI cântărește doar în indicele utilizatorului al cărui AI a dat-o.
+- Schema bazei trece la versiunea 3: Mac-ul și Azure se publică împreună (versiunea veche refuză să pornească).
+
+## FD-TDKEYS — Cheia Twelve Data a fiecărui utilizator (16 oct 2026)
+
+Cererea utilizatorului: „vreau tot așa să implementez, pentru fiecare utilizator, API-ul de la Twelve Data. Fiecare utilizator își plătește abonamentele pentru date. Asta înseamnă că muți setarea API key-ului de la Twelve Data din admin în user settings.”
+
+Context: cheia Twelve Data era una singură, a adminului (Setări → Admin → Date de piață), și dădea tuturor graficele de acțiuni pe 1m – 4h, căutarea Twelve Data și semnalele intraday ale acțiunilor; creditele (8 pe minut și 800 pe zi pe planul gratuit Basic, mai multe pe planurile plătite, FD-TDPLAN) erau ale tuturor.
+
+Cercetare (16 oct 2026): planul gratuit Basic dă 8 credite pe minut și 800 pe zi; planurile plătite (Grow, Pro…) nu au limită zilnică; planul cheii se citește la `/api_usage` (1 credit). Atribuirea „Twelve Data” trebuie arătată când datele se afișează (graficul spune deja sursa). Folosirea cu cheia proprie a fiecăruia e folosire personală.
+
+### 1. Ce se schimbă
+- **Setări → Ale mele → „Date pentru acțiuni”** (nou, pentru oricine, adminul inclus):
+  - ce dă cheia: „Cu cheia ta Twelve Data, graficele acțiunilor au 1m – 4h (pe lângă 1d și 1w) și semnalele de pe Azi folosesc timeframe-ul ales. Fără cheie: 1d și 1w, de la Nasdaq, gratuit.”;
+  - cheia (salvată / înlocuită / ștearsă), verificată la salvare (1 credit al cheii, ca înainte); o cheie refuzată nu se salvează;
+  - planul cheii și consumul de azi (ca în Admin până acum: „Planul Twelve Data: Grow: 55 de cereri pe minut, fără limită zilnică (citit acum 2 min)”, „x / 800 azi”, „Recitește planul”);
+  - linkul de înregistrare (planul gratuit ajunge pentru câteva acțiuni).
+- **Fiecare folosește doar cheia lui**: graficele, căutarea Twelve Data, semnalele acțiunilor de pe Azi (scanner-ul), creditele și planul sunt ale utilizatorului. Un utilizator fără cheie are acțiunile pe 1d și 1w (Nasdaq), ca un Sentiq fără cheie.
+- **Setări → Admin → Date de piață**: rămân exchange-ul implicit pentru prețurile crypto și istoricul încărcat pe grafice; cheia, planul și consumul Twelve Data pleacă de aici.
+- **Grafice**: un timeframe indisponibil spune „1h are nevoie de cheia ta Twelve Data (Setări → Ale mele → Date pentru acțiuni; planul gratuit ajunge); fără ea sunt 1d și 1w”, cu link pentru oricine (nu mai „o pune adminul”).
+- **Stare sistem**: „Twelve Data: n utilizatori cu cheie” (consumul fiecăruia e în setările lui).
+- **Indicii** (CNBC, Cboe, Nasdaq) și cotațiile, graficele mici și rezultatele companiilor (Nasdaq) nu au nevoie de cheie: rămân la fel pentru toți.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Utilizator fără cheie | acțiunile pe 1d și 1w (Nasdaq); timeframe-urile mici sunt gri, cu motivul și linkul spre setările lui; semnalele de pe Azi pe 1d („Slingshot pe 1d”) |
+| Cheie refuzată la salvare | nu se salvează; mesajul Twelve Data |
+| Cheie înlocuită | verificată pe creditele ei (nu ale cheii vechi); planul ei se citește imediat; consumul zilei începe de la cele două cereri ale ei (verificarea și planul) |
+| Cheie ștearsă | limitele planului gratuit (presupuse) și consumul se uită; graficele trec pe 1d / 1w |
+| Doi utilizatori cu aceeași cheie | Sentiq numără creditele pentru fiecare separat, Twelve Data pe cheie: limita poate fi atinsă mai devreme; un 429 oprește cererile acelui utilizator până la minutul următor (ca înainte) |
+| Limita pe minut / pe zi a cuiva | doar el primește ultimele lumânări cu motivul; ceilalți nu sunt afectați |
+| Utilizator dezactivat | planul lui nu se mai citește; scanner-ul nu-l mai scanează |
+| Utilizator șters | cheia (prin cheia străină), planul, consumul și lumânările lui din memorie se șterg |
+| Aceeași acțiune la doi utilizatori | cu cheie: fiecare o citește cu cheia lui (lumânările nu se împart); fără cheie: Nasdaq, o dată pentru toți |
+| Mac-ul și Azure | cheia, planul și consumul zilei sunt în bază; fereastra pe minut e a fiecărei instanțe (ca înainte) |
+| Planul nu poate fi citit la job | ceilalți utilizatori se citesc în continuare; jobul raportează cheile care n-au mers |
+
+### 3. Mutarea cheii comune (o singură dată, la pornire)
+- Cheia Twelve Data din Admin devine cheia **adminului** (aceeași cheie criptată), cu planul citit și consumul zilei.
+- **Ceilalți utilizatori pierd 1m – 4h pentru acțiuni** până își pun cheia lor (gratuită). Semnalele lor intraday pentru acțiuni trec pe 1d.
+
+### 4. Conflicte cu ce exista
+- FD-SENTIQ §4.3 / FD-TDPLAN: cheia și planul nu mai sunt în Admin, ci la fiecare.
+- FD-USERS §2 / FD-ADMINSET: Twelve Data nu mai e o setare „a tuturor”; Admin → Date de piață păstrează doar exchange-ul implicit și istoricul.
+- FD-SENTIQ §4.6: scanner-ul calculează rândurile acțiunilor pentru fiecare utilizator cu cheie (cu creditele lui); fără cheie, rândul zilnic e comun.
+- Schema bazei: același salt de versiune ca FD-AIKEYS (3); cheile personale stau toate în `user_keys`.
+
+## FD-2FA — Autentificarea în doi pași, obligatorie (18 oct 2026)
+
+Cererea utilizatorului: „implementează obligativitatea ca conturile să-și seteze identificarea cu doi factori. Dacă nu fac asta, nu le dai acces la aplicație. Deci introduci partea de two-factor authentication ca setup imediat după ce își activează contul. Ei încă nu intră în aplicație până când nu au setat 2FA.”
+
+Context: 2FA (aplicația de autentificare + 10 coduri de recuperare) era opțional, din Securitate (FD-USERS §7); un cont nou intra în aplicație direct după activare și login, doar cu parola.
+
+Cercetare (18 oct 2026):
+- OWASP (Multifactor Authentication Cheat Sheet): al doilea factor pentru toți utilizatorii, mai ales pentru admin; schimbarea unui factor cere reautentificarea cu un factor existent (sesiunea singură nu ajunge); utilizatorul e anunțat pe alt canal (email) la orice schimbare a factorilor; resetarea trebuie să nu devină o cale de ocolire.
+- Riscul cunoscut al configurării „la primul login” (Mandiant, APT29): cine are doar parola unui cont fără 2FA își poate înrola propriul telefon. De aceea contul nou își configurează 2FA imediat după linkul de activare (care dovedește adresa de email), iar orice configurare sau schimbare e anunțată pe email.
+- În baza de producție (18 oct 2026): 2 conturi (adminul și un utilizator), amândouă cu 2FA. Nimeni nu e blocat la publicare.
+
+Decizii:
+- **Al doilea factor obligatoriu e aplicația de autentificare** (TOTP), cu codurile de recuperare. Passkey-ul rămâne un mod de a intra (ține loc de parolă și de cod), dar nu înlocuiește aplicația: un cont fără aplicație o configurează întâi, chiar dacă a intrat cu un passkey. Motiv: codurile de recuperare vin cu aplicația; un passkey pierdut nu are rezervă.
+- **Pentru toate conturile**, adminul inclus.
+
+### 1. Contul nou: configurarea imediat după activare
+- Pe pagina „Activează-ți contul”, după parolă, nu mai urmează „Contul e activ” → „Intră în cont”: persoana e deja în cont și ajunge direct la **„Autentificarea în doi pași”**. Activarea ține loc de login.
+- Ecranul (în stilul paginilor de login, fără meniul aplicației):
+  1. „Instalează pe telefon o aplicație de autentificare: Google Authenticator, Microsoft Authenticator, 1Password, Authy…”;
+  2. codul QR, plus cheia scrisă (pentru cine nu poate scana) și „Am scanat pe alt telefon: cheie nouă”;
+  3. „Codul de 6 cifre din aplicație” → **„Activează”**.
+- Apoi cele **10 coduri de recuperare**, o singură dată („Copiază”, „Descarcă .txt”, „Le-am salvat”) → **„Intră în Sentiq”** → pagina Azi.
+- **Până la capăt, nimic altceva** din aplicație nu se deschide; singura ieșire e „Ieși din cont”. Pagina închisă înainte de final: la următoarea deschidere apare același ecran (cu același cod QR), iar dacă între timp sesiunea s-a încheiat, după login (email și parolă).
+- **Excepția de acum** (FD-INVITE §5): linkul de activare deschis într-un browser deja în alt cont (ex. adminul îl încearcă). Activarea merge, dar contul curent din browser nu se schimbă. Ecranul „Contul e activ” spune, ca până acum, să ieși întâi din el. Butonul **„Ieși și intră cu ana@…”** face asta și deschide login-ul cu adresa completată; „Rămâi în contul de acum” duce înapoi. La login, contul nou ajunge la configurare.
+
+### 2. Conturile care nu au încă 2FA
+- Adminul, după prima parolă (pagina „Bun venit în Sentiq”) sau după `scripts/sentiq.sh admin-reset`; un cont căruia adminul i-a resetat 2FA; orice cont mai vechi fără 2FA.
+- Ca la contul nou: după email și parolă (sau un passkey) urmează ecranul de configurare, fără acces la altceva până la final.
+- **Sesiunile deschise înainte de configurare** pe alte dispozitive se închid când 2FA devine activ: au fost deschise fără al doilea factor.
+
+### 3. Pagina „Securitate”
+- **„Dezactivează” dispare**: autentificarea în doi pași nu se mai poate opri. Pe ecranul de configurare nu există „Renunță”; rămâne „Am scanat pe alt telefon: cheie nouă”.
+- **„Schimbă aplicația de autentificare”** (nou, pentru telefon nou):
+  - pornește doar cu parola și un cod din aplicația de acum (sau un cod de recuperare);
+  - urmează un cod QR nou și codul de 6 cifre din aplicația nouă; după confirmare, aplicația nouă o înlocuiește pe cea veche;
+  - până la confirmare, aplicația veche merge în continuare; „Renunță” o păstrează;
+  - codurile de recuperare rămân aceleași.
+- **„Coduri de recuperare noi”**: neschimbat (parola și un cod).
+- După un login cu un cod de recuperare, mesajul devine: „Dacă ți-ai pierdut telefonul, schimbă aplicația de autentificare (cu parola și un cod de recuperare) sau generează coduri noi.”
+- Îndemnul „Activează autentificarea în doi pași” pentru admin (după prima parolă) dispare: configurarea e deja făcută.
+
+### 4. Pagina „Utilizatori” (admin)
+- **„Oprește 2FA” devine „Resetează 2FA”**, cu confirmarea: „Resetezi autentificarea în doi pași pentru X? Sesiunile contului se închid; la următorul login, cu parola, își configurează din nou aplicația. Folosește asta doar dacă și-a pierdut telefonul și codurile de recuperare.”
+- **Coloana „Securitate”**: „2FA”; „2FA neconfigurat” (contul e activat, dar nu și-a configurat încă aplicația); „—” (cont neactivat). Numărul de passkey-uri, ca până acum.
+
+### 5. Emailuri de anunț (OWASP)
+- **„Sentiq · autentificarea în doi pași e activă”**: la configurare. „Dacă nu tu ai făcut asta, cere cât mai repede o parolă nouă din «Am uitat parola» (închide toate sesiunile), apoi scrie-i adminului.”
+- **„Sentiq · aplicația de autentificare a fost schimbată”**: la schimbarea aplicației, cu același îndemn.
+- **„Sentiq · autentificarea în doi pași a fost resetată”**: la resetarea făcută de admin. „La următorul login îți configurezi din nou aplicația.”
+- Nu conțin linkuri sau coduri. Cu expeditorul de test al Resend ajung doar la admin, ca toate emailurile.
+
+### 6. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Cod greșit la configurare | „Cod greșit…”, cu amintirea orei automate pe telefon; după 3 greșeli, 15 minute de pauză (bugetul contului) |
+| Ceasul telefonului decalat | același mesaj; fereastra e de ±30 s |
+| Ecranul de configurare deschis în două taburi | terminat într-unul, celălalt intră în aplicație la revenirea în tab sau la „Activează” |
+| „Am scanat pe alt telefon: cheie nouă” într-un tab | celălalt tab arată codul QR nou la revenire; codul din QR-ul vechi e refuzat |
+| Pagina închisă în timp ce se văd codurile de recuperare | 2FA e deja activ, iar codurile nu se mai arată; coduri noi din Securitate (parola și un cod) |
+| Codurile de recuperare sunt pe ecran, iar starea contului se recitește (revenirea în tab) | codurile rămân pe ecran până la „Intră în Sentiq” |
+| Sesiunea închisă în altă parte în timpul configurării | ecranul de login |
+| Contul dezactivat în timpul configurării | sesiunile se închid; la login: „Contul este dezactivat” |
+| Adminul resetează 2FA cât contul e în aplicație | sesiunile contului se închid; login cu parola → configurare; emailul de resetare |
+| Login cu passkey, cont fără aplicație | ecranul de configurare |
+| Login cu passkey, cont cu aplicație | intră direct, fără cod, ca până acum |
+| „Am uitat parola” pentru un cont fără 2FA | parola nouă, apoi la login ecranul de configurare |
+| Parola cuiva cu contul încă neconfigurat ajunge la altcineva | primul care intră configurează aplicația. Persoana care deține contul primește emailul „e activă” și, în ordinea asta: își pune o parolă nouă din „Am uitat parola” (linkul vine pe adresa contului; toate sesiunile se închid), apoi îi scrie adminului, care resetează 2FA, iar la login își configurează propria aplicație. În ordine inversă, cine are parola veche ar putea configura din nou primul. Conturile noi nu au această fereastră: configurează imediat după linkul de activare |
+| Schimbarea aplicației lăsată la jumătate | aplicația veche merge; Securitate arată schimbarea începută (codul QR nou), cu „Confirmă” și „Renunță”; după „Renunță”, o nouă „Schimbă…” începe de la capăt (din nou cu parola și un cod) |
+| Schimbarea: în câmpul nou e scris codul aplicației vechi | refuzat: se cere codul din aplicația nouă |
+| Telefon pierdut, coduri de recuperare la îndemână | login cu un cod de recuperare → „Schimbă aplicația” cu parola și alt cod de recuperare |
+| Telefon și coduri pierdute | adminul resetează 2FA; adminul însuși: `scripts/sentiq.sh admin-reset` |
+| Tab vechi, de dinainte de actualizare, al unui cont fără 2FA | cererile lui primesc „Configurează mai întâi autentificarea în doi pași”; la reîncărcare apare ecranul de configurare |
+| Joburile din fundal pentru un cont fără 2FA | continuă (scanner, planul Twelve Data, scorul AI pe cheia proprie, dacă fusese pus): datele sunt gata la intrare |
+
+### 7. Conflicte cu ce exista
+- **FD-USERS §5:** codul la login nu mai e „dacă 2FA e pornit”: e mereu cerut, cu excepția passkey-ului.
+- **FD-USERS §7:** din Securitate dispar „Dezactivează” și „Renunță”; apare „Schimbă aplicația de autentificare”.
+- **FD-USERS §8:** „Oprește 2FA” devine „Resetează 2FA”, iar sesiunile se închid. Înainte se închidea doar pasul de cod în așteptare.
+- **FD-USERS §3:** după prima parolă, adminul ajunge la configurare, nu în Securitate cu îndemnul de a porni 2FA.
+- **FD-INVITE §3:** după activare nu mai e nevoie de „Intră în cont”: persoana e deja în cont, pe ecranul de configurare.
+- **Passkey-urile:** la login țin loc în continuare de ambii factori, dar un cont fără aplicație o configurează întâi.
+- **Schema bazei (versiunea 4):** o coloană pentru aplicația nouă în timpul unei schimbări. Codul vechi (Mac-ul neactualizat) refuză să pornească pe schema nouă până e actualizat.
+- **Testele și scripturile care fac sesiuni direct** (fără login) trebuie să marcheze contul cu 2FA, altfel primesc „Configurează mai întâi…”.
+
+## FD-TRADING — Ordine de tranzacționare din Sentiq (18 oct 2026)
+
+Cererea utilizatorului: „vreau să pot crea ordine de tranzacționare direct din aplicație. Atunci când obțin un API key care are drepturi să inițieze tranzacții, să pot să fac și eu aceste tranzacții. Citești documentația pentru fiecare broker și exchange crypto și implementezi pentru fiecare această posibilitate, acolo unde se oferă.”
+
+Decizii (AskUserQuestion, 18 oct 2026):
+- **Piețe:** spot pe toate exchange-urile crypto, plus futures perpetue USDT cu levier, marjă cross / isolated, TP / SL și închiderea pozițiilor, unde există. Acțiuni la brokeri.
+- **Confirmare:** fiecare ordin arată un rezumat și pleacă doar după „Confirmă”. Pornirea tranzacționării pe un cont cere o dată parola și codul 2FA.
+- **Unde:** pagina Tranzacții (ordin nou, anularea ordinelor, închiderea pozițiilor, vânzarea unei dețineri) și butonul „Tranzacționează” de pe grafic (formularul precompletat).
+
+Până acum (FD §0, principiul 2): „Informează, nu tranzacționează”. Cheile erau cerute doar pentru citire, iar un test verifica lipsa oricărui apel de ordin. Acest FD schimbă principiul: Sentiq poate trimite ordine **doar** pe conturile unde utilizatorul a pornit tranzacționarea și cu o cheie care o permite. **Nu mută niciodată fonduri:** nu face retrageri sau transferuri și refuză cheile care le permit.
+
+### Cercetare (18 oct 2026): ce permite fiecare platformă
+Surse: documentațiile oficiale (Trading 212 Public API, eToro Public API, Alpaca Trading API, IBKR Web API) și implementarea ccxt 4.5 (biblioteca prin care Sentiq vorbește cu exchange-urile crypto), care trimite cererile după documentația fiecărui exchange.
+
+| Platformă | Ce se poate din Sentiq | Permisiunea cheii (fără retrageri) | Limitări |
+|---|---|---|---|
+| **KuCoin** | spot: la piață, limită, stop (piață / limită); futures USDT: aceleași, cu levier, cross / isolated, TP / SL atașate, reduce-only, închiderea poziției; anulare | „Spot” și / sau „Futures” (pe lângă „General”); fără „Withdrawal” | futures în **loturi întregi** (minimum 1 lot; un lot = mărimea contractului, ex. 0,001 BTC); conturile unificate (UTA) și cele clasice au endpoint-uri diferite (le alege ccxt); pe un cont unificat, futures doar cu marjă **cross** (isolated e refuzat cu „alege Cross”) |
+| **Binance** | spot: la piață, limită, stop-limită (Binance spot nu are stop la piață); futures USDⓈ-M: la piață, limită, stop, levier, cross / isolated, reduce-only, închidere; anulare | „Enable Spot & Margin Trading” și / sau „Enable Futures”; fără „Enable Withdrawals” | TP / SL nu se atașează la intrare: Sentiq le trimite separat, ca ordine reduce-only, imediat după o intrare la piață |
+| **Bybit** | spot și futures liniare USDT: la piață, limită, stop, levier, TP / SL atașate, reduce-only, închidere; anulare | „Read-Write”: Spot (SpotTrade) și / sau Contract (Orders, Positions); fără Withdraw | modul de marjă (cross / isolated) e al întregului cont unificat: Sentiq nu-l schimbă, îl folosește pe cel ales pe Bybit |
+| **OKX** | spot și swap USDT: la piață, limită, stop, levier, cross / isolated, TP / SL atașate, reduce-only, închidere; anulare | „Trade”; fără „Withdraw” | cantitatea la swap e în contracte (ex. 0,01 BTC); Sentiq o convertește |
+| **Bitget** | spot și futures USDT-M: la piață, limită, stop, levier, cross / isolated, TP / SL atașate, reduce-only, închidere; anulare | „Trade”; fără „Withdraw” | modul de poziție (one-way / hedge) trebuie trimis cu fiecare ordin: Sentiq îl citește din cont. Pe un cont unificat (UTA): futures doar cu marjă cross, iar ordinele stop se pun din aplicația Bitget (ccxt nu le are încă pentru acest cont) |
+| **Kraken** | spot: la piață, limită, stop-loss (piață / limită); anulare | „Create & Modify Orders” și „Cancel & Close Orders”; fără „Withdraw Funds” | Kraken Futures e un API separat (neconectat în Sentiq): fără futures; Kraken nu spune permisiunile cheii |
+| **Coinbase** | spot (Advanced Trade): la piață (cumpărarea pe sumă în USD / USDC), limită, stop-limită; anulare | cheie CDP cu „Trade”; fără „Transfer” | fără stop la piață; fără futures (derivatele Coinbase au alt cont) |
+| **Trading 212** | la piață (și în afara orelor, opțional), limită, stop, stop-limită; anulare; vânzarea unei dețineri | permisiunea „Orders: Execute” | doar conturi Invest / ISA, doar în moneda contului; API-ul e în beta și nu e idempotent (o cerere repetată poate dubla ordinul); o documentație mai veche spunea că pe Live merg doar ordinele la piață (dacă Trading 212 refuză, Sentiq arată mesajul lor) |
+| **eToro** | deschiderea unei poziții: la piață, „market-if-touched” (la un preț țintă) sau limită imediată, pe sumă (USD) sau unități, cumpărare sau short, levier, SL / TP; închiderea unei poziții (toată sau parțial); anularea unui ordin în așteptare | cheie cu „Write” (pe mediul ales: Real / Demo) | confirmarea e asincronă: un 200 înseamnă „primit”, nu „executat” (Sentiq verifică starea); levier peste 1 sau short cer stop-loss |
+| **Alpaca** | acțiuni: la piață, limită, stop, stop-limită; zi / până la anulare; fracționat și pe sumă (USD), cu oricare dintre cele patru tipuri, valabile o zi; TP / SL atașate (bracket, nu în afara orelor); crypto: la piață, limită, stop-limită; anulare; închiderea poziției | cheile Alpaca pot tranzacționa întotdeauna (nu au variantă doar pentru citire) | ordinele în afara orelor merg doar limită; crypto doar „până la anulare” sau „imediat” |
+| **Interactive Brokers** | **nu** | — | Sentiq citește IBKR printr-un raport Flex (doar citire). Ordinele cer Client Portal Gateway (program local, cu login zilnic din browser) sau OAuth (înregistrare separată, pentru conturi Pro / instituții): nu merg cu cheia de acum. Rămâne doar citire, cu explicația în aplicație |
+
+### 1. Pornirea tranzacționării pe un cont
+- Fiecare cont are **„Tranzacționare: oprită”** implicit (și conturile de până acum).
+- **„Pornește tranzacționarea”** (pe pagina Tranzacții, la cont, și în Setări → Conturi):
+  - cere **parola și codul 2FA** (sau un cod de recuperare);
+  - Sentiq recitește permisiunile cheii, unde exchange-ul le spune:
+    - cheia **nu poate tranzacționa**: refuzat, cu pașii platformei pentru o cheie cu tranzacționare;
+    - cheia poate tranzacționa doar spot sau doar futures: pornit pentru ce poate („doar spot”);
+    - cheia **poate retrage sau transfera fonduri**: refuzat. „Cheia poate retrage fonduri. Fă o cheie fără retrageri / transferuri: Sentiq nu pornește tranzacționarea cu ea.”;
+    - permisiunile nu se pot citi (Kraken, Trading 212, eToro): pornit, cu avertismentul să verifici că cheia nu poate retrage fonduri;
+  - IBKR: butonul nu apare, ci „Interactive Brokers nu permite ordine prin cheia Flex (doar citire)”.
+- **„Oprește tranzacționarea”**: imediat, fără parolă.
+- Pe conturile Demo / Paper / Practice, eticheta **DEMO** apare lângă orice ordin.
+
+### 2. Formularul de ordin
+- Se deschide din „Ordin nou” (Tranzacții), din „Tranzacționează” (grafic), din „Vinde” (o deținere) sau din „Închide” (o poziție).
+- **Contul:** doar conturile cu tranzacționarea pornită, care pot tranzacționa piața aleasă.
+- **Piața:**
+  - crypto: „Spot” sau „Futures” (doar unde există și cheia permite);
+  - brokeri: acțiunea (simbolul).
+- **Simbolul:**
+  - crypto: lista perechilor exchange-ului (USDT, apoi USDC / USD), cu căutare;
+  - futures: perpetuele USDT;
+  - brokeri: simbolul (ex. AAPL), căutat la broker.
+- **Cumpără / Vinde** (futures: **Long / Short**; eToro: Cumpără / Short).
+- **Tipul:**
+  - La piață;
+  - Limită;
+  - Stop: se declanșează la un preț, apoi la piață; de cumpărare peste prețul de acum, de vânzare sub el;
+  - Stop-limită;
+  - doar cele pe care platforma le are (vezi tabelul).
+- **Cantitatea:** în activ (ex. 0,01 BTC, 5 acțiuni) sau ca valoare (ex. 100 USDT).
+  - Butoane 25% / 50% / 100% din ce e disponibil: pentru cumpărare, din USDT / numerar (la futures: marja × levierul); pentru vânzare spot, din deținere.
+  - Futures: valoarea e cea a poziției; marja = valoare ÷ levier.
+- **Prețul** (limită), **prețul de declanșare** (stop), **valabilitatea** (până la anulare / până la sfârșitul zilei, unde există).
+- **Futures:**
+  - levierul (1× – maximul pieței);
+  - marja cross / isolated (nu la Bybit, unde e a contului);
+  - **reduce-only** („doar micșorează poziția”);
+  - **TP / SL** opționale (prețuri de declanșare);
+  - pe Binance: doar la o intrare la piață, trimise după ea;
+  - KuCoin: cantitatea se rotunjește în jos la loturi întregi.
+- **eToro:**
+  - levierul (1× = deținere);
+  - SL / TP;
+  - suma în USD sau unitățile.
+- **Alpaca:**
+  - în afara orelor (doar limită);
+  - TP / SL (bracket, doar acțiuni, cantitate întreagă).
+- **„Verifică ordinul”** trimite datele la Sentiq, care:
+  - rotunjește cantitatea și prețurile la pașii pieței;
+  - calculează valoarea, marja și ce rămâne disponibil;
+  - verifică minimele platformei, soldul (unde se poate citi), direcția stop-ului față de prețul de acum și prețul limită față de prețul de acum (avertisment peste 10% distanță).
+
+### 3. Fereastra de confirmare
+- Rezumatul exact al ce pleacă:
+  - contul (cu DEMO, dacă e cazul);
+  - piața și simbolul;
+  - direcția (verde / roșu);
+  - tipul;
+  - cantitatea rotunjită (și în loturi / contracte, unde e altfel);
+  - prețurile;
+  - valoarea estimată;
+  - levierul și marja;
+  - TP / SL;
+  - reduce-only.
+- **Avertismente**, unde e cazul:
+  - prețul limită e peste prețul de acum la cumpărare (se execută imediat);
+  - ordinul la piață pe o piață închisă (Trading 212: se execută la deschidere);
+  - levier peste 10×;
+  - ordinul folosește peste 50% din disponibil;
+  - cantitatea a fost rotunjită.
+- **„Confirmă și trimite”** / „Înapoi”. Butonul se blochează după primul click, ca un dublu click să nu trimită de două ori.
+- **După trimitere:**
+  - „Ordin trimis: ID … (stare: deschis / executat / în așteptare)”, cu „Vezi în Tranzacții”;
+  - portofoliul se recitește;
+  - pentru eToro, starea se verifică încă câteva secunde („primit… executat”);
+  - cu TP / SL trimise separat (Binance), fiecare apare în rezumat cu starea lui. Dacă unul nu a mers: „Stop loss: NU a fost plasat: … Poziția e deschisă: pune-l din nou.”. Se pune din formular, ca ordin stop reduce-only în sens opus, sau din Binance.
+
+### 4. Pe pagina Tranzacții
+- Lângă selectorul de cont: **„Ordin nou”** (pornit) sau **„Pornește tranzacționarea”**.
+- **Ordine deschise:** pe exchange-uri, și ordinele futures și cele stop (Binance, Bybit, OKX, Bitget le țin în liste separate, citite fiecare). „Anulează” pe fiecare ordin plasat pe platformă, cu o confirmare scurtă. Nu apare:
+  - pe SL / TP-urile eToro deduse din poziții, care se schimbă din eToro;
+  - pe ordinele unei piețe pentru care tranzacționarea nu e pornită (de ex. ordinele futures, la o cheie doar pentru spot).
+- **Poziții:**
+  - „Închide” → formularul precompletat: la piață, toată poziția, reduce-only. Piața, direcția și contul sunt fixe; cantitatea se poate micșora (închidere parțială). Levierul și marja nu se schimbă la o închidere;
+  - eToro: închiderea poziției, cu „parțial” opțional;
+  - Alpaca: închiderea poziției;
+  - pe un cont crypto, „Închide” apare doar dacă tranzacționarea e pornită pentru futures.
+- **Dețineri:** „Vinde” → formularul precompletat cu vânzarea cantității libere. Nu apare pe:
+  - un cont crypto unde tranzacționarea e pornită doar pentru futures;
+  - stablecoin-uri;
+  - instrumentele fără simbol;
+  - soldul „main” al unui cont KuCoin clasic: se tranzacționează doar după mutarea în contul de trading, iar Sentiq nu mută fonduri.
+- **„Ordinele trimise din Sentiq”** (ultimele 50):
+  - ora, contul, simbolul, direcția, tipul, cantitatea, prețul;
+  - rezultatul (trimis / refuzat, cu motivul);
+  - anulările și închiderile.
+
+### 5. Din grafic
+- **„Tranzacționează”**, lângă selectorul de timeframe: formularul cu simbolul graficului și prețul de acum ca preț limită.
+  - Crypto: piața spot pe primul exchange cu tranzacționarea pornită. Contul și piața se pot schimba din formular; o pereche care nu e pe exchange-ul ales e semnalată (pe Kraken / Coinbase, X/USDT devine X/USD sau X/USDC).
+  - Acțiuni: primul broker cu tranzacționare.
+- Butonul apare doar dacă utilizatorul are cel puțin un cont cu tranzacționarea pornită. Indicii nu se tranzacționează.
+
+### 6. Siguranță
+- **Doar cu tranzacționarea pornită** pe cont (parola + 2FA o dată) și numai pentru conturile utilizatorului: nimeni, nici adminul, nu tranzacționează pe contul altuia.
+- **Niciodată retrageri sau transferuri:** codul nu are astfel de apeluri, iar un test verifică asta.
+  - Cheile care le permit sunt refuzate la pornire.
+  - O cheie care primește mai târziu o astfel de permisiune (văzută la „Testează” sau la ordinul următor) oprește singură tranzacționarea pe cont.
+  - O nouă încercare de pornire refuzată (cheie fără tranzacționare sau cu retrageri) oprește și tranzacționarea pornită înainte.
+- **Idempotență:** fiecare formular trimis are un identificator unic.
+  - O a doua trimitere cu același identificator (dublu click, reîncercare după o eroare de rețea) primește rezultatul primei, fără un ordin nou, pe ambele instanțe (Mac / Azure).
+  - Un ordin **refuzat** (verificare, sold, platformă), care n-a intrat în cartea de ordine, eliberează identificatorul: același formular se poate trimite din nou, de exemplu după o depunere.
+  - Unde platforma acceptă un ID de client (crypto, Alpaca, eToro), acesta pleacă și la platformă.
+- **Limită de viteză:** cel mult 20 de acțiuni de tranzacționare (ordine, anulări, închideri) pe minut, pe utilizator, ca o buclă sau un tab blocat să nu trimită zeci de ordine.
+- **Jurnal:** fiecare ordin, anulare și închidere se scrie în bază (cine, când, ce, rezultatul), fără chei. Nu se șterge odată cu contul de exchange, ci doar odată cu utilizatorul.
+- **Eroare fără răspuns** (timeout după trimitere): „Nu știm sigur dacă ordinul a ajuns. Verifică ordinele deschise înainte să-l trimiți din nou.”, iar portofoliul se recitește. Nu se reîncearcă automat.
+- Erorile platformelor apar cu mesajul lor (ex. „Insufficient balance”), plus o explicație în română pentru cele cunoscute: sold insuficient, cantitate sub minim, permisiune lipsă, piață închisă, preț în afara limitelor, modul hedge.
+
+### 7. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Cheie doar de citire, tranzacționarea pornită pe ea | refuzată la pornire (unde permisiunile se citesc); altfel primul ordin primește „cheia nu are permisiunea de tranzacționare” cu pașii platformei, iar tranzacționarea rămâne pornită până o oprești |
+| Cheia schimbată pe platformă (permisiunea scoasă) după pornire | ordinele primesc eroarea de permisiune, cu pașii |
+| Cheie cu permisiune de retragere | tranzacționarea nu pornește; contul rămâne doar citire |
+| Permisiunile nu se pot citi chiar acum (o eroare de moment) | se păstrează cele știute: o cheie știută cu retrageri rămâne refuzată |
+| Cheie care poate doar spot (fără futures) | „Futures” nu apare în formular pentru acel cont |
+| Cont futures în modul hedge (Binance, OKX, KuCoin, Bitget) | „Contul e în modul hedge (poziții long și short separate). Sentiq trimite ordine futures doar în modul one-way: îl schimbi din setările exchange-ului.” Spot-ul merge |
+| Bybit în modul hedge | eroarea Bybit, cu aceeași explicație |
+| Levier peste maximul pieței | refuzat la verificare, cu maximul pieței (formularul arată maximul lângă câmp) |
+| Schimbarea levierului / marjei cu o poziție deschisă | platforma poate refuza (ex. Binance nu schimbă marja cu poziție deschisă): mesajul ei; ordinul nu pleacă |
+| Cantitate sub minim (sau 0 după rotunjire) | refuzată la verificare: „Minimul pe … e …” |
+| KuCoin futures: sub un lot | „Minimul e 1 lot (= 0,001 BTC)” |
+| Sold insuficient | avertisment la verificare (unde soldul se citește); platforma refuză oricum |
+| Stop de cumpărare sub prețul de acum (sau de vânzare peste) | refuzat la verificare: „Un stop de cumpărare se declanșează peste prețul de acum; pentru a cumpăra mai jos, folosește un ordin limită” |
+| Preț limită foarte departe de piață (> 10%) | avertisment în confirmare; eToro refuză peste 10% |
+| Piața nu există pe exchange (pereche delistată) | refuzat la verificare: „Perechea … nu e pe …” |
+| Simbol necunoscut la broker | „Trading 212 / eToro / Alpaca nu are simbolul …” |
+| Același simbol pe mai multe burse (Trading 212) | se alege instrumentul în moneda contului, apoi cel american; confirmarea arată ISIN-ul / bursa |
+| Ordin la piață pe o piață închisă (acțiuni) | Trading 212 / Alpaca îl pun în așteptare până la deschidere; avertisment în confirmare |
+| Dublu click pe „Confirmă” | un singur ordin (butonul blocat, plus idempotența pe server) |
+| Același formular trimis din două taburi | două ordine distincte (fiecare tab are identificatorul lui): e intenția utilizatorului |
+| Rețeaua cade după trimitere | starea necunoscută (§6); nimic retrimis automat |
+| Serverul repornește chiar în timpul trimiterii | după 2 minute, același formular primește „trimiterea a fost întreruptă: nu știm sigur dacă a ajuns”; nimic retrimis |
+| Trading 212: prețul de acum | API-ul lor nu dă cotații: formularul arată prețul doar pentru acțiunile deținute (de pe grafic, prețul graficului e completat ca preț limită) |
+| KuCoin cont unificat: anularea unui ordin futures | recunoscut după simbol (BTC/USDT:USDT) ca futures, oricum l-ar lista contul |
+| eToro: ordinul rămâne „în așteptare” (piață închisă) | „Primit de eToro; se execută la deschiderea pieței” |
+| eToro: refuzat după acceptare | „Refuzat de eToro: …” (motivul din starea ordinului) |
+| Binance: TP / SL după intrare refuzate | poziția rămâne deschisă; rezultatul cere să le pui din nou (un ordin stop reduce-only în sens opus, din formular) |
+| Anulare pentru un ordin deja executat | „Ordinul nu mai e deschis (poate s-a executat)”; portofoliul se recitește |
+| Închiderea unei poziții deja închise | „Poziția nu mai e deschisă” |
+| Închidere parțială (eToro) peste unitățile poziției | refuzată la verificare |
+| eToro: o deținere din mai multe poziții, una nu se închide | celelalte se închid; rezultatul spune care nu s-a închis și de ce; una fără răspuns apare separat: „nu știm sigur dacă s-a închis (verifică pe eToro)” |
+| Cheie fără futures (Binance, Bybit, Bitget) | ordinele futures nu se pot citi: lista arată ordinele spot, fără eroare |
+| Bitget cont unificat: stop sau marjă isolated | refuzate la verificare: „pune-l din aplicația Bitget” / „alege Cross” |
+| KuCoin cont unificat: futures cu marjă isolated | refuzat la verificare: „alege Cross”; închiderile trec |
+| Alpaca: fracționat sau pe sumă, valabil „până la anulare” | refuzat la verificare: „valabile o zi” |
+| După „necunoscut”, „Înapoi” și un formular schimbat | eroarea veche dispare; formularul nou se verifică și se confirmă normal (același formular retrimis primește tot „necunoscut”) |
+| Tranzacționarea oprită între formular și confirmare | „Tranzacționarea e oprită pe acest cont” |
+| Contul de exchange șters cât formularul e deschis | „Contul nu mai există” |
+| Contul utilizatorului dezactivat | sesiunile se închid; nimic nu mai pleacă |
+| Limita de viteză (20 / minut) | „Prea multe ordine într-un minut. Mai încearcă peste … secunde.” |
+| Limitele de viteză ale platformei (ex. Trading 212: 1 ordin limită la 2 s) | mesajul platformei; nimic retrimis automat |
+| Prețul s-a mișcat între verificare și confirmare | ordinul la piață se execută la prețul de atunci (avertismentul de slippage); cel limită la prețul ales |
+| Cont Demo / Paper | ordinele merg pe mediul de test al platformei; eticheta DEMO |
+| IBKR | fără tranzacționare; mesajul din §1 |
+| Kraken / Coinbase și futures | doar spot |
+| Ordin pe o monedă cu valoare foarte mică (zecimale multe) | prețul și cantitatea se rotunjesc la pașii pieței; confirmarea arată valorile rotunjite |
+| Mac-ul și Azure | ordinele pleacă de pe instanța care servește pagina; jurnalul și idempotența sunt în baza comună |
+
+### 8. Conflicte cu ce exista
+- **FD §0 (principiul 2), FD-SENTIQ §2, TD §2.7 și testul „fără cod de tranzacționare”:**
+  - principiul devine: „Informează; tranzacționează doar la cerere, pe conturile alese”;
+  - testul verifică acum că retragerile și transferurile nu există nicăieri;
+  - apelurile de ordin apar doar în modulul de tranzacționare.
+- **Expertul „Adaugă un cont”:**
+  - pașii rămân pentru o cheie doar de citire (recomandat);
+  - în plus, pentru fiecare platformă, „Pentru tranzacționare”: ce permisiune adaugi și ce nu bifezi niciodată (retrageri, transferuri);
+  - textul „Sentiq doar citește” devine „Sentiq citește; tranzacționează doar dacă pornești asta pe cont”.
+- **Avertismentul „permisiuni în plus față de citire”:**
+  - rămâne pentru retrageri și transferuri;
+  - pentru tranzacționare apare doar cât tranzacționarea e oprită în Sentiq, ca informare („cheia poate tranzacționa; pornește tranzacționarea dacă vrei să o folosești”).
+- **Alpaca:** textul „Sentiq folosește cheia numai pentru citire” devine „doar pentru citire, până pornești tranzacționarea”.
+- **Graficele (FD-PNL):** liniile ordinelor și ale TP / SL rămân afișate ca până acum; ordinele trimise din Sentiq apar după recitirea portofoliului.
+- **Portofoliul (cache 20 s):** se golește după orice acțiune de tranzacționare pe acel cont.
+- **Schema bazei:** migrarea 5 (tranzacționarea pe cont, jurnalul ordinelor). Ca la migrarea 4, codul vechi refuză să pornească pe schema nouă până e actualizat.
+- **FD-2FA:** pornirea tranzacționării folosește aceeași verificare (parola, apoi codul, cu bugetul de încercări al contului).
+
+## FD-INDICATORS — Orice indicator TradingView pe grafic; Slingshot și LMA la „Premium” (18 oct 2026)
+
+Cererea utilizatorului: „Acum implementează adăugarea de orice indicator oferit de providerul de chart. Gratis sunt vreo 100 de indicatori, așa că trebuie să faci un UI pentru asta. Iar cele ale mele, Slingshot și LMA, le pui sus într-o categorie dedicată în lista de indicatori și le pui un tag premium. Astea vor fi cu plată în viitor.”
+
+### Cercetare (18 oct 2026): de unde vin indicatorii
+- Graficul Sentiq folosește **TradingView Lightweight Charts** (5.2). Librăria **nu are niciun indicator inclus**: documentația TradingView o spune explicit și dă doar câteva exemple de calcul. Cei „100+ indicatori gratuiți” sunt ai **Advanced Charts**, alt produs TradingView: altă librărie (fără sursă publică), care se primește doar după o cerere de licență aprobată de TradingView și ar înlocui tot graficul (Slingshot, LMA, pozițiile, PnL-ul).
+- Sentiq ia, în schimb, **cei 117 indicatori standard TradingView** din portul open-source [`lightweight-charts-indicators`](https://github.com/deepentropy/lightweight-charts-indicators) (licență MIT), făcut chiar pentru Lightweight Charts 5: aceleași nume, intrări, valori implicite, culori, linii orizontale și umpleri ca în TradingView. Upstream are teste de regresie față de rezultatele TradingView. Se calculează în browser.
+- Pachetul npm întreg are 15 MB (1.713 indicatori, inclusiv 1.551 de porturi comunitare). Sentiq preia doar sursa celor 117 standard și a desenatorului, de la un commit fix (`f8e1b0e`), plus biblioteca lor de calcul `oakscriptjs` (MIT, versiune fixată). Totul ocupă ~112 KB comprimat și se încarcă doar pe pagina Grafice, când e nevoie. Codul preluat nu face cereri de rețea și nu execută cod dinamic (verificat).
+- Indicatorul de bază **Volume** (histograma volumului) nu e în setul standard al portului: Sentiq îl scrie el, cu regulile TradingView (bare verzi / roșii după lumânare, media volumului opțională).
+
+### 1. Lista de indicatori
+- Butonul **„Indicatori”** din bara graficului deschide fereastra **Indicatori**: căutare sus, categoriile în stânga, lista în dreapta.
+- **Categorii**, în ordine:
+  1. **Premium**: **Slingshot System 3.3** și **[DI] Logarithmic Moving Average**, fiecare cu eticheta **PREMIUM**. Deocamdată merg pentru toată lumea, ca până acum. Plata vine mai târziu, cu regulile ei într-un FD separat.
+  2. **Toți**: toți indicatorii (Premium primii).
+  3. **Medii mobile** (16), **Oscilatori** (23), **Momentum** (15), **Trend** (28), **Volatilitate** (10), **Canale și benzi** (7), **Volum** (19, cu Volume).
+- **Un rând** arată:
+  - numele TradingView (în engleză, ca acolo) și prescurtarea;
+  - unde apare: „pe grafic” sau „panou separat”;
+  - descrierea scurtă, la trecerea mouse-ului;
+  - eticheta PREMIUM, unde e cazul.
+- **Click pe un rând:** indicatorul se adaugă pe grafic, iar rândul arată scurt „Adăugat”. Fereastra rămâne deschisă, pentru încă unul. Se închide cu ×, cu Esc sau cu un click în afara ei.
+  - Slingshot / LMA deja pe grafic: rândul arată „Pe grafic”, iar un click nu-l dublează.
+  - Un indicator standard se poate adăuga de mai multe ori (ex. EMA 20 și EMA 50).
+- **Căutarea** găsește după nume sau prescurtare („rsi”, „bollinger”, „macd”), fără să țină cont de majuscule sau diacritice, în toate categoriile. Fără rezultat: „Niciun indicator nu se potrivește.”
+- **Limita:** cel mult **20 de indicatori standard** pe grafic, plus Slingshot și LMA. La limită, rândurile sunt dezactivate, cu „Ai deja 20 de indicatori pe grafic: scoate unul ca să adaugi altul.”
+- **Pe telefon:** fereastra ocupă lățimea ecranului, iar categoriile devin un rând de butoane care se derulează.
+- Tastatura: tab prin categorii și rânduri, Enter adaugă, Esc închide.
+
+### 2. Pe grafic
+- Un indicator **„pe grafic”** (overlay: medii mobile, Bollinger, Ichimoku, Supertrend…) se desenează peste lumânări. **Ceilalți** au fiecare panoul lor sub grafic, în ordinea adăugării, după panoul LMA, dacă e afișat.
+- **Înălțimea:** graficul crește cu 120 px pentru fiecare panou (ca acum la LMA: 560 → 680 px). În ecran complet, panourile împart înălțimea ecranului.
+- **Separatorul** dintre panouri se trage, iar înălțimea fiecărui panou se ține minte.
+- **Legenda** fiecărui indicator stă sus-stânga, în panoul lui (cei de pe grafic, unul sub altul în panoul prețului). Conține:
+  - prescurtarea și parametrii principali (ex. „RSI 14 close”);
+  - valorile la lumânarea de sub cursor (fără cursor, la ultima lumânare), fiecare în culoarea liniei ei;
+  - butoanele **ochi** (ascunde / arată), **rotiță** (setări), **×** (scoate de pe grafic).
+- **Ascuns cu ochiul:** nu se mai calculează și nu se mai desenează. Legenda lui rămâne, estompată: în panoul prețului pentru cei de pe grafic; pentru cei cu panou propriu, panoul dispare, iar legenda trece, estompată, în panoul prețului, de unde îl arăți din nou.
+- **Slingshot și LMA:**
+  - au legendă cu rotiță și ×; × înseamnă scos de pe grafic, ca debifarea de acum;
+  - **bifele „Slingshot” și „LMA” din bara graficului dispar**: se adaugă din lista Indicatori și se scot din legendă;
+  - „Pozițiile mele” rămâne bifă, nefiind indicator.
+- Desenele indicatorilor sunt cele din TradingView:
+  - linii, histograme, coloane, umpleri între linii, linii orizontale (ex. 70 / 30 la RSI);
+  - semne pe lumânări (ex. Williams Fractals), etichete, linii și cutii (ex. Pivot Points, Auto Fib);
+  - tabele (ex. Performance, Seasonality).
+- **Actualizare:**
+  - indicatorii se recalculează cu fiecare lumânare nouă (la 10 s, 30 s sau 60 s, ca graficul);
+  - zoom-ul și poziția nu se schimbă;
+  - **Visible Average Price** se recalculează și când muți sau mărești graficul (după 300 ms de liniște).
+
+### 3. Setările unui indicator (rotița)
+- Se deschid în panoul lateral de acum, cu numele indicatorului sus și tab-urile **„Intrări”** și **„Stil”**.
+- **Intrări:** exact câmpurile din TradingView ale indicatorului, cu aceleași nume (în engleză), grupuri, valori implicite, limite, liste și tooltip-uri (i):
+  - număr întreg / zecimal, cu limitele lui;
+  - bifă;
+  - listă de variante;
+  - **sursă** (open, high, low, close, hl2, hlc3, ohlc4, hlcc4);
+  - culoare;
+  - **timeframe**: „Grafic” sau unul anume;
+  - **simbol** (text) și **sesiune** (ex. „0930-1600”).
+- Un câmp care depinde de altul (ex. „Length” al mediei RSI, când tipul mediei e „None”) e dezactivat cât nu se aplică.
+- **Stil:**
+  - fiecare linie desenată (plot), cu bifa de vizibilitate, culoarea și grosimea (1–4);
+  - fiecare linie orizontală (hline), cu bifa și culoarea;
+  - umplerea dintre două linii desenate dispare odată cu una dintre ele; cea dintre două linii orizontale rămâne, ca în TradingView.
+- **Butoane:**
+  - **„Salvează”** aplică pe grafic și ține minte;
+  - **„Valorile implicite”** pune în formular valorile TradingView, aplicate abia la „Salvează”;
+  - o valoare în afara limitelor e refuzată la salvare cu numele câmpului și limitele lui, ca la formularele de acum.
+- **Slingshot și LMA:** formularele lor de acum, neschimbate.
+
+### 4. Ce se ține minte
+- Pe server, pentru fiecare utilizator, la fel pe toate graficele (monede, acțiuni, indici): lista indicatorilor, în ordinea adăugării, cu intrările, stilul, vizibilitatea și înălțimea panoului fiecăruia.
+- Slingshot / LMA pe grafic sau nu: ca acum (`showSlingshot` / `showLma`), schimbate acum din listă și din legendă.
+- Ce ai adăugat rămâne după reîncărcare, în alt browser și pe Azure sau pe Mac (aceeași bază).
+
+### 5. Date în plus
+- Aproape toți indicatorii folosesc doar lumânările graficului.
+- **Același simbol, alt timeframe** (Pivot Points Standard, Technical Ratings, Rob Booker - Ziv Ghost Pivots, 24-hour Volume, Seasonality):
+  - Sentiq descarcă de la aceeași sursă timeframe-ul cerut, dacă sursa îl are; lunarul se face din zilnic;
+  - timeframe-urile mai mici decât al graficului nu se descarcă (ar fi zeci de mii de lumânări);
+  - dacă vreun timeframe cerut nu se poate da, indicatorul se calculează din lumânările graficului, cum face și originalul fără datele furnizorului. Legenda arată atunci „aproximat din lumânările graficului”.
+- **Alt simbol** (Correlation Coefficient, Performance):
+  - perechi crypto („ETH/USDT”, „ETHUSDT”, „BINANCE:ETHUSDT”; „BTCUSD” = BTC/USDT), de la exchange-ul graficului, iar pe graficul unei acțiuni de la exchange-ul tău (sau al adminului);
+  - acțiuni americane („AAPL”, „NASDAQ:AMZN”): zilnic fără cheie, intraday cu cheia ta Twelve Data;
+  - altceva (forex „EURUSD”, futures „ES1!”, simboluri necunoscute): legenda arată „Sentiq nu are datele pentru: EURUSD, ES1!. Schimbă simbolurile din setări.”, iar indicatorul nu se desenează.
+- Lumânările în plus se reîncarcă la 5 minute (acțiunile consumă credite Twelve Data, ca graficul).
+
+### 6. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Indicator de volum pe un indice (CNBC nu dă volum) | legenda: „Indicii nu au volum.”; nimic desenat |
+| Prea puține lumânări pentru perioada aleasă (ex. SMA 500 pe 300 de lumânări) | linia începe de unde are date sau lipsește; legenda arată „—” |
+| Calculul unui indicator aruncă o eroare (ex. „Not enough data”, un timeframe mai mic decât graficul) | legenda arată eroarea în roșu; ceilalți indicatori și graficul merg normal |
+| Același indicator de două ori | două legende, numerotate dacă au aceiași parametri |
+| Salvarea listei eșuează (server oprit, sesiune expirată) | lista revine la cea de pe server, cu mesajul erorii |
+| Codul indicatorilor nu se încarcă (fără internet, o versiune nouă publicată între timp) | avertisment „Codul indicatorilor nu s-a putut încărca … Reîncarcă pagina.”; graficul, Slingshot și LMA merg; legendele arată indicatorii fără valori |
+| O versiune viitoare a catalogului nu mai are un indicator salvat | indicatorul acela dispare din listă; ceilalți rămân |
+| Intrări salvate cu valori pe care indicatorul nu le mai acceptă (ex. o opțiune redenumită upstream) | se folosește valoarea implicită a câmpului |
+| Schimbi perechea sau timeframe-ul | aceiași indicatori, recalculați pe noile lumânări |
+| Datele extra nu se pot descărca (sursa nu răspunde, limită Twelve Data) | aproximare din lumânările graficului (același simbol) sau mesajul de date lipsă (alt simbol); se reîncearcă la 5 minute |
+| Cursor pe o lumânare fără valoare a indicatorului | „—” în legendă |
+| 20 de indicatori și încerci al 21-lea | rândurile din listă dezactivate, cu explicația |
+| Tabelul unui indicator în același colț cu caseta TP / SL a Slingshot | se suprapun, ca în TradingView; poziția tabelului se schimbă din intrările indicatorului |
+| Multe panouri (în pagină sau în ecran complet) | înălțimile rămân în aceleași proporții (cele trase de tine); în pagină graficul crește cu 120 px pe panou, în ecran complet se micșorează proporțional |
+| Ascuns cu ochiul | nu se calculează și nu se desenează; panoul lui dispare, iar legenda lui stă estompată în panoul prețului până îl arăți din nou |
+| Schimbi tema | culorile indicatorilor rămân cele din TradingView (aceleași în ambele teme); fundalul și axele urmează tema |
+
+### 7. Conflicte cu ce exista
+- **FD-CHARTFAV §1 (bifa Slingshot) și FD-CHARTUX §3 (bifa LMA):** bifele dispar din bara graficului. Același lucru se face acum din lista Indicatori (adaugă) și din legendă (×). Setările salvate (`showSlingshot`, `showLma`) rămân aceleași, deci nimic nu se pierde.
+- **FD-CHARTUX §2 (înălțimea panoului LMA):** rămâne ținută minte. Panourile noi au înălțimea lor, ținută minte la fel.
+- **Butonul „Indicatori”** deschidea setările Slingshot / LMA. Acum deschide lista. Setările se deschid din rotița fiecărei legende.
+- **Panourile „Semnale Slingshot” și „Alerte”**, scanner-ul și Azi nu se schimbă.
+- **„Color Price Bars” (LMA):** rămâne. Niciun indicator standard nu recolorează lumânările (cei cu lumânări proprii, ex. Bollinger Bars, își desenează propriile lumânări peste).
+- **Pozițiile și PnL-ul (FD-PNL)** rămân linii pe grafic. Legendele indicatorilor stau sus-stânga, iar caseta TP / SL a Slingshot jos-dreapta.
+- **Viteza paginii:** codul indicatorilor se încarcă doar pe pagina Grafice, când e nevoie (ai indicatori sau deschizi lista). Calculul se face în browser, indicator cu indicator, ca pagina să rămână fluidă.
+- **Azure / Mac:** nicio schimbare de schemă a bazei. Lista stă în setările personale, iar indicatorii se calculează în browser.
+
+## FD-PREMIUMHIDE — Ochiul și la Slingshot și LMA (18 oct 2026)
+
+**Cererea:** „Vreau să adaugi butonul de View, Show sau Hide și pentru indicatorii premium, pentru că acum nu îi pot ascunde temporar dacă vreau.”
+
+**Pe scurt:** legendele Slingshot și LMA primesc butonul **ochi**, ca ceilalți indicatori. Ascuns înseamnă că rămâne pe grafic, cu setările lui, dar nu se mai desenează până îl arăți din nou. **×** îl scoate de pe grafic, ca până acum.
+
+### 1. Ce face ochiul
+- **Ordinea butoanelor:** ochi, rotiță, ×, ca la orice indicator. Ochiul deschis = desenat; ochiul tăiat = ascuns.
+- **Slingshot ascuns:**
+  - nu se mai desenează nimic din el: cele două medii, norul, triunghiurile, liniile Market Structure și caseta TAKE PROFIT / STOP LOSS;
+  - avertismentele despre liniile Market Structure (timeframe lipsă, lumânări care nu s-au încărcat) nu se mai arată, pentru că liniile nu se desenează;
+  - panourile „Semnale Slingshot” și „Alerte” de sub grafic rămân, ca atunci când e scos.
+- **LMA ascuns:**
+  - panoul lui dispare, cu linia, umplerea, eticheta și liniile orizontale; graficul scade cu 120 px, ca la orice panou ascuns;
+  - „Color Price Bars” se oprește: lumânările revin la culorile lor;
+  - înălțimea panoului rămâne ținută minte: când îl arăți, revine la fel de înalt.
+- **Legenda unui premium ascuns** rămâne, estompată, în panoul prețului: numele, parametrii (fără valori) și cele trei butoane. Ordinea în panoul prețului: Slingshot, LMA ascuns, apoi ceilalți indicatori, ca în listă.
+- **Rotița** merge și cu indicatorul ascuns: setările se salvează și se văd când îl arăți.
+- **×** pe un indicator ascuns îl scoate de pe grafic. Când îl adaugi din nou din lista Indicatori, apare vizibil.
+
+### 2. Ce se ține minte
+- Pe server, pentru fiecare utilizator, la fel pe toate graficele: `charts.slingshotHidden` și `charts.lmaHidden`, implicit `false` (setările vechi rămân vizibile).
+- Schimbarea se vede imediat și se salvează în fundal, ca celelalte bife ale graficului. Dacă salvarea eșuează, graficul revine la ce e pe server.
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Slingshot și LMA ascunși, fără alți indicatori | panoul prețului arată doar cele două legende estompate; graficul are doar lumânările |
+| Lista Indicatori cu un premium ascuns | rândul lui arată „Pe grafic, ascuns”, nu se poate adăuga a doua oară; îl arăți din ochiul legendei |
+| Zoom-ul și poziția când ascunzi / arăți | nu se schimbă (doar înălțimea graficului, pentru panoul LMA) |
+| Pagina reîncărcată, alt browser, Azure sau Mac | rămâne ascuns (aceeași setare pe server) |
+| Server mai vechi, fără câmpurile noi | indicatorii apar vizibili, ca înainte |
+| Graficul unui indice sau al unei acțiuni | la fel ca pe monede |
+| Ecran complet | la fel; panourile rămase împart înălțimea |
+
+### 4. Conflicte cu ce exista
+- **FD-INDICATORS §2** („Slingshot și LMA au legendă cu rotiță și ×”): acum au ochi, rotiță și ×.
+- **FD-CHARTFAV §1:** „cu Slingshot oprit nu se desenează nimic din el, panourile de sub grafic rămân” se aplică și când e ascuns.
+- **Scanner-ul, Azi, alertele și semnalele:** nu se schimbă; ochiul privește doar desenul de pe grafic.
+- **Azure / Mac:** nicio schimbare de schemă a bazei; două câmpuri noi în setările personale `charts`.
+
+## FD-TRADEUNLOCK — Pornirea tranzacționării: cu passkey, mesaje clare, permisiunile citite întâi (reparație, 19 oct 2026)
+
+**Cererea:** „Am încercat să pornesc tranzacțiile și deși am introdus toate datele corecte, adică parola corectă, codul de 2FA corect, nu mă lasă. Și mai mult de atât am lăsat blocat pentru 15 minute, că am prea multe încercări. Te rog, repare treaba asta și elimină-mi, resetează-mi cooldown-ul de 15 minute.” Apoi: „nu are doar general, am adăugat și spot și futures”, „probabil trebuie reîmprospătat accesul”.
+
+### Ce s-a găsit (18 oct 2026, pe Azure)
+- **Blocajul:** pauza de 15 minute stă în memoria serverului. A fost ștearsă prin repornirea aplicației (21:05 UTC), cum s-a cerut.
+- **Verificat:**
+  - cheia master de pe Azure e aceeași cu a Mac-ului, iar secretul 2FA al contului se poate citi;
+  - ceasul serverului e exact.
+- **Cauza:** parola sau codul au fost refuzate la fiecare încercare. Ultimul cod 2FA acceptat e din 14 oct; de atunci contul intră doar cu passkey.
+- **Confuzii posibile:**
+  - fereastra cerea „parola contului Sentiq”, iar contul KuCoin se numește chiar „Sentiq”: se poate înțelege parola sau passphrase-ul cheii KuCoin;
+  - „Cod 2FA” se poate înțelege ca un cod KuCoin.
+  - Mesajul „Parola sau codul nu sunt corecte” nu spunea care dintre ele e greșit.
+- **Permisiunile cheii:** în Sentiq a rămas lista veche („General”), citită înainte să adaugi Spot și Futures. Sentiq o recitea doar după ce treceau parola și codul.
+
+### 1. Ce se schimbă
+- **Confirmare cu passkey:** dacă ai un passkey pe cont și browserul îl poate folosi, fereastra arată întâi **„Confirmă cu passkey”**. Passkey-ul dovedește ambii factori (dispozitivul și amprenta / PIN-ul), ca la login. Parola și codul rămân dedesubt, ca variantă.
+- **Textele ferestrei:**
+  - „**Parola ta Sentiq** (cea cu care intri în Sentiq, nu parola sau passphrase-ul {exchange})”;
+  - „**Codul 2FA Sentiq** (din aplicația de autentificare, intrarea Sentiq, nu codul {exchange}), sau un cod de recuperare”.
+- **Mesajele de eroare spun ce e greșit:**
+  - „Parola nu e corectă: e parola cu care intri în Sentiq, nu cea a {exchange}.”;
+  - „Codul 2FA nu e corect sau a fost deja folosit: e codul Sentiq din aplicația de autentificare, nu cel al {exchange}. Așteaptă codul următor.”;
+  - plus încercările rămase: „Mai ai 2 încercări, apoi o pauză de 15 minute.” / „Mai ai o încercare, apoi o pauză de 15 minute.”
+- **Permisiunile se recitesc întâi:** Sentiq citește cheia de la exchange înainte să verifice parola și codul. O cheie care nu poate tranzacționa (sau care poate retrage) e refuzată cu pașii platformei și nu consumă încercări. Lista nouă (ex. „General, Spot, Futures”) se salvează oricum.
+- **Jurnalul serverului** notează fiecare refuz, cu factorul greșit (parola / codul / passkey-ul), fără parola sau codul.
+
+### 2. Ce rămâne
+- 3 încercări greșite (parolă sau cod), apoi 15 minute de pauză, pe același buget cu schimbarea parolei și a aplicației de autentificare. Protejează contul dacă cineva îi fură sesiunea.
+- Un passkey refuzat nu consumă încercări, pentru că nu se poate ghici. Passkey-ul merge și în timpul pauzei de 15 minute, ca la login, iar o confirmare reușită golește încercările greșite.
+- Oprirea tranzacționării nu cere nimic.
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Fără passkey pe cont, sau browserul nu poate folosi passkey-uri (ex. adresa nu e HTTPS) | doar parola și codul, ca până acum, cu textele noi |
+| Anulezi fereastra passkey-ului | „Operația a fost anulată sau a expirat.”; nicio încercare consumată |
+| Passkey-ul altui cont sau unul șters între timp | „Passkey-ul nu este înregistrat aici.” / „Passkey-ul aparține altui cont.”; nicio încercare consumată |
+| Ai așteptat peste 5 minute între „Confirmă cu passkey” și răspunsul dispozitivului | „A durat prea mult…”; încerci din nou |
+| Cheia nu poate tranzacționa | refuzată înainte de factori, cu pașii platformei; nicio încercare consumată |
+| Exchange-ul nu răspunde la citirea permisiunilor | rămâne lista salvată (ca până acum) și se cer factorii |
+| Cheia poate tranzacționa, dar și retrage | refuzată înainte de factori; dacă tranzacționarea era pornită, se oprește |
+| Codul folosit deja (ex. la login, în aceleași 30 de secunde) | mesajul despre cod: așteaptă codul următor |
+| Cod de recuperare | merge ca înainte și se consumă |
+
+### 4. Conflicte cu ce exista
+- **FD-TRADING §1:** „cere parola și codul 2FA” devine „passkey-ul, sau parola și codul 2FA”. Ordinea se schimbă: întâi permisiunile cheii, apoi factorii.
+- **FD-2FA:** passkey-ul era deja acceptat ca ambii factori la login. Acum e acceptat și aici.
+- **Azure / Mac:** nicio schimbare de schemă a bazei.
+
+## FD-STUDYUX — Indicatori favoriți, bara de jos a setărilor, stilul liniilor (19 oct 2026)
+
+**Cererile:**
+- „În pop-up-ul în care selectez indicatorii, adaugă în panoul din stânga o categorie de favorite, iar pe rândul fiecărui indicator o stea în dreapta, ca să pot face un indicator favorit. Astfel se grupează în noua categorie, ca să le accesez rapid pe cele care îmi plac.”
+- „Când deschid setările unui indicator, panoul de la bază cu butoanele Salvează și Valorile implicite nu coboară până jos și nici până la capăt în dreapta și în stânga, încât văd conținut sub el. Să acopere toată baza, ca să nu mai văd text pe sub.”
+- „La indicatorii care afișează linii de orice fel, vreau să pot stabili ce fel de linie (dotted, dashed sau solid) și grosimea. Trei grosimi: implicită, mai groasă și și mai groasă.”
+
+### 1. Favoritele din lista Indicatori
+- **Steaua** stă în dreapta fiecărui rând, inclusiv la Slingshot și LMA:
+  - goală = nu e favorit; plină (galbenă) = favorit;
+  - un click o schimbă și nu adaugă indicatorul pe grafic;
+  - are eticheta „Adaugă la favorite” / „Scoate din favorite”.
+- **Categoria „Favorite”** stă prima în panoul din stânga, cu numărul lor (ex. „Favorite 3”). Arată favoriții în ordinea în care i-ai marcat.
+- **La deschidere:** lista se deschide pe „Favorite” când ai cel puțin unul, altfel pe „Premium”, ca acum.
+- **Fără favoriți:** „Niciun favorit încă. Apasă steaua de lângă un indicator ca să-l adaugi aici.”
+- **Căutarea** caută ca acum în toți; steaua apare și în rezultate.
+- **Pe telefon:** „Favorite” e primul buton din rândul de categorii.
+- **Unde se ține minte:** pe server, în setările tale, la fel pe toate graficele și în orice browser. Se salvează imediat, iar dacă salvarea eșuează, steaua revine și apare mesajul erorii.
+
+### 2. Bara de jos din setări (Salvează / Valorile implicite)
+- Bara acoperă toată lățimea panoului și coboară până la marginea lui de jos, pe fundal opac, cu linia de sus. Nimic nu se mai vede pe lângă ea sau sub ea când derulezi.
+- **Se aplică la:** setările oricărui indicator, ale Slingshot și ale LMA (aceeași bară).
+
+### 3. Stilul liniilor (tab-ul „Stil”)
+- **Fiecare linie a unui indicator** (linie, linie în trepte, linie cu întreruperi, conturul unei arii) are, pe lângă bifă și culoare:
+  - **Tip:** „Continuă”, „Liniuțe”, „Puncte” (solid / dashed / dotted). Implicit e tipul din TradingView al liniei;
+  - **Grosime:** „Implicită”, „Groasă”, „Foarte groasă” = grosimea cu care se desenează linia fără alegere (a ei din TradingView, altfel 2 px), +1 px, +2 px.
+- **Ce n-are tip de linie** (histograme, cercuri, cruci) are doar grosimea. **Coloanele, semnele și etichetele** n-au niciuna (înainte, semnele aveau o grosime care nu schimba nimic).
+- **Liniile orizontale** (ex. 70 / 30 la RSI) au și ele tip și grosime.
+- **„Valorile implicite”** pune înapoi și tipul, și grosimea.
+- Setările vechi cu o grosime aleasă în pixeli (1–4 px) rămân: lista arată grosimea salvată („3 px”) până alegi alta.
+- **Slingshot și LMA:** formularele lor rămân cum sunt (LMA are deja stilul liniilor orizontale).
+
+### 4. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Un favorit dispare dintr-o versiune viitoare a catalogului | iese din favorite; ceilalți rămân |
+| Favorit care e și pe grafic | rândul arată steaua plină și, la Premium, „Pe grafic” |
+| Click pe stea cât rândul arată „Adăugat” | doar steaua se schimbă |
+| Prea mulți favoriți | nu există o limită practică (toți cei 120 pot fi favoriți) |
+| Panoul setărilor e scurt (fără derulare) | bara stă jos, ca acum |
+| O linie ascunsă din bifă | tipul și grosimea ei rămân alese |
+| Grosimea implicită a unei linii e deja 4 px | „Groasă” = 5 px, „Foarte groasă” = 6 px |
+
+### 5. Conflicte cu ce exista
+- **FD-INDICATORS §1 (fereastra):** se adaugă categoria „Favorite” și steaua. Rândul nu mai e un singur buton: rândul adaugă, steaua marchează.
+- **FD-INDICATORS §3 („Stil”):** grosimea 1–4 px devine Implicită / Groasă / Foarte groasă, iar tipul liniei e nou.
+- **Azure / Mac:** nicio schimbare de schemă a bazei; o setare personală nouă (`studyFavorites`).
+
+## FD-STUDYMEMORY — Fiecare indicator își ține minte ultimele setări (19 oct 2026)
+
+**Cererea:** „Toate indicatoarele trebuie să rețină ultimele setări făcute de utilizator. Dacă eu șterg un indicator și îl readaug, vreau să fie adăugat cu setările pe care le aveam înainte de ștergere.”
+
+### 1. Ce se ține minte
+- **Pentru fiecare indicator** (RSI, EMA, MACD…), ultimele lui setări:
+  - **Intrări** (perioade, surse, opțiuni);
+  - **Stil** (vizibilitatea, culoarea, tipul și grosimea fiecărei linii; liniile orizontale);
+  - **înălțimea panoului** lui, dacă are panou propriu.
+- **Când se actualizează:**
+  - la **„Salvează”** în setările lui;
+  - când îl **scoți** de pe grafic (×): se ține minte exact cum era, inclusiv înălțimea trasă cu mouse-ul.
+- **La adăugare** (din lista Indicatori, inclusiv din Favorite), indicatorul vine cu aceste setări. Fără setări ținute minte, vine cu valorile TradingView, ca până acum.
+- **Vizibilitatea nu se ține minte:** un indicator adăugat apare mereu vizibil.
+- **Slingshot și LMA** își păstrau deja setările (formularele lor sunt separate de prezența pe grafic). Acum revin și vizibili.
+
+### 2. Același indicator de mai multe ori
+- Memoria e una pe indicator, nu pe copie. EMA adăugat a doua oară vine cu ultimele setări salvate sau scoase ale oricărui EMA. Exemplu: ai EMA 20 și EMA 50, salvezi EMA 50, apoi adaugi încă un EMA: vine ca EMA 50.
+- Le schimbi apoi din rotiță; legenda numerotează copiile cu aceiași parametri („#2”), ca acum.
+
+### 3. Înapoi la valorile TradingView
+- „Valorile implicite” + „Salvează”, în setările indicatorului: memoria devine valorile TradingView.
+
+### 4. Unde se ține minte
+- Pe server, în setările tale, la fel pe toate graficele și în orice browser.
+- Se salvează în aceeași cerere cu lista de pe grafic: nu poate exista o listă salvată fără memoria ei.
+
+### 5. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Scoți și adaugi imediat (înainte să răspundă serverul) | vine cu setările de dinainte (memoria e actualizată pe loc, ca lista) |
+| Salvarea eșuează | lista și memoria revin împreună la cele de pe server, cu mesajul erorii |
+| O intrare ținută minte nu mai e acceptată de indicator (o versiune nouă a catalogului) | se folosește valoarea TradingView a câmpului, ca la indicatorii de pe grafic |
+| Un indicator scos din catalog într-o versiune viitoare | memoria lui dispare; a celorlalți rămâne |
+| Ai 20 de indicatori | lista nu primește al 21-lea, ca acum; memoria nu se schimbă |
+| Ascunzi un indicator cu ochiul, apoi îl scoți | memoria ține setările lui; adăugat din nou, apare vizibil |
+| Schimbi doar înălțimea panoului, fără să-l scoți | memoria se actualizează abia la „Salvează” sau la scoatere; o copie nouă adăugată între timp vine cu înălțimea ținută minte înainte |
+
+### 6. Conflicte cu ce exista
+- **FD-INDICATORS §1:** „un click adaugă indicatorul” cu valorile TradingView devine „cu ultimele tale setări, altfel cu valorile TradingView”.
+- **Azure / Mac:** nicio schimbare de schemă a bazei; o setare personală nouă (`studyMemory`).
+
+## FD-GOLATEST — Butonul „la ultima lumânare” (19 oct 2026)
+
+**Cererea:** „Pe chart să pui în colțul dreapta jos un icon cu fundal și hover, cu două >>, care să mă ducă la lumânarea curentă dacă ea nu mai este în view (am derulat înapoi), ca să nu derulez manual până ajung în prezent. La fel cum are TradingView.”
+
+### 1. Comportament
+- **Când apare:** doar cât ultima lumânare e în dreapta zonei vizibile (ai derulat în istoric). Când ultima lumânare se vede, chiar și la margine, butonul dispare.
+- **Unde:** colțul din dreapta jos al graficului, deasupra axei timpului și la stânga axei prețului, în ultimul panou (sub LMA sau sub ultimul indicator cu panou propriu, dacă există).
+- **Cum arată:**
+  - pătrat de 32 px, colțuri rotunjite, fundalul și marginea plăcilor, cu umbră;
+  - iconul „»” (două săgeți);
+  - la hover: fundal mai deschis, iconul și marginea în culoarea de accent;
+  - eticheta și tooltip-ul „Mergi la ultima lumânare”.
+- **Click:** graficul revine la ultima lumânare, cu spațiul obișnuit din dreapta (24 de bare). Zoom-ul (lățimea lumânărilor) rămâne cel ales.
+- **Tastatura:** butonul se poate focaliza cu Tab și se apasă cu Enter / Space.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Caseta TAKE PROFIT / STOP LOSS a Slingshot e în același colț (fără panouri dedesubt) | caseta urcă cu înălțimea butonului cât timp el se vede, apoi revine |
+| Sosesc lumânări noi cât ești derulat înapoi | vederea nu se mută, iar butonul rămâne |
+| Schimbi perechea sau timeframe-ul | apare doar dacă vederea ținută minte a noii perechi lasă ultima lumânare în afară |
+| Ecran complet, telefon | la fel |
+| Toate lumânările încap pe ecran | butonul nu apare |
+
+## FD-RODESC — Descrierile indicatorilor în română (19 oct 2026)
+
+**Cererea:** „Explicațiile / subtitlurile fiecărui indicator să fie în română. Tot site-ul e în română.”
+
+- Descrierile celor 118 indicatori din lista Indicatori (rândul de sub nume și tooltip-ul) sunt traduse în română.
+- **Ce rămâne în engleză:**
+  - **numele** (ex. „Relative Strength Index (RSI)”) și prescurtările, ca în TradingView, unde le găsești și în tutoriale;
+  - câmpurile din setări, ca în TradingView (FD-INDICATORS §3).
+- Un test verifică faptul că nicio descriere nu a rămas în engleză.
+
+## FD-HLINELEVELS — Nivelurile liniilor orizontale (19 oct 2026)
+
+**Cererea:** „Stochastic RSI trebuie să permită stabilirea limitelor de sus, mijloc și jos.”
+
+- **În tab-ul „Stil”**, fiecare linie orizontală a unui indicator are, pe lângă bifă, culoare, tip și grosime, un câmp **„nivel”**, ca în TradingView. Exemple:
+  - Stochastic RSI: Upper Band 80, Middle Band 50, Lower Band 20;
+  - RSI: 70 / 50 / 30;
+  - CCI: 100 / 0 / −100.
+- Se aplică **tuturor indicatorilor cu linii orizontale** (42).
+- **Umplerea** dintre două linii orizontale (ex. fundalul dintre 80 și 20 la Stochastic RSI) urmează nivelurile noi.
+- **Validare:** un nivel gol sau care nu e număr e refuzat la „Salvează”, cu numele liniei, iar tab-ul „Stil” rămâne deschis.
+- **„Valorile implicite”** pune înapoi și nivelurile TradingView.
+- **Memoria setărilor** (FD-STUDYMEMORY) ține minte și nivelurile.
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Nivelul de sus pus sub cel de jos | se desenează așa; umplerea rămâne între ele |
+| Nivel în afara valorilor indicatorului (ex. 150 la RSI) | se desenează; axa panoului se lărgește ca să-l cuprindă |
+| Indicator ale cărui linii orizontale vin din calcul (nu din configurație) | nu apar în „Stil”, ca acum |
+
+## FD-TICKETMEMORY — Formularul de ordin își ține minte setările (19 oct 2026)
+
+**Cererea:** „Ordinele de tranzacție trebuie să țină minte setările pe care le fac, chiar dacă nu inițiez tranzacția. Eu repet același tip de ordin și vreau să fie preselectate opțiunile când fac un ordin nou și să mă joc doar cu cantitatea. Așa că orice setare din ecranul de ordin (mai puțin simbolul, care poate oscila, și valoarea) trebuie să persiste de la ordin la ordin.”
+
+### 1. Ce se ține minte
+- **Pentru fiecare cont**, ultima alegere din formular:
+  - piața (Spot / Futures);
+  - direcția (Cumpără / Vinde, Long / Short);
+  - tipul ordinului (la piață, limită, stop…);
+  - cantitatea în activ sau în monedă / valoare;
+  - levierul și marja (Cross / Isolated);
+  - valabilitatea (până la anulare / până la sfârșitul zilei);
+  - „Reduce-only”;
+  - „Și în afara orelor de tranzacționare”.
+- **Contul ales sau folosit ultima dată** (ales în formular sau cel pe care ai verificat un ordin), separat pentru monede și pentru acțiuni: butonul „Tranzacționează” de pe grafic deschide formularul pe el.
+- **Când se salvează:** imediat ce schimbi o setare, chiar dacă închizi formularul fără să trimiți ordinul.
+- **Unde:** pe server, în setările tale, la fel în orice browser.
+
+### 2. Ce nu se ține minte
+- **Simbolul:** vine de unde deschizi formularul (graficul, deținerea) sau îl scrii.
+- **Cantitatea:** „valoarea” de la un ordin la altul.
+- **Prețurile:** limită, declanșare, take profit, stop loss. Țin de simbol, iar prețul altui instrument ar fi greșit sau periculos (un stop loss BTC pe ETH).
+
+### 3. Ce are prioritate
+- **Ce vine de unde deschizi formularul** câștigă: contul paginii Tranzacții, piața și direcția de la „Vinde”, prețul de pe grafic.
+- **Închiderea unei poziții** („Închide”, „Vinde” la eToro): formularul are setările poziției și nu folosește memoria. Nici nu o schimbă, ca un ordin nou să nu pornească drept închidere.
+- **O setare ținută minte pe care contul nu o mai permite** (ex. tipul „stop” pe o piață care nu îl are) se înlocuiește cu prima permisă, ca acum.
+- **Schimbi contul în formular:** formularul ia setările ținute minte ale acelui cont.
+
+### 4. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Prima dată pe un cont | valorile de acum (Spot, Cumpără, la piață, levier 1, Isolated) |
+| Contul ținut minte a fost șters sau și-a oprit tranzacționarea | primul cont eligibil, ca acum |
+| „Reduce-only” bifat la ultimul ordin | rămâne bifat (se vede în formular și în confirmare: „Reduce-only: da”) |
+| Levierul scris nu e un număr întreg între 1 și 125 | nu se ține minte; rămâne cel de dinainte |
+| Salvarea nu reușește (fără conexiune) | formularul merge normal; memoria rămâne cea de dinainte |
+| Butoanele 25 % / 50 % / 100 % | schimbă cantitatea (și, la nevoie, unitatea ei) doar pentru ordinul acesta |
+
+### 5. Conflicte cu ce exista
+- **FD-TRADING §2:** formularul pornea mereu de la aceleași valori; acum pornește de la ultimele alegeri ale contului.
+- **Azure / Mac:** nicio schimbare de schemă a bazei; o setare personală nouă (`orderTicket`).
+
+## FD-KEYTEXT — Textele conectorilor, după tranzacționare (19 oct 2026)
+
+**Cererea:** „Corectează textul din conectorii de brokeri și exchange-uri. Acolo spune să nu dau drepturi de write la cheie, dar nu mai este adevărat, pentru că am adăugat tranzacționare și pentru asta trebuie write.”
+
+- **Wizard-ul de conectare** („Cum creezi cheia”, fost „Cum creezi o cheie doar pentru citire”). Pașii fiecărei platforme spun:
+  - permisiunea de **citire**;
+  - **ca să tranzacționezi din Sentiq**, permisiunea de tranzacționare a platformei (ex. KuCoin „Spot” / „Futures”, OKX „Trade”, eToro „Write”, Trading 212 „Orders: Execute”);
+  - **niciodată** retrageri sau transferuri.
+  - Dispar interdicțiile vechi („Nu bifa Trade”, „Nu alege Write”, „Lasă oprită execuția de ordine”).
+  - Secțiunea pliabilă rămâne, ca „Detalii pentru tranzacționarea din Sentiq” (restricția IP la Binance, modurile de cont la Bybit / OKX, cheia nouă la eToro / Trading 212).
+- **Pagina Tranzacții** (fără conturi), **Setări → Conturi** și avertismentul pentru o cheie cu mai multe permisiuni spun același lucru: citire, plus tranzacționare dacă vrei; dacă nu tranzacționezi, ajunge citirea.
+- **Ghidul:** tabelul furnizorilor are o coloană nouă, cu permisiunea de tranzacționare a fiecăruia.
+- **Ce nu se schimbă:**
+  - Sentiq citește implicit;
+  - tranzacționarea se pornește pe cont (FD-TRADING §1, FD-TRADEUNLOCK);
+  - cheile care pot retrage sau transfera sunt refuzate.
+- **Interactive Brokers:** rămâne doar citire, prin raportul Flex.
+- **Conflict:** FD-TRADING §1 păstra pașii „doar citire” separat de cei de tranzacționare; acum pașii principali le cuprind pe amândouă.
+
+## FD-KEYIPS — Cheile, limitate la IP-urile serverului Sentiq (19 oct 2026)
+
+**Cererea:** „Când dai sfaturi în aplicație despre API keys, adaugă și informația legată de lista de IP-uri. Învață utilizatorii să limiteze API keys la acces doar de la aceste IP-uri: 68.210.130.64, 68.210.130.28, 68.210.129.102, 68.210.131.71, 68.210.130.70, 68.210.130.73, 68.210.131.64, 68.210.130.36, 68.210.130.38, 68.210.131.80, 68.210.131.82, 68.210.130.44, 68.210.171.1.”
+
+- **Verificat (19 oct 2026):** lista e exact `outboundIpAddresses` a aplicației `sentiq` din Azure. Adresele de pe care serverul de pe sentiq.money cheamă exchange-urile și brokerii.
+- **În wizard-ul de conectare**, la platformele care permit limitarea pe IP (KuCoin, Binance, Bybit, OKX, Kraken, Coinbase, Bitget, Trading 212, eToro):
+  - o casetă „Restricționează cheia la IP-urile serverului Sentiq”, cu explicația: cererile pleacă de pe server, nu de pe calculatorul tău; o cheie limitată nu poate fi folosită de altcineva, chiar dacă ajunge la el;
+  - lista și butonul **„Copiază lista”** (adresele separate prin virgulă, cum le cer paginile de chei). Fără clipboard (o pagină http din rețeaua locală), lista se selectează, cu indicația Cmd / Ctrl + C;
+  - pașii fiecărei platforme spun unde se pune lista.
+  - Dispar pașii greșiți „restricționează cheia la IP-ul tău”: cu IP-ul utilizatorului, Sentiq ar fi fost refuzat.
+- **Pe Sentiq de pe Mac** (orice adresă în afară de sentiq.money): caseta adaugă că cererile pleacă de pe conexiunea ta, deci o cheie limitată la aceste adrese merge doar din sentiq.money.
+- **Setări → Conturi, pagina Tranzacții fără conturi și ghidul** amintesc limitarea și unde e lista.
+- **Alpaca și Interactive Brokers** nu au casetă: limitarea pe IP nu e un pas al cheilor lor.
+- **Dacă Azure schimbă adresele** (doar la mutarea planului pe alt nivel), lista din `shared/server-ips.ts` se actualizează, iar cheile limitate trebuie actualizate și ele.
+
+## FD-ETOROUNITS — Unitățile la închiderea mai multor poziții eToro (19 oct 2026)
+
+**Cererea:** „Cu eToro conectat, dacă vreau să vând o poziție, câmpul de unități este blocat, nu poate fi completat numarul de unități.”
+
+- **Cauza:** o deținere eToro e făcută din mai multe poziții. Închiderea parțială mergea doar pe o singură poziție, de aceea câmpul era blocat când erau mai multe.
+- **Acum:** câmpul „Unități de închis” e mereu deschis.
+  - Gol: se închid toate pozițiile, ca înainte.
+  - Cu un număr: Sentiq închide **poziții întregi, în ordinea în care le dă eToro, apoi o parte din următoarea**. Exemplu: poziții de 2 și 3 unități, 3 unități de închis → prima întreagă și 1 unitate din a doua.
+- **Confirmarea** spune ce se întâmplă: „Se închid complet 1 poziție și parțial poziția 112 (1 unitate).”
+- **La trimitere**, împărțirea se face pe pozițiile din acel moment. O poziție închisă între timp e sărită; dacă nu mai e niciuna deschisă: „Pozițiile nu mai sunt deschise.”
+- **Mai multe unități decât au pozițiile:** refuzat la verificare, cu totalul („Pozițiile au 5 unități; închizi 6.”).
+- **Fiecare poziție** are cererea ei, iar o poziție care nu se închide nu le ascunde pe cele închise (ca înainte, FD-TRADING).
+
+## FD-ETOROPICK — Alegi pozițiile eToro pe care le închizi (19 oct 2026)
+
+**Cererea:** „Dacă sunt mai multe poziții, de ce nu mi le arăți pe toate când vreau să le lichidez și să selectez eu. Motivul e că unele sunt profitabile și altele nu. Vreau să le vând doar pe cele profitabile.”
+
+### 1. Ce se vede
+- **Unde:** în formularul „Vinde” al unei dețineri eToro făcute din mai multe poziții. Pozițiile cu levier sau short sunt deja fiecare pe rândul lor, cu „Închide” propriu.
+- **Fiecare poziție** are un rând:
+  - **bifă**;
+  - data deschiderii;
+  - unitățile;
+  - prețul de intrare;
+  - **profitul / pierderea nerealizat(ă)**, în USD și în procente din suma investită, verde sau roșu, cum le dă eToro.
+- **Ordinea:** de la cea mai veche la cea mai nouă (fără dată, în ordinea eToro).
+- **Butoane:** „Toate”, „Doar profitabile” (profit peste 0), „Niciuna”. La deschidere sunt bifate toate, ca înainte.
+- **Sub listă:** „Alese: 2 din 4 poziții · 5 unități · +123,45 USD”.
+
+### 2. Ce se închide
+- **Doar pozițiile bifate.**
+- **Câmpul „Unități de închis”** se aplică lor:
+  - gol: le închide pe toate cele bifate;
+  - un număr: poziții bifate întregi, în ordinea din listă, apoi o parte din următoarea (FD-ETOROUNITS).
+- **Nicio poziție bifată:** „Verifică ordinul” e dezactivat, cu „Alege cel puțin o poziție.”
+- **Confirmarea** arată unitățile alese și, la închiderea parțială a mai multor poziții, împărțirea.
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Lista nu s-a putut citi (eToro nu răspunde) | formularul de până acum: toate pozițiile, cu câmpul de unități |
+| O poziție s-a închis între timp (pe eToro) | „Poziția X nu mai e deschisă.” la verificare; lista se reîncarcă la redeschidere |
+| Profitul nu e dat de eToro pentru o poziție | „—”; „Doar profitabile” nu o bifează |
+| O singură poziție | fără listă, ca acum |
+| Poziții copiate (CopyTrader) | nu fac parte din deținere, deci nici din listă |
+
+### 4. Conflicte cu ce exista
+- **FD-TRADING §4 („Vinde” la eToro închide pozițiile deținerii) și FD-ETOROUNITS:** acum închide pozițiile alese, iar unitățile se împart pe ele.
+
+## FD-ETOROROWS — Pozițiile eToro ca rânduri, fiecare cu „Vinde” (19 oct 2026)
+
+**Cererea:** „Nu îmi place. Pozițiile trebuie listate ca rând cu buton de vinde pentru fiecare, coloane pe rând cu datele existente. Popup-ul un pic mai wide ca să încapă tabelul cu pozițiile și coloane cu buton. Dacă nu pot modifica ceva, precum contul, simbolul, nu le afișa ca text field ci ca text.”
+
+Înlocuiește interfața din FD-ETOROPICK (bife, „Toate / Doar profitabile / Niciuna”, sumarul).
+
+### 1. Tabelul pozițiilor
+- **Unde:** în formularul „Vinde” al unei dețineri eToro și „Închide” al unei poziții eToro, oricâte poziții ar fi (și una).
+- **Un rând pe poziție**, de la cea mai veche:
+
+| Deschisă | Unități | Preț intrare | Investit | Profit / pierdere | De vândut | |
+|---|---|---|---|---|---|---|
+| 20 nov. 2025 | 1,5 | 150 | 225,00 USD | +75,00 USD (+33,33%), verde | câmp gol (= toate) | **Vinde** |
+
+- **„De vândut”** e opțional: gol = toată poziția; un număr = doar atâtea unități din ea. Un număr care nu e pozitiv sau trece de unitățile poziției se marchează cu roșu, iar „Vinde” e dezactivat.
+- **„Vinde”** pe un rând verifică închiderea **doar a acelei poziții**: confirmarea, apoi „Confirmă și trimite”.
+- **După rezultat:** „Înapoi la poziții” reîncarcă lista (poziția vândută dispare) ca să vinzi și alta; „Închide” închide fereastra.
+- Fereastra e mai lată (900 px), ca tabelul să încapă. Pe telefon, tabelul se derulează lateral.
+
+### 2. Câmpurile care nu se pot schimba apar ca text
+- **Într-un formular de închidere** (eToro, poziție futures, vânzarea unei dețineri): contul, simbolul, piața și direcția sunt text („Cont: eToro”, „Simbol: AAPL · Apple”), nu câmpuri dezactivate.
+- **Contul** e text și când e un singur cont eligibil.
+- Câmpurile care se pot schimba rămân ca acum.
+
+### 3. Confirmarea
+- **Rândurile ei:** „Poziție: 20 nov. 2025 (1,5 unități @ 150)” și profitul / pierderea ei (la vânzarea întreagă).
+- La vânzarea parțială: unitățile alese.
+
+### 4. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Lista nu s-a putut citi | formularul de până acum: câmpul de unități pentru toate pozițiile și „Verifică ordinul” |
+| O poziție s-a închis între timp | „Poziția X nu mai e deschisă.” la verificare |
+| „Vinde” de două ori pe același rând (aceleași unități) | aceeași cerere (aceeași cheie): eToro o primește o singură dată |
+| Profit necunoscut | „—” |
+
+### 5. Conflicte cu ce exista
+- **FD-ETOROPICK:** bifele, butoanele de grup și sumarul dispar.
+- **FD-ETOROUNITS:** împărțirea pe mai multe poziții rămâne pe server (pentru formularul de rezervă), dar tabelul vinde poziție cu poziție.
+
+## FD-INDEXNEWS — Știrile și scorul acțiunilor, doar pentru companiile din indicii aleși (19 oct 2026)
+
+**Cererea:** „Verifică dacă avem acces la indici precum QQQ. Vreau o setare care să filtreze știrile despre acțiuni la doar companiile care participă la un index sau mai multi, în funcție de câți selectez. Dacă cineva investește doar în QQQ va dori știri doar din zona aia și își dorește ca scorul să fie calculat pe baza știrilor despre companiile din QQQ; dacă bifează mai mulți indici, atunci de la toate companiile din indicii bifați. Deci trebuie opțiune care bifează acțiuni generale sau indici, pentru calculul scorului și filtrarea știrilor. Dacă nu avem date despre indici, caută informații pe net și generează-i tu, fără valoare, dar măcar cu lista de companii.”
+
+**Decizii (AskUserQuestion, 19 oct 2026):**
+- Se filtrează **doar partea de acțiuni** a scorului; crypto, macro și geopolitica rămân ca acum.
+- Știrile generale de bursă (fără o companie anume) **rămân toate**.
+- Știrile despre acțiunile din **favorite rămân**, chiar dacă nu sunt în indicii aleși.
+
+### Cercetare (19 oct 2026): ce date avem
+- **Sentiq are deja cotațiile a 7 indici** (S&P 500, Nasdaq-100, Nasdaq Composite, Dow Jones, Russell 2000, VIX, PHLX Semiconductor), de la CNBC, dar **nu și componența lor**. Twelve Data o are doar pe planurile plătite, iar CNBC nu o dă.
+- **Componența, din surse publice:**
+
+| Indice (ETF) | Sursă | Companii |
+|---|---|---|
+| **Nasdaq-100** (QQQ) | API-ul Nasdaq (`api.nasdaq.com/api/quote/list-type/nasdaq100`), actualizat zilnic | 101 simboluri (Alphabet are două clase) |
+| **S&P 500** (SPY, VOO) | Wikipedia, „List of S&P 500 companies” (tabelul `constituents`, ținut la zi de editori) | 502 simboluri (19 oct 2026; câteva companii au două clase) |
+| **Dow Jones Industrial Average** (DIA) | Wikipedia, „List of Dow Jones Industrial Average companies” | 30 |
+
+- **Fără sursă publică accesibilă:**
+  - Russell 2000 (2.000 de companii; lista iShares cere un browser cu consimțământ);
+  - PHLX Semiconductor (Wikipedia nu are lista; pagina Nasdaq nu răspunde la cereri automate);
+  - Nasdaq Composite (practic toate cele ~3.000 de acțiuni de pe Nasdaq).
+  - Rămân fără filtru și se pot adăuga când apare o sursă.
+- **Toate acțiunile listate în SUA (7.002):** screener-ul Nasdaq. Folosit ca să se recunoască o companie din afara indicilor când o știre o numește explicit („(NASDAQ: XYZ)”, „$XYZ”).
+- **Fără valori:** indicii aceștia au deja cotații în Sentiq. Listele sunt doar de companii.
+
+### 1. Setarea (Setări → Ale mele → „Știrile despre acțiuni”)
+- **„Toate acțiunile”** (implicit, ca până acum) sau **„Doar companiile din indicii aleși”**, cu bife:
+  - **S&P 500** — SPY, VOO · 502 companii;
+  - **Nasdaq-100** — QQQ · 101;
+  - **Dow Jones** — DIA · 30.
+- Cel puțin un indice trebuie bifat ca să alegi a doua variantă. Mai mulți bifați = companiile din toți.
+- **Sub bife:**
+  - ce rămâne: știrile generale de bursă, acțiunile din favorite, crypto, macro și geopolitica;
+  - data listelor („Listele de companii: 19 oct. 2026, actualizate săptămânal”).
+- **Se salvează pe server, per utilizator.** Scorul se recalculează în câteva minute (vezi §3).
+
+### 2. Ce știri despre acțiuni rămân (pagina Știri, Azi, Rezumatul zilei)
+- **O știre din categoria Acțiuni rămâne dacă:**
+  - nu numește nicio companie (știre generală de bursă), **sau**
+  - numește o companie dintr-un indice ales, **sau**
+  - numește indicele ales (ex. „Nasdaq-100”, „QQQ”, „S&P 500”), **sau**
+  - numește o acțiune din favoritele tale.
+- **Iese** o știre care numește doar companii din afara acestora (ex. JPMorgan, care e în S&P 500, dar nu în Nasdaq-100, pentru cine a ales doar Nasdaq-100).
+- **Știrile din celelalte categorii** (crypto, macro, geopolitică) nu se schimbă.
+- **Pagina Știri** arată, deasupra listei, „Acțiuni: doar companiile din Nasdaq-100 (Setări)”.
+
+### 3. Scorul
+- **Partea de acțiuni a scorului** (și deci scorul total) se calculează doar din știrile despre acțiuni rămase după §2. Restul categoriilor rămân la fel.
+- **Cine are filtrul primește un scor al lui** (zilnic și istoric), ca utilizatorii cu AI propriu. Cine are și AI propriu: scorurile AI-ului lui, plus filtrul.
+- **La schimbarea filtrului:** zilele pentru care Sentiq mai are știrile (păstrarea știrilor, implicit 90 de zile) se recalculează cu filtrul nou. Zilele mai vechi rămân cum erau.
+- Scorul comun (al celor fără filtru și fără AI propriu) nu se schimbă.
+
+### 4. Cum se recunosc companiile în știri
+- **Fiecare companie din cei trei indici** se recunoaște după:
+  - numele ei („Apple”, „Nvidia”, „Alphabet” / „Google”, „JPMorgan”), scris cu majusculă (nu „apple pie”);
+  - „$AAPL”, „(NASDAQ: AAPL)”;
+  - tickerul scris singur (de cel puțin 3 litere, „NVDA”).
+- **Numele care sunt cuvinte obișnuite** („Target”, „Visa”, „Carrier”, „Pool”, „Southern”, „Progressive”) nu se recunosc singure, ca să nu prindă „visa rules” sau „southern states”. Se recunosc după numele complet („Target Corporation”), „$TGT”, „(NYSE: TGT)”.
+- **Tickerele care sunt și acronime obișnuite** (ex. „USB”, „PSA”, „REG”) nu se recunosc singure.
+- **Orice altă acțiune listată în SUA** se recunoaște doar explicit, după „$XYZ” sau „(NASDAQ: XYZ)” / „(NYSE: XYZ)”.
+- **Etichetele companiilor recunoscute** apar pe știri ca acum (ex. „AAPL”), iar marcajele interne de apartenență la indici nu se văd.
+
+### 5. Listele se țin la zi
+- **Săptămânal** (și la pornire, dacă au peste 7 zile), Sentiq recitește cele trei liste și lista acțiunilor listate.
+- **O listă care pare greșită** se ignoră și rămâne cea de dinainte:
+  - Nasdaq-100: 95–110 simboluri;
+  - S&P 500: 490–515;
+  - Dow: exact 30;
+  - acțiuni listate: peste 5.000.
+- **Fără nicio citire reușită**, rămân listele incluse în aplicație (din 19 oct 2026).
+- **O companie nou intrată** se recunoaște după ticker; după nume doar dacă numele are cel puțin două cuvinte sau nu e un cuvânt obișnuit.
+- **Când listele se schimbă**, știrile din perioada păstrată se etichetează din nou, în fundal.
+
+### 6. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| O știre numește și o companie din indice, și una din afară | rămâne |
+| O companie a ieșit din indice | știrile noi despre ea ies; cele de dinainte de schimbare rămân etichetate cu apartenența de atunci |
+| Alphabet (GOOGL, GOOG) | ambele clase, același nume |
+| Berkshire Hathaway (BRK.B) | „Berkshire”, „$BRK.B”, „(NYSE: BRK.B)” |
+| O companie numită doar printr-un cuvânt obișnuit („Target cuts forecast”) | nu se recunoaște: rămâne ca știre generală |
+| „Dow” singur | e indicele Dow Jones, nu Dow Inc. (care se recunoaște ca „Dow Inc.”) |
+| Utilizator fără favorite și fără filtru | totul ca acum |
+| Adaugi sau scoți o acțiune din favorite, cu filtrul pornit | pagina Știri și ziua de azi o urmează imediat; zilele deja încheiate ale scorului rămân cum au fost calculate |
+| Cititul listelor eșuează pe Azure (sursa blochează serverul) | rămân ultimele liste reușite sau cele incluse; „Stare sistem” arată eroarea job-ului `index.members`, iar data listelor apare în Setări |
+
+### 7. Conflicte cu ce exista
+- **FD-AIKEYS (scorul propriu):** scorul per utilizator, până acum doar pentru AI propriu, e folosit și pentru filtru.
+- **FD-INDICES:** aliasurile indicilor S&P 500, Nasdaq-100 și Dow sunt acum folosite la etichetare pentru toți, nu doar pentru cine îi are în favorite. Rezultatul: mai multe știri etichetate cu indicele. Favoritele se filtrează ca înainte, după favoritele fiecăruia.
+- **Azure / Mac:**
+  - nicio schimbare de schemă a bazei;
+  - listele se țin în datele job-urilor;
+  - marcajele de apartenență sunt etichete speciale ale știrilor (`#CO`, `#SPX`, `#NDX`, `#DJI`), ascunse în aplicație.
+
+## FD-BROKERSTATS — Tranzacțiile închise și la brokeri: eToro, Trading 212, Interactive Brokers, Alpaca (19 oct 2026)
+
+Cererea utilizatorului:
+- „pentru kucoin am și selectorul de Tranzacții închise în Azi 7z 30z 90z. pentru etoro de ce nu am?”
+- „adaugi pentru toate tipurile de cont. citești documentația și implementezi. unde nu poți citi dă-mi linkul și îți dau eu textul”
+
+Răspunsul la întrebare: FD-TRADESTATS a cerut cardurile doar pentru conturile crypto (pozițiile futures închise). La brokeri pagina a rămas cum era.
+
+### 1. Ce se schimbă
+- Selectorul **„Tranzacții închise în Azi · 7z · 30z · 90z”** apare la orice cont, crypto sau broker. Alegerea e una singură, ținută în browser, ca până acum.
+- Cardurile unui cont de broker, în ordine:
+
+| # | Card | Ce arată |
+|---|---|---|
+| 1 | **Valoare dețineri** | ca până acum |
+| 2 | **Numerar disponibil** | ca până acum (doar dacă brokerul îl dă) |
+| 3 | **PnL nerealizat (poziții)** | ca până acum (doar cu poziții cu levier sau short) |
+| 4 | **Tranzacții profitabile** | tranzacțiile închise în perioadă cu rezultat > 0 |
+| 5 | **Tranzacții cu pierdere** | tranzacțiile închise în perioadă cu rezultat < 0 |
+| 6 | **Rata de succes** | profitabile ÷ (profitabile + cu pierdere) × 100, cu o zecimală |
+| 7 | **Câștig net** | suma rezultatelor, **în moneda contului** (ex. EUR la un cont Trading 212 în euro), verde peste 0, roșu sub 0 |
+
+- Regulile de numărare sunt cele din FD-TRADESTATS: zero exact nu e nici câștig, nici pierdere; „Azi” începe la 00:00 în fusul tău orar.
+- La trecerea cursorului, fiecare card spune ce numără la brokerul respectiv (§2).
+
+### 2. Ce e o „tranzacție închisă” la fiecare broker (din documentația lor)
+| Broker | O tranzacție | Rezultatul ei | De unde |
+|---|---|---|---|
+| **eToro** | o poziție închisă; o închidere parțială e o tranzacție separată | profitul net dat de eToro (`netProfit`), în USD | istoricul tranzacțiilor (`/api/v1/trading/info/trade/history`, la Demo `…/trade/demo/history`) |
+| **Trading 212** | un ordin de vânzare executat (oricâte bucăți ar avea) | profitul realizat dat de Trading 212 (`realisedProfitLoss`), în moneda contului | istoricul ordinelor (`/api/v0/equity/history/orders`) |
+| **Interactive Brokers** | un ordin care închide sau reduce o poziție: acțiuni, ETF-uri, opțiuni, futures. Schimburile valutare nu intră | „Realized P/L” (FIFO) dat de IBKR (cu comisioane), în moneda de bază a contului | raportul Flex, cerut pentru ultimele 90 de zile |
+| **Alpaca** | un ordin care închide sau reduce o poziție | **calculat de Sentiq**: Alpaca nu dă rezultatul realizat. Prețul vânzării minus costul cumpărărilor, după regula FIFO (primele cumpărate sunt primele vândute) | execuțiile contului (`/v2/account/activities/FILL`) |
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Nicio tranzacție închisă în perioadă | 0 și 0; rata de succes „—”; câștig net 0 (în moneda contului) |
+| Rezultat exact zero | nu intră la profitabile sau la pierdere; intră în câștigul net, cu 0 |
+| Un ordin executat în mai multe bucăți (Trading 212, IBKR, Alpaca) | o singură tranzacție, cu suma bucăților |
+| Un ordin care închide o poziție și deschide una în sens invers (IBKR „C;O”, Alpaca) | contează partea care închide |
+| **IBKR, „Azi”** | raportul Flex are doar zilele încheiate. Cardurile 4–7 arată „—”, iar la trecerea cursorului: „Interactive Brokers trimite tranzacțiile unei zile după închiderea ei. Alege 7z, 30z sau 90z.” |
+| IBKR, 7z / 30z / 90z | tranzacțiile până la închiderea ultimei zile lucrătoare; cursorul arată data |
+| IBKR, rapoartele pe perioadă | ținute 15 minute, apoi șterse din memorie (perioada se mută în fiecare zi) |
+| IBKR, Flex Query-ul fără secțiunea Trades sau fără câmpul „Realized P/L” | cardurile arată „—”; sub ele, ce trebuie bifat în Flex Query |
+| IBKR, raportul pentru zilele cerute nu e gata încă (codurile IBKR 1003–1008) | „—” și „raportul Flex nu e gata încă”; se reîncearcă la următoarea citire |
+| IBKR, tranzacție în altă monedă decât cea de bază | convertită cu cursul dat de IBKR; fără curs, intră doar la numărare, iar cardul spune „parțial” |
+| IBKR, portofoliul și statisticile în același timp | cererile Flex ale aceluiași token se fac una după alta (IBKR: cel mult una pe secundă, zece pe minut) |
+| Trading 212: cumpărări, ordine anulate, evenimente corporative (split, distribuții) | nu sunt tranzacții închise |
+| Trading 212, o vânzare fără profitul realizat în răspuns | nu se numără; cardul spune „N fără rezultat” |
+| Trading 212 (20 de cereri pe minut, 50 de ordine pe pagină) | Sentiq citește cel mult 10 pagini (500 de ordine, cu tot cu cumpărări). Dacă perioada are mai multe, cardul spune „parțial: istoric prea lung”, iar perioadele scurte rămân complete |
+| Trading 212, o vânzare limită plasată înainte de perioadă și executată în ea | se numără, dacă Trading 212 o listează după data execuției (documentația nu spune ordinea) |
+| eToro: pagini de 100, cel mult 20 (2.000 de poziții închise) | peste ele, cardul spune „parțial: istoric prea lung” |
+| eToro copy trading | se numără pozițiile copiate dacă eToro le pune în istoric (documentația nu spune) |
+| Alpaca: istoric | Sentiq citește execuțiile de la cea mai nouă înapoi, cel mult 4.000 |
+| Alpaca: vânzări fără cost cunoscut | nu se numără. Cazuri: cumpărarea e mai veche decât ce s-a citit, acțiunile au venit prin transfer sau split, ori contul nu permite short. Cardul spune „N fără rezultat” |
+| Alpaca, short | o vânzare pe care Alpaca o marchează ca short (`sell_short`), sau orice vânzare fără acțiuni pe un cont cu short permis, deschide un short; cumpărarea care îl închide e tranzacția |
+| Alpaca, opțiuni | rezultatul × 100 (un contract = 100 de acțiuni). Expirarea fără valoare nu e o execuție, deci nu apare |
+| Alpaca, crypto | comisionul se ia din monedă, nu intră în rezultat |
+| Alpaca, taxele regulatorii (TAF, SEC) | nu intră în rezultat (sunt sume separate, de cenți) |
+| Istoricul nu se poate citi (cheie, permisiune, limită de cereri) | cardurile 4–7 arată „—”; eroarea apare sub carduri; restul paginii merge |
+| Trading 212, cheie fără permisiunea „History” | eroarea numește permisiunea lipsă |
+| Câte cereri | istoricul ultimelor 90 de zile se citește o dată și servește toate perioadele 5 minute; „Reîmprospătează” îl citește din nou (la IBKR rămâne raportul din ultimele 15 minute) |
+| Server mai vechi (Mac sau Azure încă nepublicat) | cardurile noi arată „—” |
+
+### 4. Pașii de conectare
+- **IBKR:** pasul cu Flex Query-ul spune acum: la secțiunea Trades, nivelul „Execution” și toate câmpurile („Select All”). Așa raportul conține „Realized P/L”, „Open/Close” și „IB Order ID”.
+- **Ceilalți:** nicio schimbare. Trading 212 cerea deja permisiunea History, iar eToro și Alpaca citesc istoricul cu cheia existentă.
+
+### 5. Reparat pe drum
+- **Trading 212, comisionul din „Tranzacții recente”:** apărea „—”, pentru că Trading 212 dă taxele ca listă (conversie valutară, taxa FINRA, stamp duty). Acum apare suma lor, în moneda contului.
+- **IBKR, „raportul nu e gata încă”** (codurile 1001, 1003–1008): mesajul spune asta și se reîncearcă la următoarea citire. Înainte era o eroare generică.
+
+### 6. Conflicte cu ce exista
+- **FD-TRADESTATS §3**, „Brokeri (acțiuni) | neschimbat”: brokerii au acum și ei cardurile 4–7, iar selectorul de perioadă apare la toate conturile.
+- **Azure / Mac:** nicio schimbare de schemă a bazei; nimic nou salvat.
+
+## FD-CHARTSTEADY — Graficul nu mai sare: antetul la schimbarea simbolului, butoanele din legendă (19 oct 2026)
+
+Cererea utilizatorului (două buguri):
+- „când sunt în full screen mode și mă uit la un grafic și trec prin simbolurile disponibile, time frame-ul dispare până când se încarcă noul simbol, și acest lucru mută rândul pe care se află time frame-ul și celelalte butoane împreună pe primul rând. După ce se încarcă …, împinge conținutul ăla pe al doilea rând … Vreau să rămână intervalul acela disponibil, doar că poți să-l faci disabled, și să-l faci enabled când ai datele … Dar măcar să nu se mai miște interfața în felul ăsta.”
+- „butonul X … când merg cu mouse-ul peste acel indicator, valorile … se schimbă în funcție de unde sunt cu mouse-ul. Iar anumite valori împing poziția butonului X sau butonului de settings sau butonului de ochi … uneori este greu să nimeresc butonul X … Trebuie să … rămână pe loc, și valorile astea nu le mai împing aiurea.”
+
+### 1. Antetul graficului, la schimbarea simbolului
+- **Cauza:** cât se încarcă simbolul nou, prețul și insigna variației („+0,73 % 24h”; la acțiuni „azi” / „la închidere”) dispar. Partea din stânga a antetului se îngustează, iar în ecran complet rândul cu intervalele (1m … 1w) și butoanele încape lângă ea și urcă pe primul rând. Când sosesc datele, coboară la loc.
+- **Acum:**
+  - prețul și insigna variației rămân pe loc cât se încarcă, **gri, cu „—”** (insigna păstrează „24h”). Se colorează când sosesc datele. Cât se încarcă, fiecare păstrează lățimea valorii simbolului de dinainte, așa că antetul își schimbă așezarea cel mult o dată (de la simbolul vechi la cel nou), nu de două ori;
+  - dacă variația nu se poate calcula (o pereche nouă, fără lumânarea de acum 24 de ore), insigna rămâne gri, cu „—”. La cursor spune de ce;
+  - **rândul cu intervalele și butoanele nu mai depinde de lățimea prețului, a numelui sau a variației.** Stă lângă simbol doar dacă e loc pentru amândouă la o lățime fixă a părții din stânga, altfel pe rândul următor. Așa nu mai sare de la un simbol la altul, nici în ecran complet;
+  - la intervalul 1w, unde variația pe 24 de ore nu are sens, insigna nu apare deloc, ca până acum. Așa e la toate simbolurile, deci nimic nu sare.
+
+### 2. Butoanele din legenda unui indicator
+- **Cauza:** în legendă, butoanele (ochi, setări, X) stăteau după valori. Valorile se schimbă cu poziția mouse-ului („98,5” → „101,25”), deci butoanele se mutau.
+- **Acum:** butoanele stau imediat după numele indicatorului și parametrii lui, **înaintea valorilor**, ca în TradingView: „RSI 14 close [ochi] [⚙] [X] 55,23”. Numele și parametrii nu se schimbă cu mouse-ul, deci butoanele rămân pe loc.
+- La fel la LMA (care are valori). La Slingshot și la LMA ascuns, legenda nu are valori, așa că nu se schimbă nimic.
+- Mesajele din legendă („Se încarcă…”, erorile) vin tot după butoane.
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Ecran îngust (telefon) | antetul se așază pe rânduri ca până acum; partea din stânga ocupă rândul ei |
+| Ecran complet pe un monitor lat | simbolul și rândul cu intervalele pe același rând, oricare ar fi simbolul |
+| Ecran complet pe un laptop | rândul cu intervalele mereu pe al doilea rând |
+| Numele companiei lung (acțiuni) | se rupe în partea din stânga, nu mută rândul cu intervalele |
+| Legenda mai lată decât graficul | se rupe pe rânduri după valori; butoanele rămân lângă nume |
+| Butonul „Tranzacționează” apare sau dispare (alt fel de simbol: monedă ↔ acțiune) | rândul din dreapta își schimbă lățimea; e o schimbare reală, nu o pâlpâire la încărcare |
+
+### 4. Conflicte cu ce exista
+- **FD-INDICATORS §2** („numele, parametrii, valorile … și butoanele”): ordinea devine nume, parametri, butoane, valori.
+- **FD-PREMIUMHIDE:** ochiul de la Slingshot și LMA rămâne în același loc față de nume.
+
+## FD-GOLATESTMAIN — Butonul „la ultima lumânare”, în panoul prețului (19 oct 2026)
+
+**Cererea:** „mută săgeata de derulare pe chart, nu în zona de jos cu panouri. să fie deasupra panourilor”
+
+### 1. Comportament
+- Butonul „»” (FD-GOLATEST) stă acum **în colțul din dreapta jos al panoului prețului** (cel cu lumânările), chiar deasupra panourilor de dedesubt: LMA și indicatorii cu panou propriu (RSI, MACD …).
+- Fără panouri dedesubt, panoul prețului e și cel mai de jos, deci butonul rămâne unde era: deasupra axei timpului.
+- Restul nu se schimbă: când apare, cum arată, ce face la click, tastatura.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Caseta TAKE PROFIT / STOP LOSS a Slingshot (tot în colțul din dreapta jos al panoului prețului) | urcă cu înălțimea butonului cât timp butonul se vede, apoi revine. Acum se întâmplă și cu panouri dedesubt, fiindcă butonul e mereu în colțul ei |
+| Panoul prețului micșorat mult (tras de separator) | butonul rămâne în panou; dacă panoul e mai scund decât butonul, butonul se lipește de marginea lui de sus |
+| Eticheta PnL a poziției, la dreapta, pe linia prețului, dacă prețul e jos în panou | butonul poate acoperi o parte din ea cât timp se vede, ca în TradingView; dispare la click |
+| Ecran complet, telefon | la fel |
+| Adaugi sau scoți un panou de indicator cât butonul se vede | butonul se mută odată cu marginea de jos a panoului prețului |
+
+### 3. Conflicte cu ce exista
+- **FD-GOLATEST §1** („în ultimul panou, sub LMA sau sub ultimul indicator cu panou propriu”): înlocuit de §1 de aici.
+- **FD-GOLATEST §2:** caseta TP / SL urca doar fără panouri dedesubt. Acum urcă oricând se vede butonul.
+
+## FD-SCROLLLOCK — Cât e deschis un panou sau o fereastră, pagina din spate nu se mai derulează (19 oct 2026)
+
+**Cererea:** „când deschid orice side panel, popup și are scroll, vreau să blochezi scrollul doar în acel panou sau popup. nu mai permite scroll în fundal dacă elementele astea sunt deschise.”
+
+### 1. Comportament
+- **Cât e deschis unul dintre aceste elemente, pagina din spate stă pe loc.** Rotița, trackpad-ul, tastele (Page Down, spațiu) și degetul pe telefon derulează doar elementul deschis:
+  - panoul lateral cu setările unui indicator, Slingshot sau LMA (Grafice);
+  - ferestrele: Ordin nou, lista Indicatori, Pornește tranzacționarea, asistentul de conturi, căutarea ⌘K, Rezumatul zilei și fereastra lui de eroare;
+  - ecranul complet al graficului (cum era deja).
+- **Când derularea ajunge la capătul elementului**, nu mai trece în pagină.
+- **La închidere**, pagina e exact unde era.
+- **Pagina nu sare lateral** când dispare bara ei de derulare (pe sistemele cu bară vizibilă, ca Windows): locul barei rămâne.
+- **Lângă panoul lateral, graficul rămâne utilizabil:** rotița pe grafic face zoom (nu derulează pagina), ca să vezi efectul setărilor.
+- **Listele derulante ale căutărilor** (perechea pe Grafice, favoritele în Setări, rezultatele ⌘K): derularea în ele rămâne în ele, fără să miște pagina. Ele nu blochează toată pagina, pentru că rămân deschise cât e text în căutare și pagina ar rămâne blocată până ștergi textul.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Două deodată (panoul lateral și ⌘K, ecran complet și panoul lateral, fereastra Ordin nou din panou) | pagina rămâne blocată până se închide ultimul |
+| Un element deschis pe o pagină scurtă (fără derulare) | nimic vizibil nu se schimbă |
+| Elementul nu are ce derula (conținut scurt) | rotița nu mișcă nimic |
+| Schimbi pagina (link) cu panoul deschis | panoul se închide, iar pagina se poate derula din nou |
+| Telefon (iOS / Android) | la fel; derularea care trece de capăt nu mai mișcă pagina |
+| Ecran complet al graficului | blocarea lui trece prin același mecanism, ca să nu se încurce cu panourile |
+
+### 3. Conflicte cu ce exista
+- **Rezumatul zilei** și **ecranul complet** blocau pagina fiecare în felul lui (`body` și `html`). Acum folosesc același mecanism, cu numărătoare, ca să nu se deblocheze unul pe altul.
+
+## FD-PICKERSORT — Indicatorii din fereastra „Indicatori”, în ordine alfabetică (19 oct 2026)
+
+**Cererea:** „indicatorii din popup trebuie să fie ordonați alfabetic, indiferent de filtrare (taburi)”
+
+### 1. Comportament
+- **Toate listele ferestrei „Indicatori” sunt în ordine alfabetică după nume:** Favorite, Premium, Toți, fiecare categorie (Medii mobile, Oscilatori …) și rezultatele căutării.
+- **Regula:**
+  - nu contează majusculele sau diacriticele;
+  - semnele de punctuație nu contează: „[DI] Logarithmic Moving Average” e la D;
+  - numerele sunt în ordinea lor („24-hour Volume” e primul, iar „2” vine înainte de „10”).
+- **Slingshot și LMA** au în continuare eticheta PREMIUM, dar în „Toți” și în căutare stau la locul lor alfabetic, nu primii.
+- **Favoritele** apar alfabetic, nu în ordinea în care au fost marcate cu stea.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Căutare | doar potrivirile, alfabetic |
+| Un favorit care nu mai există în catalog | nu apare, ca până acum |
+| Steaua apăsată în „Favorite” (scoate un favorit) | rândul dispare, iar restul rămâne alfabetic |
+| Ordinea indicatorilor pe grafic și în legendă | neschimbată (ordinea în care au fost adăugați) |
+
+### 3. Conflicte cu ce exista
+- **FD-INDICATORS §1** („Premium primele în listă”): în „Toți” și în căutare, Premium nu mai sunt primele. Tab-ul Premium rămâne primul după Favorite.
+- **FD-STUDYUX §1** („favoritele în ordinea în care au fost marcate”): acum alfabetic. Lista salvată nu se schimbă, doar afișarea.
+
+## FD-HLINE — Liniile cursorului înapoi; butonul „+” și liniile orizontale (19 oct 2026)
+
+**Cererea:** „pune la loc liniile punctate la cursor pe chart și butonul plus care adaugă linie orizontală. linia orizontală are setările din poze dar le pui pe toate în panou, nu taburi diferite ca pe TradingView.” (cu capturi din TradingView: butonul „+” lângă eticheta prețului de la cursor, meniul lui cu „Draw horizontal line at 2.023 ⌥H”, setările liniei pe tab-urile Style, Text, Coordinates, Visibility, plus Template, Cancel și Ok)
+
+### 1. Liniile cursorului
+- Pe grafic revin liniile cursorului: o linie verticală și una orizontală, cu liniuțe, subțiri, în culoarea discretă a temei. Etichetele de pe axe (prețul și ora) rămân.
+- În toate panourile (prețul, LMA, indicatorii), ca în TradingView.
+
+### 2. Butonul „+”
+- Cât cursorul e în panoul prețului, la capătul din dreapta al liniei orizontale a cursorului (lângă eticheta prețului) apare un buton „+”.
+- Când duci mouse-ul pe el, butonul rămâne pe loc.
+- Un click deschide un meniu cu: **„Linie orizontală la 2.023”**, cu scurtătura **Alt+H** afișată.
+- Alegerea adaugă linia la prețul acela, rotunjit la zecimalele graficului. Linia ia stilul din șablon (§5) sau, fără șablon, pe cel inițial: albastru `#2962FF`, 1 px, continuă, cu eticheta prețului, fără text.
+- **Alt+H** (pe Mac: ⌥H), cu cursorul în panoul prețului: adaugă direct linia la prețul cursorului.
+- Meniul se închide cu Esc, cu un click în afara lui sau după alegere.
+
+### 3. Liniile pe grafic
+- O linie orizontală merge pe toată lățimea panoului prețului, cu culoarea, grosimea și tipul alese.
+- **Eticheta prețului:** pe axa prețului, în culoarea liniei, dacă e bifată.
+- **Textul**, dacă are, e desenat lângă linie:
+  - **vertical:** deasupra (Sus), pe linie (Mijloc, iar linia se întrerupe în dreptul lui) sau dedesubt (Jos);
+  - **orizontal:** la stânga, la mijloc sau la dreapta;
+  - cu culoarea, mărimea, îngroșat și cursiv alese;
+  - pe mai multe rânduri, dacă are.
+- **Ce se poate face cu o linie:**
+  - **cu mouse-ul pe ea:** cursorul devine o săgeată sus-jos;
+  - **tras în sus sau în jos:** se mută, iar prețul nou se salvează la eliberare; graficul nu se derulează cât tragi;
+  - **un click (fără tragere):** se deschide panoul ei de setări (§4), iar linia apare selectată (mai groasă) cât panoul e deschis.
+- **Unde apare:** pe graficul simbolului pe care a fost desenată (perechea, acțiunea sau indicele), pe toate intervalele permise de „Vizibilitate”. Se salvează în contul tău și apare pe orice dispozitiv.
+- Cel mult **50 de linii pe un simbol**. La limită, opțiunea din meniu e dezactivată și spune de ce, iar Alt+H nu mai adaugă nimic.
+
+### 4. Panoul de setări al liniei (un singur panou, fără tab-uri)
+Panoul lateral din dreapta, ca la indicatori, cu titlul „Linie orizontală” și secțiunile una sub alta:
+- **Linie:** culoarea (cu transparența păstrată), grosimea (1–4 px), tipul (continuă, liniuțe, puncte); **Eticheta prețului** (bifă).
+- **Text:**
+  - culoarea, mărimea (10, 11, 12, 14, 16, 20, 24, 28, 32, 40), **B** (îngroșat), *I* (cursiv);
+  - textul (pe mai multe rânduri, cel mult 500 de caractere);
+  - alinierea: verticală (Sus, Mijloc, Jos) și orizontală (Stânga, Centru, Dreapta).
+- **Preț:** prețul liniei, cu pasul zecimalelor graficului.
+- **Vizibilitate:** pentru fiecare unitate a intervalelor din Sentiq, o bifă și un interval „de la – până la”, ca în TradingView:
+  - Minute (1–59): 1m, 3m, 5m, 15m, 30m;
+  - Ore (1–24): 1h, 2h, 4h, 6h, 8h, 12h;
+  - Zile (1–366): 1d;
+  - Săptămâni (1–52): 1w.
+  Linia apare pe un interval doar dacă unitatea e bifată și numărul e în interval.
+- **Șablon** (trei butoane):
+  - **„Salvează ca șablon”:** stilul de acum (fără preț și fără text) devine cel al liniilor noi;
+  - **„Aplică șablonul”:** îl pune în formular;
+  - **„Stilul inițial”:** albastrul de la §2.
+- **Jos:** **Șterge linia**, **Anulează** (pune la loc ce era și închide), **Salvează**.
+- **Ce se schimbă se vede pe grafic pe loc** (previzualizare); se păstrează doar la „Salvează”. Esc sau ✕ fac ca „Anulează”.
+
+### 5. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Linia e în afara prețurilor vizibile | nu se vede (graficul nu se scalează după linii, ca în TradingView); eticheta ei de pe axă nu apare |
+| Prețul scris în panou e invalid (gol, negativ la o acțiune, nu e număr) | „Salvează” e dezactivat, cu motivul |
+| Interval „de la” mai mare decât „până la” sau în afara limitelor | „Salvează” e dezactivat, cu motivul |
+| Toate unitățile de vizibilitate debifate | linia nu apare pe niciun interval (permis, ca în TradingView); panoul spune asta |
+| Tragi linia până la marginea panoului | se oprește la margine |
+| Trageri pe telefon | atingerea unei linii deschide panoul; mutarea se face din câmpul de preț (tragerea pe ecranul tactil derulează graficul) |
+| Schimbi simbolul cu panoul deschis | panoul se închide, fără să salveze (linia e a celuilalt simbol) |
+| Schimbi intervalul cu panoul deschis | panoul rămâne; dacă linia nu e vizibilă pe noul interval, nu se vede pe grafic până o faci vizibilă |
+| Linia ștearsă din alt tab sau de pe alt dispozitiv | panoul se închide la următoarea citire a setărilor |
+| Ștergi linia | dispare de pe toate intervalele simbolului |
+| Salvarea eșuează (rețea) | liniile revin la cele de pe server, iar panoul arată eroarea |
+| Ecran complet | totul funcționează la fel, inclusiv panoul |
+| Linia trece prin dreptul etichetei prețului curent | etichetele de pe axă se așază una sub alta (biblioteca graficului le mută ca să nu se suprapună) |
+| Tema luminoasă | culorile liniilor rămân cele alese; textul „Mijloc” e pe fundalul graficului |
+
+### 6. Ce din TradingView nu e aici, și de ce
+- **Vizibilitatea pe Ticks, Secunde, Luni și Ranges:** Sentiq nu are aceste intervale.
+- **Redenumirea liniei (creionul de lângă titlu):** Sentiq nu are o listă de obiecte desenate unde numele să conteze.
+- **Celelalte opțiuni din meniul „+”** (alerte, ordine): nu au fost cerute.
+
+### 7. Conflicte cu ce exista
+- **FD-CHARTUX §1** („fără liniile cursorului”): liniile cursorului revin, la cererea de acum. Grila rămâne ascunsă.
+
+## FD-DENAMES — Numele Slingshot și LMA, cu „[DE]” (Dusty Enterprise) (19 oct 2026)
+
+**Cererea:** „pt indicatorul premium LMA ai folosit Title și short title, iar pentru Slingshot nu. Vreau să folosești și acolo, pentru că pe chart vreau să văd numele scurt pentru Slingshot așa cum era setat în script: [DE] Slingshot 3.3. DE e abrevierea pentru Dusty Enterprise. Și la LMA schimbi la fel, din DI în DE.”
+
+### 1. Numele
+| Indicator | Titlu (lista Indicatori, panoul de setări) | Nume scurt (legenda de pe grafic) |
+|---|---|---|
+| Slingshot | **[DE] Slingshot System 3.3** | **[DE] Slingshot 3.3** |
+| LMA | **[DE] Logarithmic Moving Average** | **[DE] LMA** |
+
+- În script, Slingshot are titlul „[Dusty Investments] Slingshot System Long 3.3” și numele scurt „[DI] SS LONG 3.3”. Numele scurt e cel cerut acum („[DE] Slingshot 3.3”), iar titlul urmează forma celui de la LMA: prefixul, apoi numele de până acum.
+- Versiunea din nume vine din aceeași constantă ca restul aplicației (3.3), deci se schimbă singură la o versiune nouă.
+- Legenda Slingshot de pe grafic arată numele scurt, apoi parametrii („38 62”) și butoanele, ca la LMA.
+
+### 2. Ce nu se schimbă
+- Titlul panoului „Semnale Slingshot 3.3 pe 1h” și subtitlurile din lista Indicatori („Slingshot · pe grafic”, „LMA · panou separat”).
+- Scripturile Pine originale și comentariile din cod care le citează numele.
+
+### 3. Conflicte cu ce exista
+- **FD-PICKERSORT §1** („[DI] Logarithmic Moving Average e la D, după Detrended”): cu „[DE]”, ambii indicatori Premium sunt tot la D, dar înainte de „Detrended Price Oscillator” („DE L…” și „DE S…” vin înainte de „Det…”).
+- **FD-CHARTUX §3 și FD-INDICATORS §1** („[DI] Logarithmic Moving Average”, „Slingshot System 3.3”): numele de mai sus le înlocuiesc.

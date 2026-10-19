@@ -48,7 +48,7 @@ export interface WatchItem {
 /** Twelve Data credits of the day (UTC) and of the last minute. */
 export type TdBudget = ReturnType<import('../server/market/stocks.ts').CreditBudget['status']>;
 
-/** GET /api/stocks/info */
+/** GET /api/stocks/info: the signed-in user's (FD-TDKEYS). */
 export interface StocksInfo {
   timeframes: import('../shared/time.ts').Timeframe[];
   hasKey: boolean;
@@ -77,15 +77,42 @@ export interface Health {
   now: number;
   jobs: import('../server/jobs/scheduler.ts').JobStatus[];
   sources: HealthSource[];
-  sentiment: { engine: string; model: import('../server/sentiment/local.ts').ModelStatus; pending: number; claude: import('../server/sentiment/claude.ts').ClaudeStatus | null };
+  /** `aiUsers`: users whose own AI scores the news too (FD-AIKEYS); `?`: a server from before it. */
+  sentiment: { engine: string; model: import('../server/sentiment/local.ts').ModelStatus; pending: number; aiUsers?: number };
   calendar: { ff: number | null; tv: number | null; earn: number | null; ffBlockedUntil: number | null };
   /** FD-AZURE §5: Azure SQL; the size is null when the database user may not read it. */
   db: { sizeBytes: number | null; maxSizeBytes?: number | null; server?: string; database?: string; edition?: string | null; objective?: string | null; news: number };
   /** TD-AZURE §6: the instance running the background jobs. */
   jobsLeader?: import('../server/jobs/scheduler.ts').JobsLeader;
-  twelveData: TdBudget & { hasKey: boolean };
-  /** FD-AICLARITY: what Sentiq itself spent on the Claude key today (UTC); `?`: a server from before it sends none. */
-  claudeUsage?: import('../server/sentiment/usage.ts').ClaudeUsageDay & { sentimentModel: string; summaryModel: string };
+  /** FD-TDKEYS: each user's own key; how many have one (`hasKey`… from a server before it). */
+  twelveData: { users?: number; hasKey?: boolean };
+}
+
+// ── FD-AIKEYS ─────────────────────────────────────────────────────────────────────────────────────────
+
+export type { AiModelList } from '../server/ai/service.ts';
+export type { AiUsageDay, UsageCounts } from '../server/ai/usage.ts';
+export type { AiScorerStatus } from '../server/sentiment/ai-scorer.ts';
+
+/** GET /api/ai/status: the user's own AI. */
+export interface AiStatus {
+  provider: import('./ai.ts').AiProvider;
+  model: string;
+  keySet: boolean;
+  /** The user chose their AI for the news scores (it works only with the key: `keySet`). */
+  scoring: boolean;
+  /** How the scoring goes (null when it is not on). */
+  scorer: import('../server/sentiment/ai-scorer.ts').AiScorerStatus | null;
+  usage: import('../server/ai/usage.ts').AiUsageDay;
+}
+
+/** GET / POST /api/summary. */
+export interface SummaryState {
+  summary: import('../server/summary/service.ts').StoredSummary | null;
+  hasKey: boolean;
+  /** The user's provider and model (a server from before FD-AIKEYS sends none). */
+  ai?: { provider: import('./ai.ts').AiProvider; model: string };
+  retryAt: number | null;
 }
 
 export interface CalendarResponse {
@@ -154,7 +181,10 @@ export interface AuthState {
 export interface TwoFactorView {
   enabled: boolean;
   confirmedAt: number | null;
+  /** A secret waiting for its first code: the enrolment's, or (with `replacing`) the new authenticator's. */
   pending: boolean;
+  /** FD-2FA §3: a change of authenticator started (the old one works until the new one is confirmed). */
+  replacing: boolean;
   secret: string | null;
   uri: string | null;
   qr: string | null;
@@ -177,3 +207,13 @@ export interface AccountInfo {
 }
 
 export type LoginResult = { status: 'ok'; user: PublicUser; usedRecoveryCode?: boolean } | { status: '2fa' };
+
+/** POST /api/auth/activate: signed in straight away (FD-2FA §1), unless the browser was in another account. */
+export type ActivateResult = { ok: true; email: string; signedIn: true; user: PublicUser } | { ok: true; email: string; signedIn: false };
+
+/** POST /api/account/2fa/enable: the recovery codes (shown once) and the account with two-factor on. */
+export interface TwoFactorEnabled {
+  codes: string[];
+  twoFactor: TwoFactorView;
+  user: PublicUser;
+}

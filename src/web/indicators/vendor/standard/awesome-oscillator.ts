@@ -1,0 +1,78 @@
+// @ts-nocheck
+/**
+ * Awesome Oscillator (AO) Indicator
+ *
+ * Measures market momentum using the difference between
+ * 5-period and 34-period simple moving averages of the median price.
+ */
+
+import { Series, ta, type IndicatorResult, type InputConfig, type PlotConfig, type Bar } from 'oakscriptjs';
+import { alertStates, crossedOver, crossedUnder, type AlertConditionDecl, type AlertConditionState } from '../alert-states';
+
+export type AwesomeOscillatorInputs = Record<string, never>;
+
+export const defaultInputs: AwesomeOscillatorInputs = {};
+
+export const inputConfig: InputConfig[] = [];
+
+export const plotConfig: PlotConfig[] = [
+  { id: 'plot0', title: 'AO', color: '#009688', lineWidth: 1, style: 'columns' },
+];
+
+export const metadata = {
+  title: 'Awesome Oscillator',
+  shortTitle: 'AO',
+  overlay: false,
+};
+
+/** Reference alertconditions: changeToGreen = ta.crossover(diff, 0), changeToRed = ta.crossunder(diff, 0) */
+export const alertConditions: AlertConditionDecl[] = [
+  { id: 'alert0', title: 'AO color changed to green', message: "Awesome Oscillator's color has changed to green" },
+  { id: 'alert1', title: 'AO color changed to red', message: "Awesome Oscillator's color has changed to red" },
+];
+
+export function calculate(bars: Bar[], _inputs: Partial<AwesomeOscillatorInputs> = {}): IndicatorResult & { alerts: AlertConditionState[] } {
+  // hl2 = (high + low) / 2
+  const high = new Series(bars, b => b.high);
+  const low = new Series(bars, b => b.low);
+  const hl2 = high.add(low).div(2);
+
+  // AO = SMA(hl2, 5) - SMA(hl2, 34)
+  const fastSma = ta.sma(hl2, 5);
+  const slowSma = ta.sma(hl2, 34);
+  const ao = fastSma.sub(slowSma);
+
+  const aoArr = ao.toArray();
+  const aoData = aoArr.map((value: number | null, i: number) => {
+    const v = value ?? NaN;
+    const prev = i > 0 ? (aoArr[i - 1] ?? NaN) : NaN;
+    const diff = v - prev;
+    const color = diff <= 0 ? '#F44336' : '#009688';
+    return { time: bars[i].time, value: v, color };
+  });
+
+  return {
+    metadata: {
+      title: metadata.title,
+      shorttitle: metadata.shortTitle,
+      overlay: metadata.overlay,
+    },
+    plots: {
+      'plot0': aoData,
+    },
+    // diff = ao - ao[1]
+    alerts: (() => {
+      const diff = aoArr.map((v: number | null, i: number) => (i > 0 ? (v ?? NaN) - (aoArr[i - 1] ?? NaN) : NaN));
+      return alertStates(alertConditions, bars, [crossedOver(diff, 0), crossedUnder(diff, 0)]);
+    })(),
+  };
+}
+
+export const AwesomeOscillator = {
+  calculate,
+  alertConditions,
+  metadata,
+  defaultInputs,
+  inputConfig,
+  plotConfig,
+};

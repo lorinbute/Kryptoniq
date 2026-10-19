@@ -1,6 +1,8 @@
-// Candlestick chart with the Slingshot overlay (TD §9.3) and the LMA pane below it (TD-CHARTUX).
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+// Candlestick chart with the Slingshot overlay (TD §9.3), the LMA pane (TD-CHARTUX) and any other indicator over the
+// candles or in its own pane below (TD-INDICATORS §8).
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from 'react';
 import { clsx } from 'clsx';
+import { ChevronsRight, Plus } from 'lucide-react';
 import {
   CandlestickSeries,
   ColorType,
@@ -17,21 +19,30 @@ import {
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
+import type { IndicatorResult } from 'oakscriptjs';
 import type { Candle, SlingshotResult } from '../../shared/indicator/slingshot.ts';
 import type { SlingshotParams } from '../../shared/indicator/params.ts';
 import { brightness, colorNew, hexToRgba, PINE_BLACK, PINE_GRAY, PINE_WHITE, rgbaCss, type LmaResult } from '../../shared/indicator/lma.ts';
 import type { LineStyleName, LmaParams } from '../../shared/indicator/lma-params.ts';
-import { CloudFill, EdgeLabel, GradientFill, HSegments, ShapeLabels, type Segment, type ShapeLabel } from './primitives.ts';
+import { toBars } from '../indicators/compute.ts';
+import type { StudyRuntime } from '../indicators/runtime.ts';
+import type { IndicatorRenderer, RenderableIndicator, RenderOptions } from '../indicators/vendor/render/index';
+import { CloudFill, EdgeLabel, GradientFill, HLines, HSegments, ShapeLabels, type Segment, type ShapeLabel } from './primitives.ts';
+import type { HLine } from '../../shared/hlines.ts';
+import { isMac } from '../components/CommandPalette.tsx';
 import { loadView, saveView } from './view-store.ts';
 import { THEME_EVENT, themeColors } from '../theme.ts';
 
 /** The chart's frame in the theme's colours (FD-THEME §1): the canvas does not read CSS by itself. */
 function frameOptions() {
   const c = themeColors();
+  // FD-HLINE §1: the cursor's lines, thin and dashed in the theme's quiet colour, with their labels on the axes.
+  const cursorLine = { visible: true, color: c.text, width: 1 as const, style: LineStyle.LargeDashed, labelVisible: true };
   return {
     layout: { background: { type: ColorType.Solid, color: c.background }, textColor: c.text, panes: { separatorColor: c.line, separatorHoverColor: c.lineStrong } },
     rightPriceScale: { borderColor: c.line },
     timeScale: { borderColor: c.line },
+    crosshair: { vertLine: cursorLine, horzLine: cursorLine },
   };
 }
 
@@ -46,6 +57,19 @@ export interface PriceLineSpec {
   axisLabelVisible?: boolean;
 }
 
+/** One indicator to draw (FD-INDICATORS §2): its result, with the style the user chose applied. */
+export interface StudyDraw {
+  uid: string;
+  /** Its own pane (a key of `paneOrder`), or null when it is drawn over the candles. */
+  paneKey: string | null;
+  entry: RenderableIndicator;
+  result: IndicatorResult;
+  options: RenderOptions;
+}
+
+/** Default height of an indicator pane, as a ratio to the price pane (the LMA's default: 25 % of two panes). */
+export const DEFAULT_PANE_FACTOR = 1 / 3;
+
 interface Props {
   candles: Candle[];
   result: SlingshotResult | null;
@@ -57,21 +81,45 @@ interface Props {
   viewKey: string;
   /** The LMA (null when hidden: no pane, normal candle colours). */
   lma: LmaResult | null;
-  /** Share of the height given to the LMA pane. */
-  lmaShare: number;
-  /** Called after the user drags the pane separator. */
-  onLmaShareChange?: (share: number) => void;
+  /** The panes below the price, in order: 'lma' and the uid of each indicator with a pane of its own. */
+  paneOrder: readonly string[];
+  /** Height of each of those panes, as a ratio to the price pane. */
+  paneFactors: Readonly<Record<string, number>>;
+  /** Called after the user drags a pane separator, with the panes whose height changed. */
+  onPaneFactors?: (changed: Record<string, number>) => void;
+  /** The indicators with a result to draw. */
+  studies: readonly StudyDraw[];
+  /** The indicator code (renderer); null until loaded. */
+  runtime: StudyRuntime | null;
   /** Drawn over the bottom-right corner of the price pane (e.g. the TP/SL table). */
   mainOverlay?: ReactNode;
-  /** The LMA pane's legend; `bar` is the bar under the cursor, or null. */
-  lmaLegend?: (bar: number | null) => ReactNode;
+  /** Legends by pane ('main' or a key of `paneOrder`); `bar` is the bar under the cursor, or null. */
+  legends: Readonly<Record<string, (bar: number | null) => ReactNode>>;
+  /** Times (ms) of the first and last visible bar, 300 ms after the view stops moving; only when given. */
+  onVisibleRange?: (range: { from: number; to: number }) => void;
   /** Height classes of the chart box (default 560 px). */
   className?: string;
+  /** Its height when it depends on the panes (FD-INDICATORS §2). */
+  style?: CSSProperties;
+  /** FD-HLINE: the horizontal lines shown now (the settings panel's preview already in), and the one being edited. */
+  hlines?: readonly HLine[];
+  selectedHLine?: string | null;
+  /** The "+" at the cursor and Alt+H add a line at that price; without it, neither shows. */
+  onAddHLine?: (price: number) => void;
+  /** Why no line can be added now (the limit reached), or null. */
+  hlineBlocked?: string | null;
+  /** A line dragged to a new price (on release). */
+  onMoveHLine?: (id: string, price: number) => void;
+  /** A line clicked (or tapped): its settings. */
+  onOpenHLine?: (id: string) => void;
 }
 
+/** The "go to the latest candle" button (FD-GOLATEST), px. */
+const LATEST_SIZE = 32;
+
 interface Boxes {
-  main: { top: number; height: number } | null;
-  lma: { top: number; height: number } | null;
+  /** Each pane's row: 'main' and the keys of `paneOrder`. */
+  panes: Record<string, { top: number; height: number }>;
   /** Width of the drawing area (without the price scale). */
   plotWidth: number;
 }
@@ -87,7 +135,6 @@ export function lmaHlines(e: LmaParams): { key: 'long' | 'short' | 'neutral'; pr
     { key: 'neutral', price: 0, color: PINE_GRAY, width: 2, style: e.neutralLineStyle, visible: e.showNeutralLine },
   ];
 }
-const clampShare = (v: number) => Math.min(0.7, Math.max(0.1, v));
 
 function tzFormatter(tz: string, opts: Intl.DateTimeFormatOptions) {
   const f = new Intl.DateTimeFormat('ro-RO', { timeZone: tz, hourCycle: 'h23', ...opts });
@@ -120,24 +167,139 @@ export function buildSegments(r: SlingshotResult, p: SlingshotParams, precision:
   return out;
 }
 
-/** Share of the height held by the LMA pane, or null when there is no second pane. */
-function lmaShareOf(chart: IChartApi): number | null {
+/** Height of each pane below the price as a ratio to the price pane, by key (TD-INDICATORS §8). */
+function factorsOf(chart: IChartApi, order: readonly string[]): Record<string, number> {
   const panes = chart.panes();
-  if (panes.length < 2) return null;
-  const a = (panes[0] as (typeof panes)[number]).getStretchFactor();
-  const b = (panes[1] as (typeof panes)[number]).getStretchFactor();
-  return a + b > 0 ? b / (a + b) : null;
+  const base = panes[0]?.getStretchFactor() ?? 1;
+  const out: Record<string, number> = {};
+  if (!(base > 0)) return out;
+  order.forEach((key, i) => {
+    const p = panes[i + 1];
+    if (p) out[key] = p.getStretchFactor() / base;
+  });
+  return out;
 }
 
-function applyLmaShare(chart: IChartApi, share: number): void {
+function applyFactors(chart: IChartApi, order: readonly string[], factors: Readonly<Record<string, number>>): void {
   const panes = chart.panes();
-  if (panes.length < 2) return;
-  panes[0]?.setStretchFactor(1 - share);
-  panes[1]?.setStretchFactor(share);
+  panes[0]?.setStretchFactor(1);
+  order.forEach((key, i) => panes[i + 1]?.setStretchFactor(factors[key] ?? DEFAULT_PANE_FACTOR));
 }
 
-/** The LMA legend follows the cursor; its own state keeps mouse moves from re-rendering the page. */
-function HoverLegend({ chart, count, render }: { chart: IChartApi | null; count: number; render: (bar: number | null) => ReactNode }) {
+/** FD-HLINE §2: the "+" at the cursor's price on the price pane, and its menu. Its own state, as the legends'. */
+function HLinePlus({
+  chart,
+  series,
+  main,
+  plotWidth,
+  precision,
+  blocked,
+  onAdd,
+  cursor,
+}: {
+  chart: IChartApi | null;
+  series: ISeriesApi<'Candlestick'> | null;
+  main: { top: number; height: number };
+  plotWidth: number;
+  precision: number;
+  blocked: string | null;
+  onAdd: (price: number) => void;
+  /** The cursor's last place on the price pane (read by Alt+H), null when it is elsewhere. */
+  cursor: MutableRefObject<{ y: number; price: number } | null>;
+}) {
+  const [at, setAt] = useState<{ y: number; price: number } | null>(null);
+  const [menu, setMenu] = useState(false);
+  const [hover, setHover] = useState(false);
+  const hold = useRef(false);
+  hold.current = menu || hover;
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!chart || !series) return;
+    let hide: ReturnType<typeof setTimeout> | null = null;
+    const onMove = (p: MouseEventParams<Time>) => {
+      const price = p.point && p.paneIndex === 0 ? series.coordinateToPrice(p.point.y) : null;
+      cursor.current = p.point && price !== null ? { y: p.point.y, price } : null;
+      if (hide !== null) clearTimeout(hide);
+      hide = null;
+      // On the button or its menu the cursor left the chart: the button stays where it was.
+      if (hold.current) return;
+      if (cursor.current) setAt(cursor.current);
+      // Moving onto the button, the chart tells "left" before the button tells "entered": hide a moment later.
+      else hide = setTimeout(() => !hold.current && setAt(null), 150);
+    };
+    chart.subscribeCrosshairMove(onMove);
+    return () => {
+      if (hide !== null) clearTimeout(hide);
+      chart.unsubscribeCrosshairMove(onMove);
+    };
+  }, [chart, series, cursor]);
+  // Off the button, with its menu closed and the cursor not on the price pane: it goes.
+  useEffect(() => {
+    if (!menu && !hover && !cursor.current) setAt(null);
+  }, [menu, hover, cursor]);
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as Node)) setMenu(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMenu(false);
+      }
+    };
+    document.addEventListener('pointerdown', onDown);
+    // Before the settings panel's own Esc (which would close it and drop its edits): only the menu closes.
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [menu]);
+  if (!at || at.y < 0 || at.y > main.height) return null;
+  const price = Number(at.price.toFixed(precision));
+  const label = price.toFixed(precision);
+  return (
+    <div ref={box} className="absolute z-20" style={{ top: main.top + at.y - 11, left: plotWidth - 26 }} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      <button
+        type="button"
+        aria-label={`Adaugă la ${label}`}
+        aria-haspopup="menu"
+        aria-expanded={menu}
+        title={`Adaugă la ${label}`}
+        onClick={() => setMenu((m) => !m)}
+        className="grid size-[22px] place-items-center rounded-full border border-line-strong bg-panel text-muted shadow-sm transition-colors hover:border-accent hover:text-accent"
+      >
+        <Plus size={14} aria-hidden />
+      </button>
+      {menu && (
+        <div role="menu" className="absolute top-7 right-0 w-max min-w-[240px] rounded-xl border border-line-strong bg-panel-2 py-1.5 shadow-pop">
+          <button
+            type="button"
+            role="menuitem"
+            disabled={blocked !== null}
+            title={blocked ?? undefined}
+            onClick={() => {
+              setMenu(false);
+              setHover(false);
+              onAdd(price);
+            }}
+            className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[13px] text-text transition-colors hover:bg-hover disabled:cursor-default disabled:text-faint disabled:hover:bg-transparent"
+          >
+            <span className="flex-1">
+              Linie orizontală la <span className="num">{label}</span>
+            </span>
+            <kbd className="num text-[11.5px] text-faint">{isMac() ? '⌥H' : 'Alt+H'}</kbd>
+          </button>
+          {blocked && <p className="max-w-[260px] px-3.5 pb-1 text-[12px] text-warn">{blocked}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The legends follow the cursor; their own state keeps mouse moves from re-rendering the chart or the page. */
+function Legends({ chart, count, boxes, legends, place }: { chart: IChartApi | null; count: number; boxes: Boxes; legends: Props['legends']; place: (b: { top: number; height: number }) => CSSProperties }) {
   const [bar, setBar] = useState<number | null>(null);
   useEffect(() => {
     if (!chart) return;
@@ -148,10 +310,47 @@ function HoverLegend({ chart, count, render }: { chart: IChartApi | null; count:
     chart.subscribeCrosshairMove(onMove);
     return () => chart.unsubscribeCrosshairMove(onMove);
   }, [chart]);
-  return <>{render(bar !== null && bar >= 0 && bar < count ? bar : null)}</>;
+  const hovered = bar !== null && bar >= 0 && bar < count ? bar : null;
+  return (
+    <>
+      {Object.entries(legends).map(([key, render]) => {
+        const b = boxes.panes[key];
+        return b ? (
+          <div key={key} className="pointer-events-none absolute" style={place(b)}>
+            {render(hovered)}
+          </div>
+        ) : null;
+      })}
+    </>
+  );
 }
 
-export function CandleChart({ candles, result, params, precision, tz, priceLines, viewKey, lma, lmaShare, onLmaShareChange, mainOverlay, lmaLegend, className }: Props) {
+export function CandleChart({
+  candles,
+  result,
+  params,
+  precision,
+  tz,
+  priceLines,
+  viewKey,
+  lma,
+  paneOrder,
+  paneFactors,
+  onPaneFactors,
+  studies,
+  runtime,
+  mainOverlay,
+  legends,
+  onVisibleRange,
+  className,
+  style,
+  hlines,
+  selectedHLine = null,
+  onAddHLine,
+  hlineBlocked = null,
+  onMoveHLine,
+  onOpenHLine,
+}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [chartApi, setChartApi] = useState<IChartApi | null>(null);
@@ -162,20 +361,39 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
     markers: ShapeLabels;
     cloud: CloudFill;
     segments: HSegments;
+    hlines: HLines;
     lines: IPriceLine[];
   } | null>(null);
   const lmaRef = useRef<{ series: ISeriesApi<'Line'>; fill: GradientFill; label: EdgeLabel; lines: IPriceLine[] } | null>(null);
+  /** One renderer per indicator drawn, by uid. */
+  const renderers = useRef(new Map<string, IndicatorRenderer>());
   /** Values the LMA pane must show (the visible hlines), read by its autoscale. */
   const hlineValues = useRef<number[]>([0.5, -0.5, 0]);
   /** The key whose data is on screen (its view is the one being remembered). */
   const lastKey = useRef<string>('');
   const prevLength = useRef(0);
-  const shareRef = useRef(lmaShare);
-  shareRef.current = lmaShare;
-  const onShareRef = useRef(onLmaShareChange);
-  onShareRef.current = onLmaShareChange;
+  /** Bumped when the view is set by code (a remembered one, the default): an older correction must not undo it. */
+  const viewEpoch = useRef(0);
+  /** Time of the last candle on screen: the remembered view is measured from it. */
+  const shownLast = useRef<UTCTimestamp | null>(null);
+  const layoutKey = paneOrder.join('|');
+  const orderRef = useRef<readonly string[]>(paneOrder);
+  orderRef.current = paneOrder;
+  const factorsRef = useRef(paneFactors);
+  factorsRef.current = paneFactors;
+  const onFactorsRef = useRef(onPaneFactors);
+  onFactorsRef.current = onPaneFactors;
+  const onVisibleRef = useRef(onVisibleRange);
+  onVisibleRef.current = onVisibleRange;
+  const candlesRef = useRef(candles);
+  candlesRef.current = candles;
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [boxes, setBoxes] = useState<Boxes>({ main: null, lma: null, plotWidth: 0 });
+  const rangeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [boxes, setBoxes] = useState<Boxes>({ panes: {}, plotWidth: 0 });
+  /** The latest candle is right of the view (scrolled back): the "go to the latest candle" button shows (FD-GOLATEST). */
+  const [behind, setBehind] = useState(false);
+  /** Bumped each time the panes below the price are built again: what lives in them is drawn again. */
+  const [layoutTick, setLayoutTick] = useState(0);
   const showLma = lma !== null;
 
   /** Remembers the current zoom / position of the key on screen. */
@@ -187,10 +405,25 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
     const chart = chartRef.current;
     if (!chart || !lastKey.current) return;
     const ts = chart.timeScale();
-    saveView(lastKey.current, { barSpacing: ts.options().barSpacing, scroll: ts.scrollPosition() });
+    // Bars between the last candle and the right edge; not the time scale's own last point, which an indicator drawing
+    // ahead of the candles (Ichimoku) moves.
+    const r = ts.getVisibleLogicalRange();
+    const li = shownLast.current !== null ? ts.timeToIndex(shownLast.current, true) : null;
+    saveView(lastKey.current, { barSpacing: ts.options().barSpacing, scroll: r && li !== null ? r.to - li : ts.scrollPosition() });
   };
   const flushViewRef = useRef(flushView);
   flushViewRef.current = flushView;
+  /** Whether the latest candle is past the right edge (its centre outside the view). */
+  const checkBehind = () => {
+    const chart = chartRef.current;
+    if (!chart || shownLast.current === null) return setBehind(false);
+    const ts = chart.timeScale();
+    const r = ts.getVisibleLogicalRange();
+    const li = ts.timeToIndex(shownLast.current, true);
+    setBehind(r !== null && li !== null && r.to < li);
+  };
+  const checkBehindRef = useRef(checkBehind);
+  checkBehindRef.current = checkBehind;
 
   // Create the chart once.
   useEffect(() => {
@@ -207,11 +440,13 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
         attributionLogo: false,
         panes: { ...frame.layout.panes, enableResize: true },
       },
-      // FD-CHARTUX: no grid, no crosshair lines (the axis labels stay).
+      // FD-CHARTUX: no grid; FD-HLINE §1: the cursor's dashed lines (in `frameOptions`).
       grid: { vertLines: { visible: false }, horzLines: { visible: false } },
-      crosshair: { mode: CrosshairMode.Normal, vertLine: { visible: false, labelVisible: true }, horzLine: { visible: false, labelVisible: true } },
+      crosshair: { mode: CrosshairMode.Normal, ...frame.crosshair },
       rightPriceScale: frame.rightPriceScale,
-      timeScale: { ...frame.timeScale, timeVisible: true, secondsVisible: false, rightOffset: 24 },
+      // New bars keep the view glued to the right edge by the code below (data effect), not by the library: its own shift
+      // also fires for the points an indicator draws ahead of the candles (Ichimoku) and moved the view off them.
+      timeScale: { ...frame.timeScale, timeVisible: true, secondsVisible: false, rightOffset: 24, shiftVisibleRangeOnNewBar: false },
     });
     // The theme switched: recolour the frame in place (the zoom stays).
     const onTheme = () => chart.applyOptions(frameOptions());
@@ -234,21 +469,43 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
     candle.attachPrimitive(cloud);
     candle.attachPrimitive(segments);
     candle.attachPrimitive(markers);
+    // FD-HLINE: the user's horizontal lines, over everything else on the price pane.
+    const hl = new HLines();
+    candle.attachPrimitive(hl);
     chartRef.current = chart;
-    seriesRef.current = { candle, fast, slow, markers, cloud, segments, lines: [] };
+    seriesRef.current = { candle, fast, slow, markers, cloud, segments, hlines: hl, lines: [] };
 
-    // Zoom / scroll: remembered 400 ms after the last change.
+    // Zoom / scroll: remembered 400 ms after the last change; the visible bars reported 300 ms after it.
     const onRange = () => {
+      checkBehindRef.current();
       if (saveTimer.current !== null) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => flushViewRef.current(), 400);
+      if (onVisibleRef.current) {
+        if (rangeTimer.current !== null) clearTimeout(rangeTimer.current);
+        rangeTimer.current = setTimeout(() => {
+          const r = chart.timeScale().getVisibleLogicalRange();
+          const cs = candlesRef.current;
+          if (!r || cs.length === 0) return;
+          const from = cs[Math.min(cs.length - 1, Math.max(0, Math.ceil(r.from)))]?.t;
+          const to = cs[Math.min(cs.length - 1, Math.max(0, Math.floor(r.to)))]?.t;
+          if (from !== undefined && to !== undefined) onVisibleRef.current?.({ from, to });
+        }, 300);
+      }
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
-    // The pane separator was dragged: remember the new height.
-    const checkShare = () => {
-      const share = lmaShareOf(chart);
-      if (share !== null && Math.abs(share - shareRef.current) > 0.01) onShareRef.current?.(clampShare(share));
+    // A pane separator was dragged: remember the heights that changed.
+    const checkFactors = () => {
+      const order = orderRef.current;
+      const now = factorsOf(chart, order);
+      const changed: Record<string, number> = {};
+      for (const key of order) {
+        const f = now[key];
+        const was = factorsRef.current[key] ?? DEFAULT_PANE_FACTOR;
+        if (f !== undefined && Math.abs(f - was) > 0.01 * Math.max(was, 0.05)) changed[key] = f;
+      }
+      if (Object.keys(changed).length) onFactorsRef.current?.(changed);
     };
-    const onUp = () => requestAnimationFrame(checkShare);
+    const onUp = () => requestAnimationFrame(checkFactors);
     el.addEventListener('pointerup', onUp);
     el.addEventListener('touchend', onUp);
     setChartApi(chart);
@@ -257,8 +514,12 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
       el.removeEventListener('pointerup', onUp);
       el.removeEventListener('touchend', onUp);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
+      if (rangeTimer.current !== null) clearTimeout(rangeTimer.current);
       flushViewRef.current();
-      checkShare();
+      checkFactors();
+      // Their table overlays, observers and frames go before the chart does.
+      for (const r of renderers.current.values()) r.clear();
+      renderers.current.clear();
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -266,52 +527,65 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
     };
   }, []);
 
-  // The LMA pane exists only while the LMA is shown.
+  // The panes below the price, built again in order when the list changes (TD-INDICATORS §8): the LMA, then each
+  // indicator with a pane of its own. Everything in them is drawn again after (layoutTick).
   useEffect(() => {
     const chart = chartApi;
-    if (!chart || !showLma) return;
-    const series = chart.addSeries(
-      LineSeries,
-      {
-        lineWidth: 3,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        crosshairMarkerVisible: true,
-        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-        // Like hline() in TradingView, the thresholds and 0 always fit in the pane.
-        autoscaleInfoProvider: (original: () => AutoscaleInfo | null): AutoscaleInfo | null => {
-          const base = original();
-          const vals = hlineValues.current;
-          if (!base && vals.length === 0) return null;
-          const min = Math.min(...vals, base?.priceRange?.minValue ?? Infinity);
-          const max = Math.max(...vals, base?.priceRange?.maxValue ?? -Infinity);
-          return { priceRange: { minValue: min, maxValue: max }, margins: base?.margins };
-        },
-      },
-      1,
-    );
-    const fill = new GradientFill();
-    const label = new EdgeLabel();
-    series.attachPrimitive(fill);
-    series.attachPrimitive(label);
-    lmaRef.current = { series, fill, label, lines: [] };
-    applyLmaShare(chart, shareRef.current);
-    return () => {
+    if (!chart) return;
+    const order = layoutKey ? layoutKey.split('|') : [];
+    for (const r of renderers.current.values()) r.clear();
+    renderers.current.clear();
+    if (lmaRef.current) {
+      chart.removeSeries(lmaRef.current.series);
       lmaRef.current = null;
-      // On unmount the chart is already gone.
-      if (chartRef.current === chart) chart.removeSeries(series);
-    };
-  }, [chartApi, showLma]);
+    }
+    for (let i = chart.panes().length - 1; i >= 1; i--) chart.removePane(i);
+    for (const key of order) {
+      // Kept while empty: an indicator without a result (an error, data still loading) keeps its pane and legend.
+      const pane = chart.addPane(true);
+      if (key !== 'lma') continue;
+      const series = chart.addSeries(
+        LineSeries,
+        {
+          lineWidth: 3,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          crosshairMarkerVisible: true,
+          priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+          // Like hline() in TradingView, the thresholds and 0 always fit in the pane.
+          autoscaleInfoProvider: (original: () => AutoscaleInfo | null): AutoscaleInfo | null => {
+            const base = original();
+            const vals = hlineValues.current;
+            if (!base && vals.length === 0) return null;
+            const min = Math.min(...vals, base?.priceRange?.minValue ?? Infinity);
+            const max = Math.max(...vals, base?.priceRange?.maxValue ?? -Infinity);
+            return { priceRange: { minValue: min, maxValue: max }, margins: base?.margins };
+          },
+        },
+        pane.paneIndex(),
+      );
+      const fill = new GradientFill();
+      const label = new EdgeLabel();
+      series.attachPrimitive(fill);
+      series.attachPrimitive(label);
+      lmaRef.current = { series, fill, label, lines: [] };
+    }
+    applyFactors(chart, order, factorsRef.current);
+    setLayoutTick((t) => t + 1);
+  }, [chartApi, layoutKey]);
 
   // A height saved elsewhere (or restored) is applied unless it is what is already shown.
+  const factorsKey = paneOrder.map((k) => `${k}:${paneFactors[k] ?? ''}`).join('|');
   useEffect(() => {
     const chart = chartApi;
-    if (!chart || !showLma) return;
-    const cur = lmaShareOf(chart);
-    if (cur === null || Math.abs(cur - lmaShare) > 0.01) applyLmaShare(chart, lmaShare);
-  }, [chartApi, showLma, lmaShare]);
+    if (!chart) return;
+    const order = orderRef.current;
+    const now = factorsOf(chart, order);
+    const off = order.some((k) => Math.abs((now[k] ?? 0) - (factorsRef.current[k] ?? DEFAULT_PANE_FACTOR)) > 0.01);
+    if (off) applyFactors(chart, order, factorsRef.current);
+  }, [chartApi, layoutTick, factorsKey]);
 
-  // Where each pane is, for the HTML overlays.
+  // Where each pane is, for the HTML overlays (legends, the TP/SL table).
   useEffect(() => {
     const chart = chartApi;
     const el = host.current;
@@ -322,12 +596,15 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
         const r = chart.panes()[i]?.getHTMLElement()?.getBoundingClientRect();
         return r ? { top: r.top - base.top, height: r.height } : null;
       };
-      const next: Boxes = { main: row(0), lma: showLma ? row(1) : null, plotWidth: Math.max(0, base.width - chart.priceScale('right').width()) };
-      setBoxes((prev) =>
-        prev.plotWidth === next.plotWidth && prev.main?.top === next.main?.top && prev.main?.height === next.main?.height && prev.lma?.top === next.lma?.top && prev.lma?.height === next.lma?.height
-          ? prev
-          : next,
-      );
+      const panes: Boxes['panes'] = {};
+      const main = row(0);
+      if (main) panes.main = main;
+      orderRef.current.forEach((key, i) => {
+        const r = row(i + 1);
+        if (r) panes[key] = r;
+      });
+      const next: Boxes = { panes, plotWidth: Math.max(0, base.width - chart.priceScale('right').width()) };
+      setBoxes((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
     };
     const ro = new ResizeObserver(() => measure());
     ro.observe(el);
@@ -337,8 +614,8 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
     // The pane rows appear a frame after the series is added.
     const raf = requestAnimationFrame(() => {
       for (const p of chart.panes()) {
-        const row = p.getHTMLElement();
-        if (row) ro.observe(row);
+        const r = p.getHTMLElement();
+        if (r) ro.observe(r);
       }
       measure();
     });
@@ -348,7 +625,7 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
       ro.disconnect();
       if (chartRef.current === chart) chart.timeScale().unsubscribeSizeChange(onPlotSize);
     };
-  }, [chartApi, showLma]);
+  }, [chartApi, layoutTick]);
 
   // Time axis and crosshair labels in the user's time zone.
   useEffect(() => {
@@ -379,6 +656,9 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
     const prevLen = prevLength.current;
     // Like TradingView: when the last bar is on screen, new bars keep the view glued to the right edge.
     const followRight = before !== null && prevLen > 0 && before.to >= prevLen - 1;
+    // Another pair or timeframe: the view being left is remembered while its candles are still on screen.
+    const switching = lastKey.current !== viewKey;
+    if (switching) flushViewRef.current();
     // Pine barcolor(colorBars ? …) and its Style-tab switch "LMA Signal Bar Colors".
     const barColors = lma && lma.effective.colorBars && lma.effective.showBarColors ? lma.color.map(rgbaCss) : null;
     s.candle.setData(
@@ -390,6 +670,7 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
       }),
     );
     prevLength.current = candles.length;
+    shownLast.current = candles.length ? toTime((candles.at(-1) as Candle).t) : null;
     const r = result;
     if (r) {
       const up = params.longTPColor;
@@ -435,22 +716,52 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
           : null,
       );
     }
-    if (lastKey.current !== viewKey) {
-      // Remember the view being left, then show the new key's remembered view (or the last 180 bars).
-      flushViewRef.current();
+    if (switching) {
+      // Show the new key's remembered view (or the last 180 bars).
       lastKey.current = viewKey;
       const saved = loadView(viewKey);
-      if (saved) {
-        ts.applyOptions({ barSpacing: saved.barSpacing });
-        ts.scrollToPosition(saved.scroll, false);
-      } else {
-        ts.setVisibleLogicalRange({ from: Math.max(0, candles.length - 180), to: candles.length + 20 });
+      const n = candles.length;
+      const applyView = () => {
+        viewEpoch.current++;
+        if (saved) {
+          ts.applyOptions({ barSpacing: saved.barSpacing });
+          // scrollToPosition counts from the time scale's last point; points an indicator still draws ahead of the
+          // candles (the pair left) are taken off.
+          const range = ts.getVisibleLogicalRange();
+          const li = shownLast.current !== null ? ts.timeToIndex(shownLast.current, true) : null;
+          const ahead = range && li !== null ? Math.max(0, range.to - ts.scrollPosition() - li) : 0;
+          ts.scrollToPosition(saved.scroll - ahead, false);
+        } else {
+          ts.setVisibleLogicalRange({ from: Math.max(0, n - 180), to: n + 20 });
+        }
+      };
+      // The library applies its own options (rightOffset, the bar spacing) on its next frame, over a view set now, and
+      // ignores a view before it has a size: the view is set after that frame, once the chart has its width.
+      const later = () => {
+        if (chartRef.current !== chart || lastKey.current !== viewKey) return;
+        if (ts.width() > 0) {
+          applyView();
+          return;
+        }
+        const once = () => {
+          ts.unsubscribeSizeChange(once);
+          if (chartRef.current === chart && lastKey.current === viewKey) requestAnimationFrame(applyView);
+        };
+        ts.subscribeSizeChange(once);
+      };
+      viewEpoch.current++;
+      requestAnimationFrame(later);
+      // The new key's view comes a frame later (its range change checks again): no button from the old view meanwhile.
+      setBehind(false);
+    } else {
+      if (followRight && before && candles.length > prevLen) {
+        const added = candles.length - prevLen;
+        ts.setVisibleLogicalRange({ from: before.from + added, to: before.to + added });
       }
-    } else if (followRight && before && candles.length > prevLen) {
-      const added = candles.length - prevLen;
-      ts.setVisibleLogicalRange({ from: before.from + added, to: before.to + added });
+      // New candles without a scroll: whether the latest one is still in view.
+      checkBehindRef.current();
     }
-  }, [chartApi, candles, result, params, precision, viewKey, lma, showLma]);
+  }, [chartApi, candles, result, params, precision, viewKey, lma, showLma, layoutTick]);
 
   // LMA thresholds and the 0 line (Pine hline), as shown / styled in the Style group.
   const e = lma?.effective;
@@ -465,7 +776,7 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
     hlineValues.current = lines.map((h) => h.price);
     l.lines = lines.map((h) => l.series.createPriceLine({ price: h.price, color: h.color, lineWidth: h.width, lineStyle: LINE_STYLE[h.style], axisLabelVisible: false, title: '' }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartApi, showLma, linesKey]);
+  }, [chartApi, showLma, linesKey, layoutTick]);
 
   // The signal line itself (Style: "LMA Signal" on/off and its width).
   const signalKey = e ? `${e.showSignal}|${e.signalWidth}` : '';
@@ -474,7 +785,57 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
     if (!l || !e) return;
     l.series.applyOptions({ lineVisible: e.showSignal, lastValueVisible: e.showSignal, crosshairMarkerVisible: e.showSignal, lineWidth: e.signalWidth as 1 | 2 | 3 | 4 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartApi, showLma, signalKey]);
+  }, [chartApi, showLma, signalKey, layoutTick]);
+
+  // The other indicators (TD-INDICATORS §8): one renderer each; a live update keeps their series.
+  const bars = useMemo(() => toBars(candles), [candles]);
+  const drawnTick = useRef(-1);
+  useEffect(() => {
+    const chart = chartApi;
+    const s = seriesRef.current;
+    if (!chart || !s || !runtime) return;
+    const fresh = drawnTick.current !== layoutTick;
+    drawnTick.current = layoutTick;
+    const order = orderRef.current;
+    const keep = new Set<string>();
+    // Points an indicator draws ahead of the last candle (Ichimoku's clouds, 26 bars) lengthen the time scale, and the
+    // library then moves the view off the candles it showed: the view is kept where it was relative to the last candle.
+    const ts = chart.timeScale();
+    const lastTime = candles.length ? toTime((candles.at(-1) as Candle).t) : null;
+    const viewBefore = ts.getVisibleLogicalRange();
+    const lastBefore = lastTime !== null ? ts.timeToIndex(lastTime, true) : null;
+    const epoch = viewEpoch.current;
+    for (const d of studies) {
+      const paneIndex = d.paneKey === null ? 0 : order.indexOf(d.paneKey) + 1;
+      if (d.paneKey !== null && paneIndex === 0) continue;
+      keep.add(d.uid);
+      let r = renderers.current.get(d.uid);
+      const created = !r;
+      if (!r) {
+        r = new runtime.IndicatorRenderer(chart, { paneIndex: paneIndex || 1, mainSeries: s.candle });
+        renderers.current.set(d.uid, r);
+      } else if (paneIndex > 0) r.setPaneIndex(paneIndex);
+      r.render(d.entry, d.result, bars, { ...d.options, reuseSeries: !fresh && !created });
+    }
+    for (const [uid, r] of [...renderers.current]) {
+      if (keep.has(uid)) continue;
+      r.clear();
+      renderers.current.delete(uid);
+    }
+    if (!viewBefore || lastTime === null || lastBefore === null) return;
+    const keepView = () => {
+      if (viewEpoch.current !== epoch) return;
+      const now = ts.getVisibleLogicalRange();
+      const lastNow = ts.timeToIndex(lastTime, true);
+      if (!now || lastNow === null) return;
+      const shift = lastNow - lastBefore;
+      if (Math.abs(now.from - (viewBefore.from + shift)) > 0.5 || Math.abs(now.to - (viewBefore.to + shift)) > 0.5) ts.setVisibleLogicalRange({ from: viewBefore.from + shift, to: viewBefore.to + shift });
+    };
+    keepView();
+    // The library settles the time scale on its next frame too.
+    const raf = requestAnimationFrame(keepView);
+    return () => cancelAnimationFrame(raf);
+  }, [chartApi, runtime, studies, bars, candles, layoutTick]);
 
   // Positions / orders as price lines.
   useEffect(() => {
@@ -496,20 +857,160 @@ export function CandleChart({ candles, result, params, precision, tz, priceLines
       );
   }, [chartApi, priceLines]);
 
+  // FD-HLINE §3: the user's lines. While one is dragged its price is the pointer's; after the drop it stays there until
+  // the lines given change (the saved price arrives, or a failed save brings the server's back).
+  const hlineState = useRef({ lines: [] as readonly HLine[], selected: null as string | null, precision: 2 });
+  hlineState.current = { lines: hlines ?? [], selected: selectedHLine, precision };
+  const drag = useRef<{ id: string; price: number; dropped: readonly HLine[] | null } | null>(null);
+  const drawHLines = () => {
+    const s = seriesRef.current;
+    if (!s) return;
+    const d = drag.current;
+    const st = hlineState.current;
+    s.hlines.setData(
+      st.lines.map((l) => (d && l.id === d.id ? { ...l, price: d.price } : l)),
+      d?.id ?? st.selected,
+      st.precision,
+    );
+  };
+  const drawHLinesRef = useRef(drawHLines);
+  drawHLinesRef.current = drawHLines;
+  useEffect(() => {
+    const d = drag.current;
+    if (d?.dropped && d.dropped !== hlines) drag.current = null;
+    drawHLinesRef.current();
+  }, [chartApi, hlines, selectedHLine, precision]);
+  const boxesRef = useRef(boxes);
+  boxesRef.current = boxes;
+  const hlineHandlers = useRef({ onMoveHLine, onOpenHLine, onAddHLine, hlineBlocked });
+  hlineHandlers.current = { onMoveHLine, onOpenHLine, onAddHLine, hlineBlocked };
+  /** Where the cursor is on the price pane (kept by the "+"), for Alt+H. */
+  const plusCursor = useRef<{ y: number; price: number } | null>(null);
+
+  // Dragging a line (mouse / pen) or tapping it (touch). Caught before the chart sees the press, so it does not scroll.
+  useEffect(() => {
+    const el = host.current;
+    if (!chartApi || !el) return;
+    let active: { id: string; startY: number; moved: boolean; touch: boolean; pointerId: number } | null = null;
+    const local = (e: PointerEvent) => {
+      const r = el.getBoundingClientRect();
+      return { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!active || e.pointerId !== active.pointerId) return;
+      const { y } = local(e);
+      if (!active.moved && Math.abs(y - active.startY) < (active.touch ? 10 : 3)) return;
+      active.moved = true;
+      // A finger moving scrolls the chart (it was not stopped): no drag on touch.
+      if (active.touch) return;
+      const s = seriesRef.current;
+      const main = boxesRef.current.panes.main;
+      if (!s || !main) return;
+      const price = s.candle.coordinateToPrice(Math.min(main.height, Math.max(0, y - main.top)));
+      if (price === null) return;
+      drag.current = { id: active.id, price: Number(price.toFixed(hlineState.current.precision)), dropped: null };
+      drawHLinesRef.current();
+    };
+    const stop = () => {
+      window.removeEventListener('pointermove', onMove, true);
+      window.removeEventListener('pointerup', onUp, true);
+      window.removeEventListener('pointercancel', onCancel, true);
+      el.style.cursor = '';
+    };
+    const onUp = (e: PointerEvent) => {
+      if (!active || e.pointerId !== active.pointerId) return;
+      const a = active;
+      active = null;
+      stop();
+      const d = drag.current;
+      if (a.moved && d && !a.touch) {
+        drag.current = { ...d, dropped: hlineState.current.lines };
+        hlineHandlers.current.onMoveHLine?.(a.id, d.price);
+      } else if (!a.moved) {
+        drag.current = null;
+        hlineHandlers.current.onOpenHLine?.(a.id);
+      }
+      drawHLinesRef.current();
+    };
+    const onCancel = () => {
+      active = null;
+      drag.current = null;
+      stop();
+      drawHLinesRef.current();
+    };
+    const onDown = (e: PointerEvent) => {
+      const s = seriesRef.current;
+      const main = boxesRef.current.panes.main;
+      const h = hlineHandlers.current;
+      if (active || !s || !main || (!h.onMoveHLine && !h.onOpenHLine) || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      const { x, y } = local(e);
+      if (x < 0 || x > boxesRef.current.plotWidth || y < main.top || y > main.top + main.height) return;
+      const hit = s.hlines.lineAt(y - main.top);
+      if (!hit) return;
+      active = { id: hit.id, startY: y, moved: false, touch: e.pointerType === 'touch', pointerId: e.pointerId };
+      if (!active.touch) {
+        // No mousedown follows: the chart neither scrolls nor clicks.
+        e.preventDefault();
+        e.stopPropagation();
+        el.style.cursor = 'ns-resize';
+      }
+      window.addEventListener('pointermove', onMove, true);
+      window.addEventListener('pointerup', onUp, true);
+      window.addEventListener('pointercancel', onCancel, true);
+    };
+    el.addEventListener('pointerdown', onDown, true);
+    return () => {
+      el.removeEventListener('pointerdown', onDown, true);
+      stop();
+    };
+  }, [chartApi]);
+
+  // Alt+H (⌥H): a line at the cursor's price, when the cursor is on the price pane (not while typing).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.code !== 'KeyH') return;
+      const h = hlineHandlers.current;
+      const at = plusCursor.current;
+      const t = e.target instanceof HTMLElement ? e.target : null;
+      if (!h.onAddHLine || !at || h.hlineBlocked || t?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      e.preventDefault();
+      h.onAddHLine(Number(at.price.toFixed(hlineState.current.precision)));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const place = (b: { top: number; height: number }): CSSProperties => ({ top: b.top, height: b.height, left: 0, width: boxes.plotWidth });
+  const main = boxes.panes.main;
+  // FD-GOLATEST, FD-GOLATESTMAIN: the button sits in the bottom-right corner of the price pane, above the panes below it
+  // (or above the time axis without them), inside the pane even when it is very short; the price pane's TP / SL box,
+  // in the same corner, moves up while the button shows.
+  const showLatest = behind && main !== undefined && boxes.plotWidth > 0;
+  const latestTop = main ? Math.max(main.top + 4, main.top + main.height - LATEST_SIZE - 10) : 0;
   return (
-    <div className={clsx('relative w-full', className ?? 'h-[560px]')}>
+    <div className={clsx('relative w-full', className ?? (style?.height === undefined && 'h-[560px]'))} style={style}>
       {/* `isolate`: the chart's canvases (z-index 1–2) and pane separators (49–50) stay below the overlays and the page. */}
       <div ref={host} className="absolute inset-0 isolate" aria-label="Grafic lumânări" role="img" />
-      {mainOverlay && boxes.main && boxes.plotWidth > 0 && (
-        <div className="pointer-events-none absolute" style={place(boxes.main)}>
+      {mainOverlay && main && boxes.plotWidth > 0 && (
+        <div className="pointer-events-none absolute transition-transform" style={{ ...place(main), transform: showLatest ? `translateY(-${LATEST_SIZE + 10}px)` : undefined }}>
           {mainOverlay}
         </div>
       )}
-      {lmaLegend && boxes.lma && boxes.plotWidth > 0 && (
-        <div className="pointer-events-none absolute" style={place(boxes.lma)}>
-          <HoverLegend chart={chartApi} count={candles.length} render={lmaLegend} />
-        </div>
+      {showLatest && (
+        <button
+          type="button"
+          onClick={() => chartApi?.timeScale().scrollToRealTime()}
+          aria-label="Mergi la ultima lumânare"
+          title="Mergi la ultima lumânare"
+          className="absolute z-10 grid place-items-center rounded-lg border border-line bg-panel text-muted shadow-md transition-colors hover:border-accent hover:bg-hover hover:text-accent"
+          style={{ top: latestTop, left: boxes.plotWidth - LATEST_SIZE - 10, width: LATEST_SIZE, height: LATEST_SIZE }}
+        >
+          <ChevronsRight size={18} aria-hidden />
+        </button>
+      )}
+      {boxes.plotWidth > 0 && <Legends chart={chartApi} count={candles.length} boxes={boxes} legends={legends} place={place} />}
+      {onAddHLine && main && boxes.plotWidth > 0 && (
+        <HLinePlus chart={chartApi} series={seriesRef.current?.candle ?? null} main={main} plotWidth={boxes.plotWidth} precision={precision} blocked={hlineBlocked} onAdd={onAddHLine} cursor={plusCursor} />
       )}
     </div>
   );

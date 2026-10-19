@@ -18,7 +18,7 @@ export const newsId = (sourceId: string, item: Pick<ParsedItem, 'guid' | 'link' 
 
 async function loadCandidates(db: Db, now: number): Promise<ClusterCandidate[]> {
   const rows = await db.all<{ id: string; cluster_id: string; title: string; coins: string | null }>(
-    `SELECT n.id, n.cluster_id, n.title, (SELECT STRING_AGG(coin, ',') FROM news_coins c WHERE c.news_id = n.id) AS coins
+    `SELECT n.id, n.cluster_id, n.title, (SELECT STRING_AGG(coin, ',') FROM news_coins c WHERE c.news_id = n.id AND c.coin NOT LIKE N'#%') AS coins
      FROM news n WHERE n.published_at >= ? ORDER BY n.published_at, n.id`,
     [now - CLUSTER_WINDOW_MS],
   );
@@ -125,6 +125,8 @@ export async function ingestItems(
              WHERE id = ?`,
             [item.title, item.summary, cls.relevance, cls.impact, JSON.stringify(cls.flags), id],
           );
+          // The users' own AI scores were of the old title (FD-AIKEYS): scored again.
+          await db.run('DELETE FROM news_ai_scores WHERE news_id = ?', [id]);
           await writeNewsCoins(db, [id], coinPairs(id, coins));
           res.updated++;
         } else {
@@ -144,7 +146,9 @@ export async function ingestItems(
       const coins = detectCoins(detector, item.title, item.summary);
       const cls = weigh(item.title, item.summary, coins);
       const tokens = titleTokens(item.title);
-      const clusterId = findCluster(tokens, coins, candidates) ?? id;
+      // The same story by its words and its tickers, not by the index tags (FD-INDEXNEWS: "#CO", "#SPX").
+      const named = coins.filter((c) => !c.startsWith('#'));
+      const clusterId = findCluster(tokens, named, candidates) ?? id;
       inserts.push({
         id,
         source_id: source.id,
@@ -163,13 +167,31 @@ export async function ingestItems(
       });
       insertCoins.push(...coinPairs(id, coins));
       if (canonical) canonicals.add(canonical);
-      candidates.push({ id, clusterId, tokens, coins });
+      candidates.push({ id, clusterId, tokens, coins: named });
       res.inserted++;
     }
     if (inserts.length) await db.run(INSERT_NEWS, [JSON.stringify(inserts)]);
     if (insertCoins.length) await writeNewsCoins(db, [], insertCoins);
   });
   return res;
+}
+
+/**
+ * Re-tags the news of a period without re-classifying them (FD-INDEXNEWS §5: the member lists changed): only `news_coins`,
+ * so relevance and importance, and the common index, stay as they were.
+ */
+export async function retagCoins(db: Db, detector: CoinDetector, from: number, to: number): Promise<number> {
+  const rows = await db.all<{ id: string; title: string; summary: string }>('SELECT id, title, summary FROM news WHERE published_at >= ? AND published_at < ?', [from, to]);
+  if (!rows.length) return 0;
+  const tagged = rows.map((r) => ({ id: r.id, coins: detectCoins(detector, r.title, r.summary) }));
+  await db.tx(() =>
+    writeNewsCoins(
+      db,
+      tagged.map((t) => t.id),
+      tagged.flatMap((t) => coinPairs(t.id, t.coins)),
+    ),
+  );
+  return rows.length;
 }
 
 /** Re-tags coins and re-classifies recent news (after the coin list or the watchlist changes); see `ingestItems`. */

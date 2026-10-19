@@ -1,5 +1,6 @@
-// Sign-in, registration, the one-time links, the user's own security page and the admin's Users page
-// (FD-USERS §3–§8, TD-USERS §3). Answers never tell an anonymous caller whether an address has an account.
+// Sign-in, registration, the one-time links, the two-factor setup every account goes through (FD-2FA), the user's own
+// security page and the admin's Users page (FD-USERS §3–§8, TD-USERS §3). Answers never tell an anonymous caller
+// whether an address has an account.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { renderSVG } from 'uqr';
 import { z } from 'zod';
@@ -10,6 +11,8 @@ import { FULL_SESSION_MS, PENDING_SESSION_MS, SESSION_COOKIE } from '../auth/ses
 import { callerKey, minutes } from '../auth/throttle.ts';
 import { formatSecret } from '../auth/totp.ts';
 import { cleanName, normalizeEmail, UserError, type UserRow } from '../auth/users.ts';
+import { tdPlanKey, tdUsageKey } from '../market/stocks.ts';
+import { scorerStateKey } from '../sentiment/service.ts';
 import { syncStockSources } from '../news/sources.ts';
 import { retagRecent } from '../news/ingest.ts';
 import { formatIssues, isDevMail, ValidationError } from '../settings.ts';
@@ -96,7 +99,7 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
   };
 
   /** Mail is sent in the background: the answer takes as long whether or not a mail goes out. */
-  const sendLater = (kind: 'reset' | 'reset-done', u: UserRow, link = '') => {
+  const sendLater = (kind: 'reset' | 'reset-done' | 'totp-on' | 'totp-changed' | 'totp-reset', u: UserRow, link = '') => {
     if (!u.email) return;
     void mailer.send(kind, u.email, u.name, link).catch((err: Error) => ctx.log.error(`email: ${err.message}`));
   };
@@ -176,11 +179,15 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
     return info ? { valid: true, ...info } : { valid: false };
   });
 
-  app.post('/api/auth/activate', async (req) => {
+  app.post('/api/auth/activate', async (req, reply) => {
     const b = parse(z.object({ token: z.string().max(200), password }), req.body);
     const u = await users.activate(b.token, b.password);
     ctx.log.info(`users: ${u.email} activated their account`);
-    return { ok: true, email: u.email };
+    // FD-INVITE §5: a browser signed in with another account stays in it (the page says to sign out first).
+    if (req.user) return { ok: true, email: u.email, signedIn: false };
+    // FD-2FA §1: the link proved the address and the password is new: signed in, straight on to the two-factor setup.
+    const out = await startSession(req, reply, u);
+    return { ok: true, email: u.email, signedIn: true, user: out.user };
   });
 
   // ── Sign-in (FD-USERS §5) ───────────────────────────────────────────────────────────────────────────
@@ -292,7 +299,8 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
     const u = await users.byId(userId);
     if (!u || u.disabled_at !== null) throw fail(403, 'ACCOUNT_DISABLED', 'Contul este dezactivat. Vorbește cu adminul.');
     if (!isActive(u)) throw fail(403, 'EMAIL_UNVERIFIED', 'Contul nu e activat.');
-    // A passkey proves the device and the person (PIN / fingerprint): both factors, so no code is asked.
+    // A passkey proves the device and the person (PIN / fingerprint): both factors, so no code is asked. An account
+    // without its authenticator still sets it up first (FD-2FA: the hook lets it reach nothing else).
     return startSession(req, reply, u);
   });
 
@@ -314,7 +322,9 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
     return {
       enabled: s.enabled,
       confirmedAt: s.confirmedAt,
+      // An enrolment not confirmed yet, or (with `replacing`) the new authenticator of a change (FD-2FA §3).
       pending: s.pendingSecret !== null,
+      replacing: s.replacing,
       secret: s.pendingSecret ? formatSecret(s.pendingSecret) : null,
       uri: s.uri,
       // Black on white with the standard quiet zone: what authenticator cameras read best (Serento's TwoFactorQr).
@@ -375,36 +385,56 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
     return twoFactorView(u.id);
   });
 
-  app.post('/api/account/2fa/cancel', async (req) => {
-    const u = me(req);
-    await users.cancelTwoFactor(u.id);
-    return twoFactorView(u.id);
-  });
-
   app.post('/api/account/2fa/enable', async (req) => {
     const u = me(req);
     const b = parse(z.object({ code }), req.body);
     return throttle.serial(accountKey(u.id), async () => {
       checkAccountBudget(u.id);
       const codes = await users.confirmTwoFactor(u.id, b.code);
+      // Finished in another tab meanwhile: not a wrong guess.
+      if (codes === 'on') throw fail(409, 'TWO_FACTOR_ON', 'Autentificarea în doi pași este deja activă.');
       if (!codes) throw accountFailure(u.id, 'Cod greșit. Scrie codul de 6 cifre afișat acum în aplicație; dacă tot nu merge, verifică dacă ora telefonului e setată automat.');
       throttle.reset(accountKey(u.id));
+      // FD-2FA §2: sessions opened elsewhere before the second factor existed do not get it for free.
+      await sessions.destroyAll(u.id, sessionToken(req));
+      const row = (await users.byId(u.id)) as UserRow;
+      sendLater('totp-on', row);
       ctx.log.info(`users: ${u.email} turned on two-factor`);
-      return { codes, twoFactor: await twoFactorView(u.id) };
+      return { codes, twoFactor: await twoFactorView(u.id), user: await users.publicUser(row) };
     });
   });
 
-  app.post('/api/account/2fa/disable', async (req) => {
+  // FD-2FA §3: a new authenticator (a new phone) in place of the old one, which works until the new one is confirmed.
+  app.post('/api/account/2fa/replace', async (req) => {
     const u = me(req);
     const b = parse(z.object({ password, code }), req.body);
     return throttle.serial(accountKey(u.id), async () => {
       checkAccountBudget(u.id);
-      if (!(await users.disableTwoFactor(u.id, b.password, b.code))) throw accountFailure(u.id, 'Parola sau codul nu sunt corecte.');
+      if (!(await users.beginReplace(u.id, b.password, b.code))) throw accountFailure(u.id, 'Parola sau codul nu sunt corecte.');
       throttle.reset(accountKey(u.id));
-      await sessions.destroyPending(u.id);
-      ctx.log.info(`users: ${u.email} turned off two-factor`);
       return twoFactorView(u.id);
     });
+  });
+
+  app.post('/api/account/2fa/replace/confirm', async (req) => {
+    const u = me(req);
+    const b = parse(z.object({ code }), req.body);
+    return throttle.serial(accountKey(u.id), async () => {
+      checkAccountBudget(u.id);
+      const r = await users.confirmReplace(u.id, b.code);
+      if (r === 'none') throw fail(409, 'NO_REPLACEMENT', 'Nu e nicio schimbare de aplicație începută (poate a fost terminată sau anulată în alt tab).');
+      if (r === 'invalid') throw accountFailure(u.id, 'Cod greșit. Scrie codul de 6 cifre arătat acum de aplicația nouă; dacă tot nu merge, verifică dacă ora telefonului e setată automat.');
+      throttle.reset(accountKey(u.id));
+      sendLater('totp-changed', (await users.byId(u.id)) as UserRow);
+      ctx.log.info(`users: ${u.email} changed their authenticator`);
+      return twoFactorView(u.id);
+    });
+  });
+
+  app.post('/api/account/2fa/replace/cancel', async (req) => {
+    const u = me(req);
+    await users.cancelReplace(u.id);
+    return twoFactorView(u.id);
   });
 
   app.post('/api/account/2fa/recovery-codes', async (req) => {
@@ -498,7 +528,10 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
   adminAction('enable', (id) => users.setDisabled(id, false));
   adminAction('reset-2fa', async (id) => {
     await users.resetTwoFactor(id);
-    await sessions.destroyPending(id);
+    // FD-2FA §4: the account sets two-factor up again after signing in with its password; no session of it may skip that.
+    await sessions.destroyAll(id);
+    const u = await users.byId(id);
+    if (u) sendLater('totp-reset', u);
   });
 
   app.delete('/api/admin/users/:id', async (req) => {
@@ -507,9 +540,18 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
     if (!target) throw new NotFoundError('Utilizatorul nu există.');
     if (target.role === 'admin') throw new UserError('Contul de admin nu poate fi șters.');
     // Their exchange clients and cached portfolios leave memory with the rows.
-    for (const a of await ctx.accounts.list(id)) await ctx.accounts.delete(a.id);
+    for (const a of await ctx.accounts.list(id)) {
+      await ctx.accounts.delete(a.id);
+      ctx.trading.forget(a.id);
+    }
     await users.remove(id);
     ctx.settings.forget(id);
+    // FD-AIKEYS: their keys and AI scores went with the account; what their key spent goes too.
+    ctx.ai.forget(id);
+    await ctx.ai.usage.forget(id);
+    // FD-TDKEYS: their Twelve Data credits and candles too.
+    ctx.stocks.forget(id);
+    await ctx.db.run('DELETE FROM market_cache WHERE [key] IN (?, ?, ?)', [tdPlanKey(String(id)), tdUsageKey(String(id)), scorerStateKey(id)]);
     // Their favourites no longer tag the news, and their stocks' feeds may go.
     ctx.coins.invalidate();
     for (const sym of await syncStockSources(ctx.db)) ctx.log.info(`news: removed the automatic feed of ${sym} (in nobody's favourites)`);

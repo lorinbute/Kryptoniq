@@ -1,6 +1,26 @@
 // Builds the CoinDetector from the CoinGecko top list (market_cache) and the users' watchlists.
 import type { Db } from '../db/database.ts';
-import { CoinDetector, type CoinEntry } from './coins.ts';
+import { indexById } from '../../shared/indices.ts';
+import { FILTER_INDEX_IDS, FILTER_INDICES, type FilterIndexId } from '../../shared/stock-indices.ts';
+import { CoinDetector, type CoinEntry, type MemberIndex } from './coins.ts';
+import type { IndexMembers, IndexMembersService } from './index-members.ts';
+
+/** The ETFs people name the filter indices by (FD-INDEXNEWS §4), besides the index's own aliases. */
+const ETF_ALIASES: Record<FilterIndexId, string[]> = { NDX: ['Invesco QQQ', 'QQQ'], SPX: ['SPDR S&P 500'], DJI: ['SPDR Dow Jones'] };
+
+/** The detector's view of the member lists: each ticker's names and indices, and the listed shares. */
+export function memberIndex(m: IndexMembers): MemberIndex {
+  const byTicker = new Map<string, { aliases: string[]; indices: FilterIndexId[] }>();
+  for (const id of FILTER_INDEX_IDS) {
+    for (const x of m.members[id]) {
+      const e = byTicker.get(x.symbol) ?? { aliases: [], indices: [] };
+      for (const a of x.aliases) if (!e.aliases.includes(a)) e.aliases.push(a);
+      e.indices.push(id);
+      byTicker.set(x.symbol, e);
+    }
+  }
+  return { byTicker, listed: new Set(m.listed) };
+}
 
 export const COIN_LIST_CACHE_KEY = 'coingecko:markets';
 
@@ -21,10 +41,13 @@ export class CoinRegistry {
   private classifying: { value: Promise<CoinDetector>; at: number } | null = null;
   private readonly db: Db;
   private readonly now: () => number;
+  /** FD-INDEXNEWS: the member lists, for the tagging detector (not the classifier of the common score). */
+  private readonly members: IndexMembersService | null;
 
-  constructor(db: Db, now: () => number = Date.now) {
+  constructor(db: Db, now: () => number = Date.now, members: IndexMembersService | null = null) {
     this.db = db;
     this.now = now;
+    this.members = members;
   }
 
   invalidate(): void {
@@ -94,6 +117,9 @@ export class CoinRegistry {
       const into = w.kind === 'stock' ? stocks : w.kind === 'index' ? indices : aliases;
       into[w.coin] = [...new Set([...(into[w.coin] ?? []), ...list])];
     }
-    return new CoinDetector(entries, aliases, stocks, indices);
+    if (adminOnly || !this.members) return new CoinDetector(entries, aliases, stocks, indices);
+    // The filter indices are named for everybody's filter, in the favourites or not (FD-INDEXNEWS §7).
+    for (const f of FILTER_INDICES) indices[f.indexId] = [...new Set([...(indices[f.indexId] ?? []), ...(indexById(f.indexId)?.aliases ?? []), ...ETF_ALIASES[f.id]])];
+    return new CoinDetector(entries, aliases, stocks, indices, memberIndex(await this.members.get()));
   }
 }

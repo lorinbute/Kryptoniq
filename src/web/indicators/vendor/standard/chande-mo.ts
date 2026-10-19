@@ -1,0 +1,105 @@
+// @ts-nocheck
+/**
+ * Chande Momentum Oscillator (CMO) Indicator
+ *
+ * Measures momentum on both up and down days.
+ * Range: -100 to +100
+ */
+
+import { getSourceSeries, type IndicatorResult, type InputConfig, type PlotConfig, type HLineConfig, type Bar, type SourceType } from 'oakscriptjs';
+
+export interface ChandeMOInputs {
+  /** Period length */
+  length: number;
+  /** Source */
+  src: SourceType;
+}
+
+export const defaultInputs: ChandeMOInputs = {
+  length: 9,
+  src: 'close',
+};
+
+export const inputConfig: InputConfig[] = [
+  { id: 'length', type: 'int', title: 'length', defval: 9, min: 1 },
+  { id: 'src', type: 'source', title: 'Source', defval: 'close' },
+];
+
+export const plotConfig: PlotConfig[] = [
+  { id: 'plot0', title: 'Chande MO', color: '#2962FF', lineWidth: 1 },
+];
+
+export const hlineConfig: HLineConfig[] = [
+  { id: 'hline_zero', price: 0, color: '#787B86', linestyle: 'dashed', title: 'Zero Line' },
+];
+
+export const metadata = {
+  title: 'Chande Momentum Oscillator',
+  shortTitle: 'ChandeMO',
+  overlay: false,
+};
+
+export function calculate(bars: Bar[], inputs: Partial<ChandeMOInputs> = {}): IndicatorResult {
+  const { length, src } = { ...defaultInputs, ...inputs };
+
+  const source = getSourceSeries(bars, src).toArray().map(v => v ?? NaN);
+
+  // Calculate momentum (change)
+  const mom: number[] = [NaN];
+  for (let i = 1; i < bars.length; i++) {
+    mom.push(source[i] - source[i - 1]);
+  }
+
+  // Separate positive and negative momentum
+  const m1 = mom.map(m => (m >= 0 ? m : 0)); // positive
+  const m2 = mom.map(m => (m >= 0 ? 0 : -m)); // negative (absolute)
+
+  // Calculate sums over length period
+  const chandeMO: (number | null)[] = [];
+
+  for (let i = 0; i < bars.length; i++) {
+    if (i < length) {
+      chandeMO.push(NaN);
+      continue;
+    }
+
+    let sm1 = 0;
+    let sm2 = 0;
+    for (let j = i - length + 1; j <= i; j++) {
+      if (!isNaN(m1[j])) sm1 += m1[j];
+      if (!isNaN(m2[j])) sm2 += m2[j];
+    }
+
+    const sum = sm1 + sm2;
+    if (sum === 0) {
+      chandeMO.push(0);
+    } else {
+      chandeMO.push(100 * (sm1 - sm2) / sum);
+    }
+  }
+
+  const cmoData = chandeMO.map((value, i) => ({
+    time: bars[i].time,
+    value: value ?? NaN,
+  }));
+
+  return {
+    metadata: {
+      title: metadata.title,
+      shorttitle: metadata.shortTitle,
+      overlay: metadata.overlay,
+    },
+    plots: {
+      'plot0': cmoData,
+    },
+  };
+}
+
+export const ChandeMO = {
+  calculate,
+  metadata,
+  defaultInputs,
+  inputConfig,
+  plotConfig,
+  hlineConfig,
+};

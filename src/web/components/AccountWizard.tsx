@@ -1,14 +1,76 @@
-// "Adaugă un cont" (FD-SENTIQ §2): pick the exchange or broker by its logo, follow its steps for a read-only key,
-// fill in exactly the fields it asks for, and connect; the key is verified before the account is kept.
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+// "Adaugă un cont" (FD-SENTIQ §2): pick the exchange or broker by its logo, follow its steps for a read-only key (or,
+// FD-TRADING, one that can also trade but never withdraw), fill in exactly the fields it asks for, and connect; the key
+// is verified before the account is kept.
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { ArrowLeft, Check, ExternalLink, Eye, EyeOff, Search, ShieldCheck, X } from 'lucide-react';
+import { ArrowLeft, Check, Copy, ExternalLink, Eye, EyeOff, Search, ShieldCheck, X } from 'lucide-react';
 import type { AccountView } from '../../shared/api-types.ts';
 import { PROVIDERS, type ProviderDef } from '../../shared/providers.ts';
+import { SERVER_IPS, SERVER_IPS_TEXT } from '../../shared/server-ips.ts';
+import { TRADING } from '../../shared/trading.ts';
 import { api, errorMessage } from '../api.ts';
 import { ProviderLogo } from './ProviderLogo.tsx';
 import { invalidatePriceSource } from '../hooks.ts';
+import { useScrollLock } from '../scroll-lock.ts';
+
+/**
+ * FD-KEYIPS: the addresses Sentiq calls the platform from, to restrict the key to (a key that leaks is then useless to
+ * anybody else). Copied as the key pages take them: separated by commas.
+ */
+function ServerIps({ name }: { name: string }) {
+  const [copied, setCopied] = useState<'ok' | 'select' | null>(null);
+  const list = useRef<HTMLElement>(null);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(SERVER_IPS_TEXT);
+      setCopied('ok');
+    } catch {
+      // No clipboard (an http page on the local network): the list is selected for Cmd / Ctrl + C.
+      const sel = window.getSelection();
+      if (list.current && sel) {
+        sel.selectAllChildren(list.current);
+        setCopied('select');
+      }
+    }
+  };
+  // On the Mac (localhost / the local network) the calls leave from the home connection, not from these addresses.
+  const local = typeof location !== 'undefined' && !/(^|\.)(sentiq\.money|azurewebsites\.net)$/.test(location.hostname);
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-line-soft bg-panel-2 px-3 py-2.5 text-[12.5px] leading-[1.5]">
+      <div className="font-semibold text-text">Restricționează cheia la IP-urile serverului Sentiq</div>
+      <p className="text-muted">
+        Cererile către {name} pleacă de pe serverul Sentiq (sentiq.money), nu de pe calculatorul tău. Limitată la aceste {SERVER_IPS.length} adrese, cheia nu poate fi folosită de
+        altcineva, chiar dacă ajunge la el.
+      </p>
+      {/* A line may break after each comma (<wbr>), never inside an address; the text copied stays "a,b,c". */}
+      <code ref={list} className="block rounded-md border border-line bg-panel px-2 py-1.5 font-mono text-[12px] whitespace-normal text-text tabular-nums select-all">
+        {SERVER_IPS.map((ip, i) => (
+          <Fragment key={ip}>
+            {ip}
+            {i < SERVER_IPS.length - 1 && (
+              <>
+                ,<wbr />
+              </>
+            )}
+          </Fragment>
+        ))}
+      </code>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn h-8 px-2.5 text-[12px]" onClick={() => void copy()}>
+          {copied === 'ok' ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
+          {copied === 'ok' ? 'Copiat' : 'Copiază lista'}
+        </button>
+        {copied === 'select' && <span className="text-faint">Lista e selectată: apasă Cmd / Ctrl + C.</span>}
+      </div>
+      {local && (
+        <p className="text-warn">
+          Aici (Sentiq pe calculatorul tău) cererile pleacă de pe conexiunea ta: o cheie limitată la aceste adrese merge doar din sentiq.money.
+        </p>
+      )}
+    </div>
+  );
+}
 
 type Filter = 'all' | 'crypto' | 'stocks';
 const KIND_RO = { crypto: 'Crypto', stocks: 'Acțiuni' } as const;
@@ -100,22 +162,34 @@ function KeyForm({ p, onBack, onConnected }: { p: ProviderDef; onBack: () => voi
   const error = local ?? (connect.isError ? errorMessage(connect.error) : null);
   return (
     <div className="grid gap-6 md:grid-cols-[1fr_1.1fr]">
-      <section aria-labelledby={`${formId}-how`} className="flex flex-col gap-3">
+      <section aria-labelledby={`${formId}-how`} className="flex min-w-0 flex-col gap-3">
         <h3 id={`${formId}-how`} className="inline-flex items-center gap-2 text-[14px] font-semibold">
-          <ShieldCheck size={16} className="text-bull" aria-hidden /> Cum creezi o cheie doar pentru citire
+          <ShieldCheck size={16} className="text-bull" aria-hidden /> Cum creezi cheia
         </h3>
         <ol className="flex list-decimal flex-col gap-2 pl-5 text-[13px] leading-[1.5] text-muted marker:text-faint">
           {p.steps.map((s) => (
             <li key={s}>{s}</li>
           ))}
         </ol>
+        {p.ipRestrict && <ServerIps name={p.name} />}
         {p.keysUrl && (
           <a href={p.keysUrl} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1.5 self-start text-[13px] text-link">
             Deschide pagina de chei <ExternalLink size={13} aria-hidden />
           </a>
         )}
+        {TRADING[p.id].supported && (
+          <details className="rounded-lg border border-line-soft px-3 py-2 text-[12.5px] text-muted">
+            <summary className="cursor-pointer text-text">Detalii pentru tranzacționarea din Sentiq</summary>
+            <ol className="mt-2 flex list-decimal flex-col gap-1.5 pl-5 leading-[1.5] marker:text-faint">
+              {TRADING[p.id].tradeSteps.map((s) => (
+                <li key={s}>{s}</li>
+              ))}
+            </ol>
+          </details>
+        )}
         <p className="rounded-lg border border-line-soft bg-panel-2 px-3 py-2.5 text-[12px] leading-[1.5] text-faint">
-          Sentiq doar citește: nu plasează, nu modifică și nu anulează ordine și nu mută fonduri. Cheile se păstrează criptat în baza Sentiq și nu mai sunt afișate.
+          Sentiq citește; trimite ordine doar dacă pornești tranzacționarea pe cont (cu passkey-ul sau cu parola și codul 2FA), fiecare ordin cu o confirmare, și nu mută niciodată fonduri. Cheile se
+          păstrează criptat în baza Sentiq și nu mai sunt afișate.
         </p>
       </section>
       <form onSubmit={submit} className="flex flex-col gap-3.5" aria-describedby={error ? `${formId}-err` : undefined} noValidate>
@@ -172,6 +246,8 @@ function KeyForm({ p, onBack, onConnected }: { p: ProviderDef; onBack: () => voi
 }
 
 export function AccountWizard({ onClose, onDone }: { onClose: () => void; onDone?: (a: AccountView) => void }) {
+  // FD-SCROLLLOCK: only the wizard scrolls while it is open.
+  useScrollLock();
   const [filter, setFilter] = useState<Filter>('all');
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState<ProviderDef | null>(null);
@@ -234,7 +310,7 @@ export function AccountWizard({ onClose, onDone }: { onClose: () => void; onDone
             <X size={16} aria-hidden />
           </button>
         </header>
-        <div data-scroll className="flex-1 overflow-y-auto px-5 py-5">
+        <div data-scroll className="flex-1 overflow-y-auto overscroll-contain px-5 py-5">
           {done ? (
             <div className="flex flex-col items-center gap-3 py-6 text-center">
               <span className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-bull/15 text-bull">

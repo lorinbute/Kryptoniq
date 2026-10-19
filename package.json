@@ -52,6 +52,7 @@
     "concurrently": "10.0.6",
     "lightweight-charts": "5.2.1",
     "lucide-react": "1.55.0",
+    "oakscriptjs": "0.12.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-router": "8.4.0",

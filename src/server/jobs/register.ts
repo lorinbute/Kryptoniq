@@ -3,7 +3,8 @@ import { readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { refreshContext } from '../market/context.ts';
 import type { AppContext } from '../context.ts';
-import { retagRecent } from '../news/ingest.ts';
+import { retagCoins, retagRecent } from '../news/ingest.ts';
+import { MEMBERS_JOB, membersSignature, RETAG_JOB } from '../news/index-members.ts';
 import { fetchDueSources } from '../news/fetcher.ts';
 import { EARN_JOB, FF_JOB, TV_JOB } from '../calendar/service.ts';
 import { ECON_JOB, feedingEconomy } from '../economy/service.ts';
@@ -49,7 +50,10 @@ export function registerJobs(ctx: AppContext): void {
     timeoutMs: 4 * MIN,
     run: async (signal) => {
       const results = await fetchDueSources(db, ctx.coins, log, signal);
-      if (results.some((r) => r.inserted > 0)) scheduler.nudge('sentiment.score', 1000);
+      if (results.some((r) => r.inserted > 0)) {
+        scheduler.nudge('sentiment.score', 1000);
+        scheduler.nudge('sentiment.ai', 3000);
+      }
     },
   });
 
@@ -62,6 +66,20 @@ export function registerJobs(ctx: AppContext): void {
       // Drain the queue in batches while the job is allowed to run.
       for (let i = 0; i < 20 && !signal.aborted; i++) {
         const n = await ctx.sentiment.scorePending(signal);
+        if (n === 0) break;
+      }
+    },
+  });
+
+  // FD-AIKEYS: the users' own AI scores the last days' news, each with their key.
+  scheduler.add({
+    name: 'sentiment.ai',
+    everyMs: 60_000,
+    runOnStart: true,
+    timeoutMs: 10 * MIN,
+    run: async (signal) => {
+      for (let i = 0; i < 20 && !signal.aborted; i++) {
+        const n = await ctx.sentiment.scoreUsers(signal);
         if (n === 0) break;
       }
     },
@@ -119,14 +137,61 @@ export function registerJobs(ctx: AppContext): void {
     },
   });
 
-  // FD-TDPLAN: the Twelve Data key's plan (limits a minute and a day), at start and every 6 hours; one credit a read.
+  // FD-INDEXNEWS §5: the companies of the filter indices, read again once a week (each source on its own); when they
+  // change, the stored news are tagged again, a day at a time, newest first.
+  scheduler.add({
+    name: MEMBERS_JOB,
+    everyMs: 6 * 60 * MIN,
+    firstDelayMs: 30_000,
+    run: async () => {
+      if (await ctx.indexMembers.refresh()) {
+        ctx.coins.invalidate();
+        scheduler.nudge(RETAG_JOB, 1000);
+      }
+      if (ctx.indexMembers.lastErrors.length) throw new Error(ctx.indexMembers.lastErrors.join('; '));
+    },
+  });
+  scheduler.add({
+    name: RETAG_JOB,
+    everyMs: 6 * 60 * MIN,
+    firstDelayMs: 60_000,
+    // ~2 ms a news: 90 days of news take minutes; a run cut short goes on from its cursor.
+    timeoutMs: 30 * MIN,
+    run: async () => {
+      const signature = membersSignature(await ctx.indexMembers.get());
+      const state = await readJobData<{ signature: string; cursor: { signature: string; to: number } | null }>(db, RETAG_JOB, { signature: '', cursor: null });
+      if (state.signature === signature) return;
+      const detector = await ctx.coins.get();
+      const oldest = (await db.get<{ t: number | null }>('SELECT min(published_at) AS t FROM news'))?.t ?? null;
+      const DAY = 86_400_000;
+      let to = state.cursor?.signature === signature ? state.cursor.to : Date.now() + DAY;
+      for (; oldest !== null && to > oldest; to -= DAY) {
+        await retagCoins(db, detector, to - DAY, to);
+        await writeJobData(db, RETAG_JOB, { signature: state.signature, cursor: { signature, to: to - DAY } });
+      }
+      await writeJobData(db, RETAG_JOB, { signature, cursor: null });
+      // The users' own indices (FD-INDEXNEWS §3) read the new tags.
+      scheduler.nudge('sentiment.daily', 1000);
+    },
+  });
+
+  // FD-TDPLAN: each user's Twelve Data key's plan (limits a minute and a day, FD-TDKEYS), at start and every 6 hours;
+  // one credit of their key a read. One key failing does not stop the others.
   scheduler.add({
     name: TD_PLAN_JOB,
     everyMs: 6 * 60 * MIN,
     firstDelayMs: 20_000,
     run: async () => {
-      const p = await ctx.stocks.refreshPlan();
-      if (p) log.info(`twelvedata: plan ${p.category}, ${p.perMinute} credits a minute, ${p.perDay === null ? 'no daily limit' : `${p.perDay} a day`}`);
+      const failed: string[] = [];
+      for (const userId of await ctx.settings.usersWithKey('twelvedata')) {
+        try {
+          const p = await ctx.stocks.refreshPlan(userId);
+          if (p) log.info(`twelvedata: user ${userId}: plan ${p.category}, ${p.perMinute} credits a minute, ${p.perDay === null ? 'no daily limit' : `${p.perDay} a day`}`);
+        } catch (err) {
+          failed.push(`user ${userId}: ${(err as Error).message}`);
+        }
+      }
+      if (failed.length) throw new Error(`plan not read for ${failed.join('; ')}`);
     },
   });
 

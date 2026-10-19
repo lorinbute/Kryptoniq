@@ -1,4 +1,6 @@
 // News listing with filters (FD §2.2). Filters affect only what is shown, never the daily sentiment.
+import type { FilterIndexId } from '../../shared/stock-indices.ts';
+import { stockScopeSql, type StockScope } from './stock-scope.ts';
 import { z } from 'zod';
 import { addDays, dayBounds, dayKey } from '../../shared/time.ts';
 import type { Db } from '../db/database.ts';
@@ -55,6 +57,8 @@ export interface NewsPage {
   nextCursor: string | null;
   range: { from: number; to: number };
   favorites: string[];
+  /** FD-INDEXNEWS: the indices the stock news are limited to (null: all). */
+  stockScope: { indices: FilterIndexId[] } | null;
 }
 
 interface Row {
@@ -106,15 +110,21 @@ export function rangeBounds(range: NewsQuery['range'], tz: string, now: number):
 // T-SQL's LIKE also reads `[` as the start of a character class (TD-AZURE §4).
 const escapeLike = (s: string) => s.replace(/[\\%_[]/g, (m) => `\\${m}`);
 
-/** `userId`: whose favourites the "favourites only" filter uses (FD-USERS §2); the news themselves are common. */
-export async function queryNews(db: Db, q: NewsQuery, tz: string, userId: number, now = Date.now()): Promise<NewsPage> {
+/**
+ * `userId`: whose favourites the "favourites only" filter uses (FD-USERS §2); the news themselves are common. `ownAi`:
+ * the user's own AI scores the news (FD-AIKEYS), so its score is shown (and filtered on) where it gave one.
+ */
+export async function queryNews(db: Db, q: NewsQuery, tz: string, userId: number, now = Date.now(), ownAi = false, stock: StockScope | null = null): Promise<NewsPage> {
   const { from, to } = rangeBounds(q.range, tz, now);
   const favorites = (await db.all<{ coin: string }>('SELECT coin FROM watchlist WHERE user_id = ? ORDER BY position, coin', [userId])).map((r) => r.coin);
   let coins = q.coins;
   if (q.favorites) coins = coins.length ? coins.filter((c) => favorites.includes(c)) : favorites;
+  // The score shown: the user's AI's where it gave one (a.score), else the common one.
+  const own = (col: string, common: string) => (ownAi ? `COALESCE(a.${col}, n.${common})` : `n.${common}`);
   const where: string[] = ['s.enabled = 1', 'n.published_at >= ?', 'n.published_at < ?'];
   const params: (string | number)[] = [from, to];
-  if (q.favorites && coins.length === 0) return { items: [], nextCursor: null, range: { from, to }, favorites };
+  const stockScope = stock ? { indices: stock.indices } : null;
+  if (q.favorites && coins.length === 0) return { items: [], nextCursor: null, range: { from, to }, favorites, stockScope };
   if (coins.length) {
     where.push(`n.id IN (SELECT news_id FROM news_coins WHERE coin IN (SELECT value COLLATE ${BIN} FROM OPENJSON(?)))`);
     params.push(JSON.stringify(coins));
@@ -123,13 +133,18 @@ export async function queryNews(db: Db, q: NewsQuery, tz: string, userId: number
     where.push('n.category = ?');
     params.push(q.category);
   }
+  if (stock) {
+    const f = stockScopeSql(stock);
+    where.push(f.sql);
+    params.push(f.param);
+  }
   if (q.source) {
     where.push('n.source_id = ?');
     params.push(q.source);
   }
-  if (q.sentiment === 'pending') where.push('n.sentiment_engine IS NULL');
+  if (q.sentiment === 'pending') where.push(ownAi ? 'a.score IS NULL AND n.sentiment_engine IS NULL' : 'n.sentiment_engine IS NULL');
   else if (q.sentiment) {
-    where.push('n.sentiment_label = ?');
+    where.push(`${own('label', 'sentiment_label')} = ?`);
     params.push(q.sentiment);
   }
   if (q.q) {
@@ -143,14 +158,18 @@ export async function queryNews(db: Db, q: NewsQuery, tz: string, userId: number
     where.push('(n.published_at < ? OR (n.published_at = ? AND n.id < ?))');
     params.push(Number(t), Number(t), id);
   }
+  // An AI score carries no rule details: its meta is empty.
   const rows = await db.all<Row>(
-    `SELECT TOP (?) n.id, n.title, n.summary, n.url, n.source_id, s.name AS source_name, n.category, n.published_at, n.fetched_at, n.relevance, n.impact, n.sentiment_impact, n.flags,
-            n.sentiment, n.sentiment_label, n.sentiment_engine, n.sentiment_meta, n.cluster_id,
-            (SELECT STRING_AGG(coin, ',') FROM news_coins c WHERE c.news_id = n.id) AS coins
-     FROM news n JOIN sources s ON s.id = n.source_id
+    `SELECT TOP (?) n.id, n.title, n.summary, n.url, n.source_id, s.name AS source_name, n.category, n.published_at, n.fetched_at, n.relevance, n.impact,
+            ${own('impact', 'sentiment_impact')} AS sentiment_impact, n.flags,
+            ${own('score', 'sentiment')} AS sentiment, ${own('label', 'sentiment_label')} AS sentiment_label,
+            ${ownAi ? 'CASE WHEN a.score IS NOT NULL THEN a.engine ELSE n.sentiment_engine END' : 'n.sentiment_engine'} AS sentiment_engine,
+            ${ownAi ? 'CASE WHEN a.score IS NOT NULL THEN NULL ELSE n.sentiment_meta END' : 'n.sentiment_meta'} AS sentiment_meta, n.cluster_id,
+            (SELECT STRING_AGG(coin, ',') FROM news_coins c WHERE c.news_id = n.id AND c.coin NOT LIKE N'#%') AS coins
+     FROM news n JOIN sources s ON s.id = n.source_id${ownAi ? ' LEFT JOIN news_ai_scores a ON a.news_id = n.id AND a.user_id = ?' : ''}
      WHERE ${where.join(' AND ')}
      ORDER BY n.published_at DESC, n.id DESC`,
-    [q.limit + 1, ...params],
+    [q.limit + 1, ...(ownAi ? [userId] : []), ...params],
   );
   const hasMore = rows.length > q.limit;
   const page = rows.slice(0, q.limit);
@@ -201,5 +220,5 @@ export async function queryNews(db: Db, q: NewsQuery, tz: string, userId: number
     });
   }
   const last = page.at(-1);
-  return { items, nextCursor: hasMore && last ? `${last.published_at}:${last.id}` : null, range: { from, to }, favorites };
+  return { items, nextCursor: hasMore && last ? `${last.published_at}:${last.id}` : null, range: { from, to }, favorites, stockScope };
 }

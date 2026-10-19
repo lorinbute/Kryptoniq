@@ -1,13 +1,14 @@
 // Setări → Admin (FD-ADMINSET): what applies to everybody, the admin's alone. The route exists only for the admin.
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { Archive, Brain, ChartLine, Mail, Rss, Trash2 } from 'lucide-react';
-import type { FeedTest, Health, SourceRow, TdBudget } from '../../shared/api-types.ts';
-import { CANDLE_COUNTS, CLAUDE_MODELS, MARKET_EXCHANGES, type SettingsView } from '../../shared/settings.ts';
+import type { FeedTest, Health, SourceRow } from '../../shared/api-types.ts';
+import { CANDLE_COUNTS, MARKET_EXCHANGES, type SettingsView } from '../../shared/settings.ts';
 import { api, errorMessage } from '../api.ts';
-import { fmtAgo, fmtNum } from '../format.ts';
-import { invalidatePriceSource, useHashScroll, useSaveSettings, useSettings, useStocksInfo } from '../hooks.ts';
+import { fmtAgo } from '../format.ts';
+import { invalidatePriceSource, useHashScroll, useSaveSettings, useSettings } from '../hooks.ts';
 import { ErrorNote, Loading, Panel, Warning } from '../components/ui.tsx';
 import { SettingsTabs } from '../components/SettingsTabs.tsx';
 
@@ -158,86 +159,31 @@ function SourcesSection() {
   );
 }
 
-function SentimentSection({ s }: { s: SettingsView }) {
+/** FD-AIKEYS: the common score is the local model's; each user's own AI is in their own settings. */
+function SentimentSection() {
   const qc = useQueryClient();
-  // Also for what the key spent today (FD-AICLARITY), whatever the engine: the summaries use it too.
   const health = useQuery({ queryKey: ['health'], queryFn: () => api.get<Health>('/api/health'), refetchInterval: 30_000 });
-  const save = useSaveSettings();
-  const [key, setKey] = useState('');
-  const setClaudeKey = useMutation({
-    mutationFn: (k: string | null) => api.put<SettingsView>('/api/settings/claude-key', { key: k }),
-    onSuccess: (data) => {
-      setKey('');
-      qc.setQueryData(['settings'], data);
-    },
-  });
   const rescore = useMutation({ mutationFn: () => api.post<{ reset: number }>('/api/sentiment/rescore', { hours: 48 }) });
   const recompute = useMutation({ mutationFn: () => api.post<{ finalized: string[] }>('/api/sentiment/recompute-history'), onSuccess: () => qc.invalidateQueries({ queryKey: ['sentiment'] }) });
+  const aiUsers = health.data?.sentiment.aiUsers;
   return (
-    <Panel id="sentiment" title="Motorul de sentiment" icon={Brain}>
+    <Panel id="sentiment" title="Sentimentul știrilor" icon={Brain}>
       <div className="flex max-w-[75ch] flex-col gap-4 text-[13px]">
-        <fieldset className="flex flex-col gap-2">
-          <legend className="sr-only">Motor</legend>
-          <label className="flex items-start gap-2">
-            <input type="radio" name="engine" checked={s.sentiment.engine === 'local'} onChange={() => save.mutate({ sentiment: { engine: 'local' } })} className="mt-1" />
-            <span>
-              <strong>Local</strong>: model AI pe serverul Sentiq, plus reguli de piață. Gratuit.
-            </span>
-          </label>
-          <label className="flex items-start gap-2">
-            <input
-              type="radio"
-              name="engine"
-              checked={s.sentiment.engine === 'claude'}
-              onChange={() => save.mutate({ sentiment: { engine: 'claude' } })}
-              className="mt-1"
-            />
-            <span>
-              <strong>Claude</strong>: înțelege mai bine implicațiile macro. Trimite doar titlurile știrilor către Anthropic, cu cheia de mai jos; se plătește la Anthropic după tokeni (consumul de azi e mai jos).
-            </span>
-          </label>
-        </fieldset>
-        {s.sentiment.engine === 'claude' && !s.claudeKeySet && <Warning>Fără cheie API se folosește în continuare motorul local.</Warning>}
-        {health.data?.sentiment.claude?.lastError && (
-          <Warning>
-            Claude: {health.data.sentiment.claude.lastError.message}.{' '}
-            {health.data.sentiment.claude.lastError.permanent ? 'Se folosește motorul local până când salvezi o cheie validă.' : 'Se folosește temporar motorul local; se reîncearcă automat.'}
-          </Warning>
+        <p className="text-muted">
+          <strong className="text-text">Scorul comun</strong> îl dă modelul local (pe serverul Sentiq, plus reguli de piață), gratuit, pentru toți. Fiecare utilizator își poate pune
+          propria cheie AI (Anthropic, OpenAI sau Google Gemini) în{' '}
+          <Link to="/settings#ai" className="text-accent">
+            Setări → Ale mele → Inteligență artificială
+          </Link>
+          . Cu ea are Rezumatul zilei și, la alegere, scorul știrilor dat de AI-ul său, plătit direct la furnizor. Cheia ta e tot acolo.
+        </p>
+        {typeof aiUsers === 'number' && (
+          <p className="text-muted">
+            {aiUsers === 0
+              ? 'Acum nimeni nu are scorul știrilor pe AI-ul propriu.'
+              : `${aiUsers} ${aiUsers === 1 ? 'utilizator are' : 'utilizatori au'} scorul știrilor pe AI-ul propriu (îl văd doar în contul propriu); ceilalți văd scorul comun.`}
+          </p>
         )}
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1">
-            <span className="text-faint">Model Claude</span>
-            <select value={s.sentiment.claudeModel} onChange={(e) => save.mutate({ sentiment: { claudeModel: e.target.value } })}>
-              {CLAUDE_MODELS.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                  {m.includes('haiku') ? ' (cel mai ieftin)' : m.includes('opus') ? ' (cel mai capabil)' : ''}
-                </option>
-              ))}
-            </select>
-          </label>
-          <form
-            className="flex flex-wrap items-end gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (key.trim()) setClaudeKey.mutate(key.trim());
-            }}
-          >
-            <label className="flex flex-col gap-1">
-              <span className="text-faint">Cheie API Anthropic, folosită și de Rezumat {s.claudeKeySet && <>(salvată: {s.claudeKeyHint})</>}</span>
-              <input type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-ant-…" className="w-72 max-w-full" />
-            </label>
-            <button className="btn" disabled={!key.trim() || setClaudeKey.isPending}>
-              Salvează cheia
-            </button>
-            {s.claudeKeySet && (
-              <button type="button" className="btn btn-danger" onClick={() => setClaudeKey.mutate(null)}>
-                Șterge cheia
-              </button>
-            )}
-          </form>
-        </div>
-        <KeyUse engine={s.sentiment.engine} keySet={s.claudeKeySet} usage={health.data?.claudeUsage} loaded={health.isSuccess} />
         <div className="flex flex-wrap gap-2">
           <button className="btn" onClick={() => rescore.mutate()} disabled={rescore.isPending}>
             Rescorează ultimele 48 h
@@ -245,45 +191,12 @@ function SentimentSection({ s }: { s: SettingsView }) {
           <button className="btn" onClick={() => recompute.mutate()} disabled={recompute.isPending}>
             Recalculează istoricul zilnic
           </button>
-          {rescore.data && <span className="self-center text-muted">{rescore.data.reset} știri trimise la rescorare.</span>}
+          {rescore.data && <span className="self-center text-muted">{rescore.data.reset} știri trimise la rescorare (scorul comun).</span>}
           {recompute.data && <span className="self-center text-muted">{recompute.data.finalized.length} zile recalculate.</span>}
         </div>
-        {(save.error || setClaudeKey.error) && <div className="text-bear">{errorMessage(save.error ?? setClaudeKey.error)}</div>}
+        {(rescore.error || recompute.error) && <div className="text-bear">{errorMessage(rescore.error ?? recompute.error)}</div>}
       </div>
     </Panel>
-  );
-}
-
-/** FD-AICLARITY: what Sentiq does with the Claude key by itself, with today's use. */
-function KeyUse({ engine, keySet, usage, loaded }: { engine: string; keySet: boolean; usage: Health['claudeUsage']; loaded: boolean }) {
-  const tokens = (c: { input: number; output: number }) => `${fmtNum(c.input, 0)} / ${fmtNum(c.output, 0)} tokeni (intrare / ieșire)`;
-  // A server from before FD-AICLARITY answers without the counts.
-  const unknown = loaded ? 'consumul nu e disponibil (serverul nu îl trimite încă).' : '…';
-  const sentiment = usage?.sentiment;
-  const summary = usage?.summary;
-  return (
-    <section aria-labelledby="key-use" className="flex flex-col gap-2 rounded-[10px] border border-line px-4 py-3">
-      <h3 id="key-use" className="text-[13px] font-semibold text-text">
-        La ce folosește Sentiq cheia Claude{usage && <span className="font-normal text-faint"> · azi, ziua UTC {usage.day}</span>}
-      </h3>
-      <ul className="flex flex-col gap-1.5 text-muted">
-        <li>
-          <span className="text-text">Sentimentul fiecărei știri</span>, automat:{' '}
-          {engine !== 'claude'
-            ? 'motorul e Local, deci nu folosește cheia.'
-            : !keySet
-              ? 'fără cheie se folosește motorul local.'
-              : sentiment
-                ? `${fmtNum(sentiment.items, 0)} titluri în ${fmtNum(sentiment.calls, 0)} apeluri, ${tokens(sentiment)}, cu ${usage.sentimentModel}.`
-                : unknown}
-        </li>
-        <li>
-          <span className="text-text">Rezumatul de pe Azi</span> (butonul „Rezumat”, pentru fiecare utilizator):{' '}
-          {summary ? `${fmtNum(summary.calls, 0)} ${summary.calls === 1 ? 'rezumat' : 'rezumate'}, ${tokens(summary)}, cu ${usage.summaryModel}.` : unknown}
-        </li>
-      </ul>
-      <p className="text-faint">Prețul în dolari îl arată consola Anthropic (Usage).</p>
-    </section>
   );
 }
 
@@ -329,88 +242,20 @@ function MarketDefaults({ s }: { s: SettingsView }) {
 }
 
 function MarketDataSection({ s }: { s: SettingsView }) {
-  const qc = useQueryClient();
-  const info = useStocksInfo();
-  const [key, setKey] = useState('');
-  const setTdKey = useMutation({
-    mutationFn: (k: string | null) => api.put<SettingsView>('/api/settings/twelvedata-key', { key: k }),
-    onSuccess: (data) => {
-      setKey('');
-      qc.setQueryData(['settings'], data);
-      // Timeframes and sources of the stock charts change with the key.
-      void qc.invalidateQueries({ queryKey: ['stocks'] });
-      void qc.invalidateQueries({ queryKey: ['candles', 'stock'] });
-    },
-  });
-  const b = info.data?.budget;
   return (
     <Panel id="market-data" title="Date de piață" icon={ChartLine}>
       <div className="flex max-w-[75ch] flex-col gap-2 text-[13px]">
         <MarketDefaults s={s} />
         <p className="text-muted">
-          <strong className="text-text">Acțiuni:</strong> graficele zilnice și săptămânale vin gratuit de la Nasdaq. Pentru timeframe-urile intraday (1m – 4h), pentru toți utilizatorii, pune cheia gratuită{' '}
-          <a href="https://twelvedata.com/register" target="_blank" rel="noreferrer">
-            Twelve Data
-          </a>{' '}
-          (după înregistrare, în pagina API Keys). Planul gratuit are 8 cereri pe minut și 800 pe zi; un plan plătit (de exemplu Grow, fără limită zilnică) e recunoscut
-          singur, din cheie. Aplicația ține minte lumânările, ca să nu consume cereri degeaba.
+          <strong className="text-text">Acțiuni:</strong> graficele zilnice și săptămânale vin gratuit de la Nasdaq, pentru toți. Pentru 1m – 4h, fiecare utilizator își pune
+          propria cheie Twelve Data (gratuită) în{' '}
+          <Link to="/settings#stock-data" className="text-accent">
+            Setări → Ale mele → Date pentru acțiuni
+          </Link>
+          ; creditele și planul sunt ale fiecărei chei. Cheia ta e tot acolo.
         </p>
-        <form
-          className="flex flex-wrap items-end gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (key.trim()) setTdKey.mutate(key.trim());
-          }}
-        >
-          <label className="flex flex-col gap-1">
-            <span className="text-faint">Cheie Twelve Data {s.twelveDataKeySet && <>(salvată: {s.twelveDataKeyHint})</>}</span>
-            <input type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="cheia de 32 de caractere" className="w-72 max-w-full" />
-          </label>
-          <button className="btn" disabled={!key.trim() || setTdKey.isPending}>
-            {setTdKey.isPending ? 'Se verifică…' : 'Verifică și salvează'}
-          </button>
-          {s.twelveDataKeySet && (
-            <button type="button" className="btn btn-danger" onClick={() => setTdKey.mutate(null)} disabled={setTdKey.isPending}>
-              Șterge cheia
-            </button>
-          )}
-        </form>
-        {s.twelveDataKeySet && b && <TdPlanLine b={b} />}
-        {setTdKey.error && <div className="text-bear">{errorMessage(setTdKey.error)}</div>}
       </div>
     </Panel>
-  );
-}
-
-const PLAN_NAMES: Record<string, string> = { basic: 'Basic (gratuit)', grow: 'Grow', pro: 'Pro', ultra: 'Ultra', enterprise: 'Enterprise' };
-
-/** FD-TDPLAN: the key's plan as read from Twelve Data, today's use against it, and a read on request (after an upgrade). */
-function TdPlanLine({ b }: { b: TdBudget }) {
-  const qc = useQueryClient();
-  const reread = useMutation({
-    mutationFn: () => api.post<{ budget: TdBudget }>('/api/settings/twelvedata-plan'),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['stocks'] }),
-  });
-  const name = PLAN_NAMES[b.plan.category] ?? b.plan.category;
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <span>
-          Planul Twelve Data: <strong className="text-text">{b.plan.assumed ? `${name} (presupus, încă necitit)` : name}</strong>: {b.perMinute} cereri pe minut,{' '}
-          {b.perDay === null ? 'fără limită zilnică' : `${b.perDay} pe zi`}
-          {b.plan.at && <span className="text-faint"> (citit {fmtAgo(b.plan.at)})</span>}.
-        </span>
-        <button type="button" className="btn" onClick={() => reread.mutate()} disabled={reread.isPending}>
-          {reread.isPending ? 'Se citește…' : 'Recitește planul'}
-        </button>
-      </div>
-      {/* Wraps on a phone (`.num` alone never breaks a line). */}
-      <p className="num whitespace-normal text-faint">
-        Consum azi (UTC): {b.used}
-        {b.perDay === null ? '' : ` / ${b.perDay}`} cereri; în ultimul minut: {b.minuteUsed} / {b.perMinute}.
-      </p>
-      {reread.error && <div className="text-bear">{errorMessage(reread.error)}</div>}
-    </div>
   );
 }
 
@@ -514,7 +359,7 @@ export default function AdminSettingsPage() {
       ) : (
         <>
           <SourcesSection />
-          <SentimentSection s={settings.data} />
+          <SentimentSection />
           <MarketDataSection s={settings.data} />
           <RetentionSection s={settings.data} />
           <EmailSection s={settings.data} />

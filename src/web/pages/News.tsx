@@ -3,12 +3,14 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import type { NewsItemDto, NewsPage, SourceRow } from '../../shared/api-types.ts';
+import { FILTER_INDICES } from '../../shared/stock-indices.ts';
+import { engineLabel } from '../../shared/ai.ts';
 import { dayKey } from '../../shared/time.ts';
 import { api, qs } from '../api.ts';
 import { fmtAgo, fmtDate, fmtDateTime, fmtNum, fmtTime } from '../format.ts';
 import { plainSymbol } from '../../shared/indices.ts';
 import { useStockSet, useTz, useWatchlist } from '../hooks.ts';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { Empty, ErrorNote, Loading, ScoreBar, Seg } from '../components/ui.tsx';
 import { CoinLogo, TopicIcon } from '../components/icons.tsx';
 
@@ -20,12 +22,13 @@ type Sent = '' | 'positive' | 'neutral' | 'negative' | 'pending';
 const NEW_MS = 15 * 60_000;
 const CAT_LABEL: Record<string, string> = { crypto: 'Crypto', stocks: 'Acțiuni', macro: 'Macro', geopolitics: 'Geopolitică' };
 const FLAG_LABEL: Record<string, string> = { sponsored: 'sponsorizat', speculative: 'speculativ', recap: 'rezumat', lowRelevance: 'relevanță scăzută' };
-const ENGINE_LABEL = (e: string) => (e === 'local' ? 'model local + reguli' : e === 'rules' ? 'doar reguli' : e.startsWith('claude:') ? `Claude (${e.slice(7)})` : e);
 
 function NewsRow({ item, tz, stocks }: { item: NewsItemDto; tz: string; stocks: ReadonlySet<string> }) {
   const [open, setOpen] = useState(false);
   const meta = item.sentiment?.meta as { model?: number | null; rules?: { id: string; score: number; text: string; negated: boolean }[]; impact?: number } | null;
   const today = dayKey(item.publishedAt, tz) === dayKey(Date.now(), tz);
+  // Who gave the importance: the AI that scored the item ("Claude", "ChatGPT", "Gemini").
+  const aiName = item.sentiment && /^(claude|openai|gemini):/.test(item.sentiment.engine) ? engineLabel(item.sentiment.engine).replace(/ \(.*$/, '') : 'AI';
   return (
     <li
       className={clsx(
@@ -83,7 +86,7 @@ function NewsRow({ item, tz, stocks }: { item: NewsItemDto; tz: string; stocks: 
               <details className="text-[12px] text-faint">
                 <summary className="cursor-pointer transition-colors hover:text-accent">De ce acest scor?</summary>
                 <div className="mt-1.5 space-y-0.5">
-                  <div>Motor: {ENGINE_LABEL(item.sentiment.engine)}</div>
+                  <div>Motor: {engineLabel(item.sentiment.engine)}</div>
                   {typeof meta?.model === 'number' && <div>Model: {meta.model.toFixed(2)}</div>}
                   {meta?.rules?.map((r, i) => (
                     <div key={i}>
@@ -96,9 +99,9 @@ function NewsRow({ item, tz, stocks }: { item: NewsItemDto; tz: string; stocks: 
                     Relevanță {fmtNum(item.relevance, 2)}, importanță {fmtNum(item.impact, 1)}{' '}
                     {item.impactSource === 'ai'
                       ? item.ruleImpact !== item.impact
-                        ? `(Claude; după cuvinte-cheie ar fi ${fmtNum(item.ruleImpact, 1)})`
-                        : '(Claude)'
-                      : '(după cuvinte-cheie)'}
+                        ? `(${aiName}), importanță ${fmtNum(item.ruleImpact, 1)} (cuvinte-cheie)`
+                        : `(${aiName} și cuvinte-cheie)`
+                      : '(cuvinte-cheie)'}
                   </div>
                 </div>
               </details>
@@ -197,6 +200,8 @@ export default function NewsPageView() {
   }, [q.data]);
 
   const toggleCoin = (c: string) => setCoins((cur) => (cur.includes(c) ? cur.filter((x) => x !== c) : [...cur, c]));
+  const scope = q.data?.pages[0]?.stockScope;
+  const stockNote = scope ? scope.indices.map((id) => FILTER_INDICES.find((f) => f.id === id)?.name ?? id).join(', ') : null;
 
   return (
     <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-3.5">
@@ -208,6 +213,12 @@ export default function NewsPageView() {
         </span>
       </div>
 
+      {/* FD-INDEXNEWS §2: the stock news are limited to the indices picked in the settings. */}
+      {stockNote && (
+        <p className="text-[12.5px] text-muted">
+          Acțiuni: doar companiile din {stockNote} (plus știrile generale de bursă și favoritele). <Link to="/settings#stock-news">Schimbă în Setări</Link>
+        </p>
+      )}
       <div role="toolbar" aria-label="Filtre" className="panel flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-[14px] px-3 py-2.5">
         <Seg
           label="Interval"

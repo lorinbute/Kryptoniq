@@ -1,6 +1,8 @@
 // Wires the services together (used by main.ts and by the API tests).
 import type { AppConfig } from './config.ts';
+import { AiService, type AiServiceDeps } from './ai/service.ts';
 import { AccountsService, defaultClientFactory, type BrokerFactory, type ClientFactory } from './exchange/accounts.ts';
+import { TradingService, type TraderFactory } from './exchange/trading/service.ts';
 import { CalendarService } from './calendar/service.ts';
 import { EconomyService } from './economy/service.ts';
 import { buildDayContext } from './summary/context.ts';
@@ -11,6 +13,8 @@ import { MarketData } from './market/market.ts';
 import { MarketSource } from './market/source.ts';
 import { StockData } from './market/stocks.ts';
 import { CoinRegistry } from './news/coin-registry.ts';
+import { IndexMembersService } from './news/index-members.ts';
+import { stockScopeFor } from './news/stock-scope.ts';
 import { seedSources, syncStockSources } from './news/sources.ts';
 import { Scheduler } from './jobs/scheduler.ts';
 import { Scanner } from './scanner/scanner.ts';
@@ -32,7 +36,11 @@ export interface AppContext {
   box: SecretBox;
   settings: SettingsService;
   coins: CoinRegistry;
+  /** FD-INDEXNEWS: the companies of the filter indices. */
+  indexMembers: IndexMembersService;
   nli: NliScorer;
+  /** FD-AIKEYS: each user's own AI (provider, model, key, what it spent). */
+  ai: AiService;
   sentiment: SentimentService;
   daily: DailySentimentService;
   calendar: CalendarService;
@@ -42,6 +50,8 @@ export interface AppContext {
   stocks: StockData;
   scanner: Scanner;
   accounts: AccountsService;
+  /** FD-TRADING: orders on the accounts where trading was switched on. */
+  trading: TradingService;
   scheduler: Scheduler;
   /** FD-ECON. */
   economy: EconomyService;
@@ -61,11 +71,15 @@ export interface ContextOverrides {
   stocks?: StockData;
   clientFactory?: ClientFactory;
   brokerFactory?: BrokerFactory;
+  /** FD-TRADING: the traders (tests: simulated platforms). */
+  traderFactory?: TraderFactory;
   box?: SecretBox;
   /** Waits before retrying a refused exchange read (TD-RATELIMIT); tests use zeros. */
   retryDelaysMs?: readonly number[];
   /** An open database (tests: their own schema); otherwise `config.db` is opened (TD-AZURE §8). */
   db?: Db;
+  /** The users' AI clients and the network of their model lists (tests). */
+  ai?: Pick<AiServiceDeps, 'clientFactory' | 'http' | 'anthropicSdk'>;
 }
 
 const DEFAULT_WATCHLIST = ['BTC', 'ETH', 'SOL'];
@@ -77,6 +91,7 @@ export async function encryptedSecrets(db: Db): Promise<number> {
       await db.get<{ n: number }>(
         `SELECT (SELECT count(*) FROM exchange_accounts)
               + (SELECT count(*) FROM settings WHERE [key] IN (N'claude_key', N'resend_key', N'twelvedata_key'))
+              + (SELECT count(*) FROM user_keys)
               + (SELECT count(*) FROM users WHERE totp_secret IS NOT NULL) AS n`,
       )
     )?.n ?? 0
@@ -119,6 +134,12 @@ export async function createContext(config: AppConfig, log: Logger, overrides: C
   }
   // FD-USERS §2: the personal settings so far kept globally become the admin's own.
   await settings.migrateLegacyToAdmin(admin.id);
+  // FD-AIKEYS: the AI key and engine, so far everyone's (the admin's), become the admin's own. Before any other write
+  // of the global settings: a write keeps only what the schema knows, and the old engine is no longer in it.
+  const ai = new AiService({ db, settings, log, ...overrides.ai });
+  if (await ai.migrateLegacy(admin.id)) log.info('ai: the Claude key and engine are now the admin\'s own (Settings → Mine → AI)');
+  // FD-TDKEYS: the Twelve Data key, so far everyone's, becomes the admin's own.
+  if (await settings.migrateTwelveData(admin.id)) log.info("twelvedata: the key is now the admin's own (Settings → Mine)");
   // FD-MARKETSRC: the exchange and the chart history become everyone's, from the admin's.
   await settings.migrateMarketData(admin.id);
   // The admin's address can come from the environment before the first sign-in (FD-USERS §3).
@@ -130,22 +151,26 @@ export async function createContext(config: AppConfig, log: Logger, overrides: C
       log.warn(`SENTIQ_ADMIN_EMAIL ignored: ${(err as Error).message}`);
     }
   }
-  const coins = new CoinRegistry(db);
+  const indexMembers = new IndexMembersService(db);
+  const coins = new CoinRegistry(db, Date.now, indexMembers);
   const nli = overrides.nli ?? new TransformersNli(config.modelsDir, log);
-  const sentiment = new SentimentService(db, settings, nli, log);
-  const daily = new DailySentimentService(db, settings);
+  const sentiment = new SentimentService(db, ai, nli, log);
+  // FD-INDEXNEWS: a user's own index also when only their stock news are limited to indices.
+  const daily = new DailySentimentService(db, settings, ai, (userId) => stockScopeFor(db, settings, userId));
   const calendar = new CalendarService(db, log);
   const economy = new EconomyService(db, log);
   const market = overrides.market ?? new MarketData({ proxy, retryDelaysMs: overrides.retryDelaysMs });
-  const stocks = overrides.stocks ?? new StockData({ db, key: () => settings.getTwelveDataKey() });
+  // FD-TDKEYS: each user's Twelve Data key.
+  const stocks = overrides.stocks ?? new StockData({ db, key: (userId) => settings.getTwelveDataKey(userId) });
   const marketSource = new MarketSource(db, settings, market);
   const scanner = new Scanner(db, settings, market, log, stocks, marketSource);
   const accounts = new AccountsService(db, box, log, overrides.clientFactory ?? defaultClientFactory(proxy), { retryDelaysMs: overrides.retryDelaysMs, brokerFactory: overrides.brokerFactory });
+  const trading = new TradingService({ db, accounts, log, traderFactory: overrides.traderFactory });
   const scheduler = new Scheduler(db, log);
-  const summary = new SummaryService({ db, settings, log, usage: sentiment.usage, build: (userId, now) => buildDayContext({ db, settings, daily, calendar, economy, scanner }, userId, now) });
+  const summary = new SummaryService({ db, ai, log, build: (userId, now) => buildDayContext({ db, settings, daily, calendar, economy, scanner }, userId, now) });
   const sessions = new Sessions(db);
   const passkeys = new PasskeyService(db, users);
   const mailer = new Mailer(() => settings.getResend(), log);
   const throttle = new Throttle();
-  return { config, log, db, box, settings, coins, nli, sentiment, daily, calendar, economy, summary, market, marketSource, stocks, scanner, accounts, scheduler, users, sessions, passkeys, mailer, throttle };
+  return { config, log, db, box, settings, coins, indexMembers, nli, ai, sentiment, daily, calendar, economy, summary, market, marketSource, stocks, scanner, accounts, trading, scheduler, users, sessions, passkeys, mailer, throttle };
 }

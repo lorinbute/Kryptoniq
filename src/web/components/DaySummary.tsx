@@ -1,21 +1,17 @@
-// "Rezumat": the day so far, summarised by Claude, with a verdict and the charts it chose (FD-SUMMARY §2–§3).
+// "Rezumat": the day so far, summarised by the user's own AI (FD-AIKEYS), with a verdict and the charts it chose
+// (FD-SUMMARY §2–§3).
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { AlertTriangle, CircleCheck, Clock, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
-import type { StoredSummary, SummaryChart } from '../../shared/api-types.ts';
+import { AI_PROVIDER_INFO, modelLabel, providerOfModel } from '../../shared/ai.ts';
+import type { StoredSummary, SummaryChart, SummaryState } from '../../shared/api-types.ts';
 import { api, ApiError, errorMessage } from '../api.ts';
-import { useIsAdmin } from '../auth.ts';
 import { fmtEconPeriod, fmtEconValue, toneOf } from '../econ-format.ts';
 import { fmtAgo, fmtIn, fmtTime } from '../format.ts';
+import { lockScroll } from '../scroll-lock.ts';
 import { useNow, useTz } from '../hooks.ts';
-
-interface SummaryState {
-  summary: StoredSummary | null;
-  hasKey: boolean;
-  retryAt: number | null;
-}
 
 const KEY = ['summary'] as const;
 
@@ -25,7 +21,11 @@ const VERDICT: Record<StoredSummary['content']['verdict'], { label: string; box:
   slaba: { label: 'Zi slabă: prudență', box: 'border-bear/50 bg-bear/[0.07]', text: 'text-bear' },
 };
 const CONFIDENCE: Record<StoredSummary['content']['confidence'], string> = { scazuta: 'încredere scăzută', medie: 'încredere medie', ridicata: 'încredere ridicată' };
-const MODEL_NAME = (id: string) => (id === 'claude-opus-5-5' ? 'Claude Opus 5.5' : id);
+/** "Claude", "ChatGPT", "Gemini" for a model id ("AI" for one Sentiq does not know). */
+const productOf = (model: string | undefined) => {
+  const p = model ? providerOfModel(model) : null;
+  return p ? AI_PROVIDER_INFO[p].product : 'AI';
+};
 
 /** A line chart: the app's numbers, the last point in the colour of good / bad, the forecast as a hollow dot. */
 function LineChart({ c }: { c: Extract<SummaryChart, { kind: 'line' }> }) {
@@ -199,7 +199,6 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const tz = useTz();
   const now = useNow(1000);
-  const admin = useIsAdmin();
   const dialog = useRef<HTMLDivElement>(null);
   const q = useQuery({ queryKey: KEY, queryFn: () => api.get<SummaryState>('/api/summary'), staleTime: 0 });
   const gen = useMutation({
@@ -243,11 +242,11 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
       }
     };
     window.addEventListener('keydown', onKey);
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    // FD-SCROLLLOCK: the shared lock, so another window or the chart's full screen cannot undo it.
+    const release = lockScroll();
     return () => {
       window.removeEventListener('keydown', onKey);
-      document.body.style.overflow = overflow;
+      release();
       before?.focus?.();
     };
   }, [onClose]);
@@ -256,6 +255,8 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
   const retryAt = q.data?.retryAt && q.data.retryAt > now ? q.data.retryAt : null;
   const busy = gen.isPending;
   const noKey = q.data && !q.data.hasKey;
+  // Who writes it now (the user's choice), and who wrote the one shown.
+  const writer = q.data?.ai ? AI_PROVIDER_INFO[q.data.ai.provider].product : productOf(s?.model);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-scrim p-0 backdrop-blur-sm sm:p-4 sm:pt-[3vh]" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -279,7 +280,7 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
                 {s ? (
                   <>
                     <span className="whitespace-nowrap">azi până la {fmtTime(s.createdAt, tz)}</span> · <span className="whitespace-nowrap">generat {fmtAgo(s.createdAt, now)}</span>
-                    <span className="whitespace-nowrap max-sm:hidden"> · {MODEL_NAME(s.model)}</span>
+                    <span className="whitespace-nowrap max-sm:hidden"> · {modelLabel(s.model)}</span>
                   </>
                 ) : (
                   'ziua de azi, până acum'
@@ -297,7 +298,7 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
           </button>
         </header>
 
-        <div className="flex-1 overflow-y-auto px-5 py-5">
+        <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-5">
           {q.isPending && (
             <div className="flex items-center gap-2 py-10 text-muted" role="status">
               <Loader2 size={16} className="animate-spin text-accent" aria-hidden />
@@ -307,20 +308,19 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
           {q.isError && <p className="py-6 text-bear">{errorMessage(q.error)}</p>}
           {noKey && (
             <div className="flex flex-col items-start gap-3 py-8 text-[14px]">
-              <p>Rezumatul îl scrie Claude, cu cheia API Anthropic din Setări → Admin → Motorul de sentiment.</p>
-              {admin ? (
-                <Link to="/settings/admin#sentiment" className="btn btn-primary" onClick={onClose}>
-                  Pune cheia în Setări admin
-                </Link>
-              ) : (
-                <p className="text-muted">Cheia o pune adminul aplicației.</p>
-              )}
+              <p>
+                Rezumatul îl scrie AI-ul tău (Claude, ChatGPT sau Gemini), cu cheia ta API{q.data?.ai ? ` ${AI_PROVIDER_INFO[q.data.ai.provider].name}` : ''}. Plătești direct la
+                furnizor, după consum.
+              </p>
+              <Link to="/settings#ai" className="btn btn-primary" onClick={onClose}>
+                Pune cheia în Setări
+              </Link>
             </div>
           )}
           {busy && (
             <div className="mb-4 flex items-center gap-2.5 rounded-[12px] border border-accent-dim/60 bg-accent/[0.06] px-4 py-3 text-[13.5px]" role="status">
               <Loader2 size={16} className="shrink-0 animate-spin text-accent" aria-hidden />
-              Claude citește ziua: sentimentul, știrile, calendarul, indicatorii economici și favoritele tale. Durează de obicei 20–60 de secunde.
+              {writer} citește ziua: sentimentul, știrile, calendarul, indicatorii economici și favoritele tale. Durează de obicei 20–60 de secunde.
             </div>
           )}
           {/* No key and too soon have their own messages (above and on the button). */}
@@ -338,8 +338,8 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
         </div>
 
         <footer className="border-t border-line px-5 py-2.5 text-[11.5px] text-faint">
-          Scris de Claude din datele Sentiq de azi (sentiment, știri, calendar, indicatori economici, contextul pieței, favoritele tale), cu cheia Claude a lui Sentiq{s ? ` (${s.model})` : ''};
-          cifrele graficelor sunt ale aplicației. Nu este un sfat de investiții.
+          Scris de {s ? `${productOf(s.model)} (${s.model})` : q.data?.hasKey ? writer : 'AI-ul tău'} din datele Sentiq de azi (sentiment, știri, calendar, indicatori economici, contextul pieței, favoritele tale), cu
+          cheia ta API; cifrele graficelor sunt ale aplicației. Nu este un sfat de investiții.
         </footer>
       </div>
     </div>

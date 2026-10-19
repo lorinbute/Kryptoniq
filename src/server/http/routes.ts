@@ -9,17 +9,25 @@ import type { AppContext } from '../context.ts';
 import { readContext } from '../market/context.ts';
 import { coinLogo } from '../market/logos.ts';
 import { STATS_PERIODS } from '../exchange/trade-stats.ts';
-import { defaultStockAliases, STOCK_SYMBOL_RE } from '../market/stocks.ts';
+import { CreditBudget, defaultStockAliases, STOCK_SYMBOL_RE, TwelveDataClient } from '../market/stocks.ts';
 import { fetchText } from '../net/http.ts';
 import { retagRecent } from '../news/ingest.ts';
 import { parseFeed } from '../news/parser.ts';
 import { queryNews, newsQuerySchema } from '../news/query.ts';
+import { stockScopeFor } from '../news/stock-scope.ts';
+import { FILTER_INDICES } from '../../shared/stock-indices.ts';
 import { safeHttpUrl } from '../news/normalize.ts';
 import { SOURCE_COLUMNS, syncStockSources, type SourceRow } from '../news/sources.ts';
 import { BIN } from '../db/schema.ts';
 import { formatIssues, TWELVEDATA_KEY_INVALID, TWELVEDATA_KEY_RE, ValidationError } from '../settings.ts';
-import { SUMMARY_MODEL } from '../summary/service.ts';
+import { AI_PROVIDERS } from '../../shared/ai.ts';
+import { orderTicketSchema } from '../../shared/trading.ts';
+import { COOLDOWN_MS, minutes } from '../auth/throttle.ts';
+import { CHALLENGE_TTL_MS, WEBAUTHN_COOKIE } from '../auth/passkeys.ts';
+import { TradingError } from '../exchange/trading/types.ts';
 import { me } from './auth.ts';
+import { relyingParty } from './auth-routes.ts';
+import { readCookie, setCookie } from './cookies.ts';
 import { ConflictError, NotFoundError } from './errors.ts';
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
@@ -60,19 +68,17 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
 
   app.get('/api/health', async () => {
     // Independent reads at once: each one is a trip to the database (TD-AZURE §12).
-    const [jobs, jobsLeader, sources, engine, pending, claude, calendar, ff, info, news, hasKey, claudeUsage] = await Promise.all([
+    const [jobs, jobsLeader, sources, pending, aiUsers, calendar, ff, info, news, tdUsers] = await Promise.all([
       ctx.scheduler.status(),
       ctx.scheduler.currentLeader(),
       db.all<SourceRow>(`SELECT ${SOURCE_COLUMNS} FROM sources ORDER BY category, name, id`),
-      ctx.sentiment.engine(),
       ctx.sentiment.pendingCount(),
-      ctx.sentiment.claudeStatus(),
+      ctx.ai.scoringUsers(),
       ctx.calendar.lastUpdate(),
       ctx.calendar.ffState(),
       db.info(),
       db.get<{ n: number }>('SELECT count(*) AS n FROM news'),
-      ctx.stocks.td.hasKey(),
-      ctx.sentiment.usage.today(),
+      ctx.settings.usersWithKey('twelvedata'),
     ]);
     return {
       now: Date.now(),
@@ -91,28 +97,32 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
         nextFetchAt: s.next_fetch_at,
         itemCount: s.item_count,
       })),
-      sentiment: { engine: engine.id, model: ctx.nli.status(), pending, claude },
+      // FD-AIKEYS: the common score is the local model's; some users have their own AI score the news too.
+      sentiment: { engine: ctx.sentiment.engine().id, model: ctx.nli.status(), pending, aiUsers: aiUsers.length },
       calendar: { ...calendar, ffBlockedUntil: ff.blockedUntil || null },
       db: { ...info, news: news?.n ?? 0 },
-      twelveData: { hasKey, ...ctx.stocks.budget.status() },
-      // FD-AICLARITY: what Sentiq itself spends on the Claude key today (UTC), and with which models.
-      claudeUsage: { ...claudeUsage, sentimentModel: (await ctx.settings.get()).sentiment.claudeModel, summaryModel: SUMMARY_MODEL },
+      // FD-TDKEYS: each user's own key; how many have one (their credits are theirs to see).
+      twelveData: { users: tdUsers.length },
     };
   });
 
   // ---------------- sentiment ----------------
-  // The same news for everybody, cut into days of each user's own time zone.
-  app.get('/api/sentiment/today', async (req) => ctx.daily.today((await mine(req)).timezone));
+  // The same news for everybody, cut into days of each user's own time zone; scored by the local model, or by the
+  // user's own AI where they chose it (FD-AIKEYS).
+  const scope = (req: FastifyRequest) => ctx.daily.scopeFor(me(req).id);
+  /** The user's own AI scores the news (FD-AIKEYS): its score is shown where it gave one. */
+  const ownAiScores = async (req: FastifyRequest) => ctx.ai.isScoring(me(req).id);
+  app.get('/api/sentiment/today', async (req) => ctx.daily.today((await mine(req)).timezone, Date.now(), await scope(req)));
 
   app.get('/api/sentiment/history', async (req) => {
     const { days } = parse(z.object({ days: z.coerce.number().int().min(1).max(365).default(30) }), req.query);
     const tz = (await mine(req)).timezone;
-    return { tz, points: await ctx.daily.history(days, tz) };
+    return { tz, points: await ctx.daily.history(days, tz, Date.now(), await scope(req)) };
   });
 
   app.get('/api/sentiment/day/:day', async (req) => {
     const { day } = parse(z.object({ day: z.string().refine(isDayKey, 'YYYY-MM-DD') }), req.params);
-    return ctx.daily.computeDay(day, (await mine(req)).timezone, Date.now());
+    return ctx.daily.computeDay(day, (await mine(req)).timezone, Date.now(), true, await scope(req));
   });
 
   app.post('/api/sentiment/rescore', async (req) => {
@@ -125,7 +135,15 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
   app.post('/api/sentiment/recompute-history', async () => ({ finalized: await ctx.daily.recomputeHistory() }));
 
   // ---------------- news ----------------
-  app.get('/api/news', async (req) => queryNews(db, parse(newsQuerySchema, req.query), (await mine(req)).timezone, me(req).id));
+  // FD-INDEXNEWS: the indices the stock news can be limited to, with how many companies and the lists' date.
+  app.get('/api/stock-indices', async () => {
+    const m = await ctx.indexMembers.get();
+    return { asOf: m.asOf, indices: FILTER_INDICES.map((f) => ({ ...f, count: m.members[f.id].length })) };
+  });
+
+  app.get('/api/news', async (req) =>
+    queryNews(db, parse(newsQuerySchema, req.query), (await mine(req)).timezone, me(req).id, Date.now(), await ownAiScores(req), await stockScopeFor(db, ctx.settings, me(req).id)),
+  );
 
   // ---------------- sources ----------------
   const sourceInput = z.object({
@@ -402,10 +420,10 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
         }),
         req.query,
       );
-      return ctx.stocks.candles(q.symbol, q.tf as Timeframe, q.limit);
+      return ctx.stocks.candles(q.symbol, q.tf as Timeframe, q.limit, me(req).id);
     }
     if (asset === 'stock') {
-      // FD-SENTIQ §4.3: a share by its ticker (Twelve Data with a key, otherwise Nasdaq daily).
+      // FD-SENTIQ §4.3: a share by its ticker (Twelve Data with the user's own key, FD-TDKEYS; otherwise Nasdaq daily).
       const q = parse(
         z.object({
           symbol: z.string().trim().toUpperCase().regex(STOCK_SYMBOL_RE),
@@ -414,7 +432,7 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
         }),
         req.query,
       );
-      return ctx.stocks.candles(q.symbol, q.tf as Timeframe, q.limit);
+      return ctx.stocks.candles(q.symbol, q.tf as Timeframe, q.limit, me(req).id);
     }
     const q = parse(
       z.object({
@@ -448,12 +466,14 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     // Shares and, since FD-INDICES, index ids (an unknown index comes back with its error, like an unknown share).
     .pipe(z.array(z.string().regex(LISTED_SYMBOL_RE)).min(1).max(50));
 
-  app.get('/api/stocks/info', async () => ({
-    timeframes: await ctx.stocks.timeframes(),
-    hasKey: await ctx.stocks.td.hasKey(),
-    market: await ctx.stocks.confirmedStatus(),
-    budget: ctx.stocks.budget.status(),
-  }));
+  /** The user's stock data (FD-TDKEYS): the timeframes their key gives, and its plan and credits. */
+  app.get('/api/stocks/info', async (req) => {
+    const u = me(req).id;
+    const budget = ctx.stocks.budget(u);
+    // Made on the user's first request: its stored plan and day count are read first.
+    await budget.ready;
+    return { timeframes: await ctx.stocks.timeframes(u), hasKey: await ctx.stocks.hasKey(u), market: await ctx.stocks.confirmedStatus(), budget: budget.status() };
+  });
 
   app.get('/api/stocks/quotes', async (req) => {
     const { symbols } = parse(z.object({ symbols: tickers }), req.query);
@@ -467,7 +487,7 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
 
   app.get('/api/stocks/search', async (req) => {
     const { q } = parse(z.object({ q: z.string().trim().min(1).max(40) }), req.query);
-    return ctx.stocks.search(q);
+    return ctx.stocks.search(q, me(req).id);
   });
 
   app.get('/api/stocks/spark', async (req) => {
@@ -489,11 +509,17 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
 
   app.get('/api/market/context', async () => readContext(db));
 
-  // FD-SUMMARY: the user's day summary by Claude (today in their time zone).
+  // FD-SUMMARY: the user's day summary (today in their time zone), by their own AI (FD-AIKEYS).
   const summaryState = async (req: FastifyRequest) => {
     const u = me(req);
     const day = dayKey(Date.now(), (await mine(req)).timezone);
-    return { summary: await ctx.summary.latest(u.id, day), hasKey: await ctx.summary.hasKey(), retryAt: await ctx.summary.retryAt(u.id, day) };
+    const ai = await ctx.ai.config(u.id);
+    return {
+      summary: await ctx.summary.latest(u.id, day),
+      hasKey: ai.key !== null,
+      ai: { provider: ai.provider, model: ai.model },
+      retryAt: await ctx.summary.retryAt(u.id, day),
+    };
   };
   app.get('/api/summary', async (req) => summaryState(req));
   app.post('/api/summary', async (req) => {
@@ -556,9 +582,20 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
   app.put('/api/settings', async (req) => {
     const u = me(req);
     const prev = await ctx.settings.forUser(u.id);
-    // Global keys (retention, sentiment engine) only for the admin: 403 for anybody else.
+    // Global keys (retention, market data) only for the admin: 403 for anybody else.
     const next = await ctx.settings.updateFor(u.id, u.role === 'admin', req.body);
+    if (JSON.stringify(prev.ai) !== JSON.stringify(next.ai)) {
+      // FD-AIKEYS: another provider, model or scoring choice: the scorer and the index follow at once.
+      ctx.ai.forgetChoice(u.id);
+      ctx.scheduler.nudge('sentiment.ai', 500);
+      ctx.scheduler.nudge('sentiment.daily', 2000);
+    }
     if (prev.timezone !== next.timezone) ctx.scheduler.nudge('sentiment.daily', 0);
+    if (JSON.stringify(prev.stockNews) !== JSON.stringify(next.stockNews)) {
+      // FD-INDEXNEWS §3: the user's own index is computed again with the new filter (the days with stored news).
+      await ctx.daily.resetUser(u.id);
+      ctx.scheduler.nudge('sentiment.daily', 500);
+    }
     if (
       prev.scanner.tf !== next.scanner.tf ||
       prev.market.exchange !== next.market.exchange ||
@@ -570,35 +607,75 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     return view(req);
   });
 
+  /** FD-TDKEYS: the user's own Twelve Data key, checked (one credit, theirs) before it is saved. */
   app.put('/api/settings/twelvedata-key', async (req) => {
+    const u = me(req).id;
     const { key } = parse(z.object({ key: z.string().max(200).nullable() }), req.body);
-    if (key && key.trim()) {
-      // A malformed key costs no request; a wrong one is refused here, not discovered later on a chart.
-      if (!TWELVEDATA_KEY_RE.test(key.trim())) throw new ValidationError(TWELVEDATA_KEY_INVALID);
-      await ctx.stocks.td.verify(key.trim()).catch((err: Error) => {
+    const k = key?.trim() ?? '';
+    const before = await ctx.settings.getTwelveDataKey(u);
+    const changed = (k || null) !== before;
+    if (k) {
+      // A malformed key costs no request; a wrong one is refused here, not discovered later on a chart. A new key is
+      // checked on its own credits (one), not on those of the key it replaces.
+      if (!TWELVEDATA_KEY_RE.test(k)) throw new ValidationError(TWELVEDATA_KEY_INVALID);
+      const checker = changed ? new TwelveDataClient(async () => k, new CreditBudget()) : ctx.stocks.td(u);
+      await checker.verify(k).catch((err: Error) => {
         throw new ValidationError(err.message);
       });
     }
-    await ctx.settings.setTwelveDataKey(key);
+    await ctx.settings.setTwelveDataKey(u, k || null);
+    // Another key (or none): its use of the day starts from nothing but its check (FD-TDKEYS §2).
+    if (changed) await ctx.stocks.budget(u).reset(k ? 1 : 0);
     // FD-TDPLAN: the new key's limits (a plan that cannot be read now is read by the job later); none without a key.
-    await ctx.stocks.refreshPlan(key && key.trim() ? key.trim() : null).catch((err: Error) => ctx.log.warn(`twelvedata: the plan could not be read (${err.message})`));
+    await ctx.stocks.refreshPlan(u, k || null).catch((err: Error) => ctx.log.warn(`twelvedata: the plan of user ${u} could not be read (${err.message})`));
     ctx.scheduler.nudge('scanner', 1000);
     return view(req);
   });
 
-  /** FD-TDPLAN: read the plan again now (after an upgrade on Twelve Data's site). */
-  app.post('/api/settings/twelvedata-plan', async () => {
-    if (!(await ctx.stocks.td.hasKey())) throw new ValidationError('Cheia Twelve Data lipsește');
-    await ctx.stocks.refreshPlan().catch((err: Error) => {
+  /** FD-TDPLAN: read the user's plan again now (after an upgrade on Twelve Data's site). */
+  app.post('/api/settings/twelvedata-plan', async (req) => {
+    const u = me(req).id;
+    if (!(await ctx.stocks.hasKey(u))) throw new ValidationError('Cheia ta Twelve Data lipsește');
+    await ctx.stocks.refreshPlan(u).catch((err: Error) => {
       throw new ValidationError(err.message);
     });
-    return { budget: ctx.stocks.budget.status() };
+    return { budget: ctx.stocks.budget(u).status() };
   });
 
-  app.put('/api/settings/claude-key', async (req) => {
-    const { key } = parse(z.object({ key: z.string().max(400).nullable() }), req.body);
-    await ctx.settings.setClaudeKey(key);
-    return view(req);
+  // ---------------- each user's own AI (FD-AIKEYS) ----------------
+  const providerParam = z.object({ provider: z.enum(AI_PROVIDERS) });
+
+  /** Saves (checked with the provider first) or removes the user's key of one provider. */
+  app.put('/api/ai/key', async (req) => {
+    const u = me(req);
+    const { provider, key } = parse(providerParam.extend({ key: z.string().max(400).nullable() }), req.body);
+    const { warning } = await ctx.ai.setKey(u.id, provider, key);
+    ctx.scheduler.nudge('sentiment.ai', 500);
+    ctx.scheduler.nudge('sentiment.daily', 2000);
+    return { ...(await view(req)), aiKeyWarning: warning };
+  });
+
+  /** The models the user's key of a provider can use (Sentiq's list without a key). */
+  app.get('/api/ai/models', async (req) => {
+    const { provider } = parse(providerParam, req.query);
+    return ctx.ai.models(me(req).id, provider);
+  });
+
+  /** The user's AI: what it is, whether it scores the news (and how that goes), what it spent today. */
+  app.get('/api/ai/status', async (req) => {
+    const u = me(req);
+    const [c, scoring, usage] = await Promise.all([ctx.ai.config(u.id), ctx.sentiment.aiStatus(u.id), ctx.ai.usage.today(u.id)]);
+    return { provider: c.provider, model: c.model, keySet: c.key !== null, scoring: c.scoring, scorer: scoring, usage };
+  });
+
+  /** The user's AI scores the last hours' news again (after another model, say). */
+  app.post('/api/ai/rescore', async (req) => {
+    const u = me(req);
+    const { hours } = parse(z.object({ hours: z.number().int().min(1).max(48).default(48) }), req.body ?? {});
+    if (!(await ctx.ai.isScoring(u.id))) throw new ValidationError('Scorul știrilor nu folosește AI-ul tău: alege-l întâi, cu cheia salvată.');
+    const reset = await ctx.sentiment.resetUser(u.id, Date.now() - hours * 3_600_000);
+    ctx.scheduler.nudge('sentiment.ai', 0);
+    return { reset };
   });
 
   // ---------------- accounts & portfolio ----------------
@@ -626,6 +703,7 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     const { id } = parse(idParam, req.params);
     await ownAccount(req, id);
     if (!(await ctx.accounts.delete(id))) throw new NotFoundError('Contul nu există');
+    ctx.trading.forget(id);
     afterAccountsChange(me(req).id);
     return { ok: true };
   });
@@ -658,5 +736,110 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     await ownAccount(req, p.id);
     await ctx.accounts.setCostBasis(p.id, p.asset, avgPrice);
     return { ok: true };
+  });
+
+  // ---------------- trading (FD-TRADING) ----------------
+  // Only the user's own accounts (others are "not found"), only where trading was switched on (the service checks).
+
+  app.get('/api/trading', async (req) => ({ accounts: await ctx.trading.caps(me(req).id) }));
+
+  app.get('/api/trading/log', async (req) => ctx.trading.journalOf(me(req).id));
+
+  // FD-TRADEUNLOCK: a passkey answers for both factors, as at sign-in; the challenge is bound to this user.
+  app.post('/api/trading/passkey/options', async (req, reply) => {
+    const { options, challengeId } = await ctx.passkeys.stepUpOptions(me(req).id, relyingParty(req));
+    setCookie(req, reply, WEBAUTHN_COOKIE, challengeId, { maxAgeMs: CHALLENGE_TTL_MS, path: '/api' });
+    return options;
+  });
+
+  app.post('/api/accounts/:id/trading', async (req, reply) => {
+    const { id } = parse(idParam, req.params);
+    const u = me(req);
+    const b = parse(
+      z.object({ enabled: z.boolean(), password: z.string().max(200).optional(), code: z.string().max(40).optional(), passkey: z.record(z.string(), z.unknown()).optional() }),
+      req.body,
+    );
+    await ownAccount(req, id);
+    if (!b.enabled) return ctx.trading.disable(u.id, id);
+    // Both factors again, on the account's own attempt budget (as changing the password or the authenticator).
+    const key = `account:${u.id}`;
+    const passkey = b.passkey;
+    if (passkey) {
+      // A passkey cannot be guessed: a refused one costs no attempt and a lockout does not stop it (as at sign-in).
+      const challengeId = readCookie(req, WEBAUTHN_COOKIE);
+      setCookie(req, reply, WEBAUTHN_COOKIE, null, { path: '/api' });
+      const view = await ctx.trading.enable(u.id, id, async () => {
+        try {
+          await ctx.passkeys.completeStepUp(u.id, challengeId, passkey, relyingParty(req));
+        } catch (err) {
+          ctx.log.warn(`trading: user ${u.id} switching trading on for account ${id} refused: passkey (${(err as Error).message})`);
+          throw err;
+        }
+        return 'ok';
+      });
+      ctx.throttle.reset(key);
+      return view;
+    }
+    const lockedError = (ms: number) => Object.assign(new Error(`Prea multe încercări. Mai încearcă peste ${minutes(ms)} minute.`), { statusCode: 429, code: 'TOO_MANY_ATTEMPTS' });
+    return ctx.throttle.serial(key, async () => {
+      const locked = ctx.throttle.lockedFor(key);
+      if (locked) throw lockedError(locked);
+      try {
+        const view = await ctx.trading.enable(u.id, id, () => ctx.users.stepUp(u.id, b.password, b.code));
+        ctx.throttle.reset(key);
+        return view;
+      } catch (err) {
+        if (err instanceof TradingError && err.code === 'BAD_FACTORS') {
+          const now = ctx.throttle.registerFailure(key);
+          if (now) throw lockedError(now);
+          const left = ctx.throttle.remaining(key);
+          const pause = `apoi o pauză de ${minutes(COOLDOWN_MS)} minute`;
+          err.message += left === 1 ? ` Mai ai o încercare, ${pause}.` : ` Mai ai ${left} încercări, ${pause}.`;
+        }
+        throw err;
+      }
+    });
+  });
+
+  const tradeMarket = z.enum(['spot', 'futures', 'stock']);
+
+  app.get('/api/trading/:id/symbols', async (req) => {
+    const { id } = parse(idParam, req.params);
+    const { market } = parse(z.object({ market: tradeMarket }), req.query);
+    await ownAccount(req, id);
+    return ctx.trading.symbols(me(req).id, id, market);
+  });
+
+  app.get('/api/trading/:id/instrument', async (req) => {
+    const { id } = parse(idParam, req.params);
+    const q = parse(z.object({ market: tradeMarket, symbol: z.string().trim().min(1).max(40) }), req.query);
+    await ownAccount(req, id);
+    return ctx.trading.instrument(me(req).id, id, q.market, q.symbol);
+  });
+
+  /** The form names the account it was filled for; it must be the one in the address. */
+  const ticketFor = (id: number, body: unknown) => {
+    const t = parse(orderTicketSchema, body);
+    if (t.accountId !== id) throw new ValidationError('Formularul e pentru alt cont.');
+    return t;
+  };
+
+  app.post('/api/trading/:id/preview', async (req) => {
+    const { id } = parse(idParam, req.params);
+    await ownAccount(req, id);
+    return ctx.trading.preview(me(req).id, ticketFor(id, req.body));
+  });
+
+  app.post('/api/trading/:id/orders', async (req) => {
+    const { id } = parse(idParam, req.params);
+    await ownAccount(req, id);
+    return ctx.trading.place(me(req).id, ticketFor(id, req.body));
+  });
+
+  app.post('/api/trading/:id/cancel', async (req) => {
+    const { id } = parse(idParam, req.params);
+    const b = parse(z.object({ orderId: z.string().trim().min(1).max(120), symbol: z.string().trim().min(1).max(60), market: tradeMarket, trigger: z.boolean().default(false) }), req.body);
+    await ownAccount(req, id);
+    return ctx.trading.cancel(me(req).id, id, b);
   });
 }

@@ -1,6 +1,6 @@
 // Who is asking (FD-USERS §1, TD-USERS §3). Every /api route needs a signed-in, active user, except the few that
-// sign people in; a handful are the admin's alone. The pages themselves (the SPA) are public: they show the
-// sign-in screen.
+// sign people in; an account without two-factor reaches only its setup (FD-2FA); a handful are the admin's alone.
+// The pages themselves (the SPA) are public: they show the sign-in screen.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AppContext } from '../context.ts';
 import { FULL_SESSION_MS, SESSION_COOKIE } from '../auth/sessions.ts';
@@ -12,6 +12,8 @@ export interface AuthUser {
   role: Role;
   email: string | null;
   name: string;
+  /** Two-factor is on (FD-2FA): without it only the setup routes answer. */
+  twoFactor: boolean;
 }
 
 declare module 'fastify' {
@@ -39,6 +41,13 @@ const PUBLIC = new Set([
   'POST /api/auth/passkey',
 ]);
 
+/**
+ * What an account without two-factor may still do besides the public routes (FD-2FA §1, TD-2FA §2): read its setup,
+ * start it and confirm it. Judged on the account, not the session, so every way in (password, passkey, the admin's
+ * first password, the activation link, an older session) meets it.
+ */
+const TWO_FACTOR_SETUP = new Set(['GET /api/account/2fa', 'POST /api/account/2fa/start', 'POST /api/account/2fa/enable']);
+
 /** The admin's routes (FD-USERS §2): everything that changes what all users get, and the server's internals. */
 const ADMIN_ONLY: { method: string; re: RegExp }[] = [
   { method: '*', re: /^\/api\/admin(\/|$)/ },
@@ -47,8 +56,7 @@ const ADMIN_ONLY: { method: string; re: RegExp }[] = [
   { method: 'PUT', re: /^\/api\/sources\// },
   { method: 'DELETE', re: /^\/api\/sources\// },
   { method: 'POST', re: /^\/api\/sentiment\/(rescore|recompute-history)$/ },
-  { method: 'PUT', re: /^\/api\/settings\/(claude-key|twelvedata-key|resend)$/ },
-  { method: 'POST', re: /^\/api\/settings\/twelvedata-plan$/ },
+  { method: 'PUT', re: /^\/api\/settings\/resend$/ },
 ];
 
 const asGet = (method: string) => (method === 'HEAD' ? 'GET' : method);
@@ -59,6 +67,10 @@ const asGet = (method: string) => (method === 'HEAD' ? 'GET' : method);
  */
 export function isPublicRoute(method: string, route: string | undefined): boolean {
   return route !== undefined && PUBLIC.has(`${asGet(method)} ${route}`);
+}
+
+export function isTwoFactorSetupRoute(method: string, route: string | undefined): boolean {
+  return route !== undefined && TWO_FACTOR_SETUP.has(`${asGet(method)} ${route}`);
 }
 
 export function isAdminRoute(method: string, route: string | undefined): boolean {
@@ -78,7 +90,7 @@ export function isActive(u: UserRow | undefined): u is UserRow {
   return !!u && u.disabled_at === null && (u.role === 'admin' || u.email_verified_at !== null) && u.password_hash !== null;
 }
 
-export const toAuthUser = (u: UserRow): AuthUser => ({ id: u.id, role: u.role, email: u.email, name: u.name });
+export const toAuthUser = (u: UserRow): AuthUser => ({ id: u.id, role: u.role, email: u.email, name: u.name, twoFactor: u.totp_confirmed_at !== null });
 
 /** The session cookie's token (only the request's own cookie; never a query parameter). */
 export const sessionToken = (req: FastifyRequest) => readCookie(req, SESSION_COOKIE);
@@ -102,6 +114,9 @@ export function registerAuth(app: FastifyInstance, ctx: AppContext): void {
     }
     if (isPublicRoute(req.method, route)) return undefined;
     if (!req.user) return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', message: 'Intră în cont ca să continui.' } });
+    if (!req.user.twoFactor && !isTwoFactorSetupRoute(req.method, route)) {
+      return reply.code(403).send({ error: { code: 'TWO_FACTOR_REQUIRED', message: 'Configurează mai întâi autentificarea în doi pași.' } });
+    }
     if (req.user.role !== 'admin' && isAdminRoute(req.method, route)) {
       return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Doar adminul poate face asta.' } });
     }

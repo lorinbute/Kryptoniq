@@ -1,5 +1,6 @@
-// What Claude reads to summarise a user's day (FD-SUMMARY §4, TD-SUMMARY §2), and the chart series it may choose
+// What the user's AI reads to summarise their day (FD-SUMMARY §4, TD-SUMMARY §2), and the chart series it may choose
 // from. Only Sentiq's own data about today: nothing is fetched from the internet here.
+import { stockScopeFor, stockScopeSql } from '../news/stock-scope.ts';
 import { indexById, plainSymbol } from '../../shared/indices.ts';
 import { dayBounds, dayKey } from '../../shared/time.ts';
 import type { CalendarService } from '../calendar/service.ts';
@@ -13,7 +14,7 @@ import type { SettingsService } from '../settings.ts';
 const HOUR = 3_600_000;
 const NEWS_IN_PROMPT = 40;
 
-/** A chart the summary can show: the app's own numbers, never Claude's (FD-SUMMARY §2). */
+/** A chart the summary can show: the app's own numbers, never the AI's (FD-SUMMARY §2). */
 export type SummaryChart =
   | {
       id: string;
@@ -78,7 +79,7 @@ interface NewsRow {
   coins: string | null;
 }
 
-/** Today for this user, as text for Claude and as chart series for the page. */
+/** Today for this user, as text for their AI and as chart series for the page. */
 export async function buildDayContext(deps: DayContextDeps, userId: number, now = Date.now()): Promise<DayContext> {
   const s = await deps.settings.forUser(userId);
   const tz = s.timezone;
@@ -98,9 +99,10 @@ export async function buildDayContext(deps: DayContextDeps, userId: number, now 
     status ? `Bursa SUA: ${status.label} (${status.state}).` : 'Bursa SUA: stare necunoscută.',
   ]);
 
-  // Sentiment of the day.
-  const today = await deps.daily.today(tz, now);
-  const history = await deps.daily.history(7, tz, now);
+  // Sentiment of the day: the user's own when their AI scores the news (FD-AIKEYS), the common one otherwise.
+  const scope = await deps.daily.scopeFor(userId);
+  const today = await deps.daily.today(tz, now, scope);
+  const history = await deps.daily.history(7, tz, now, scope);
   const counts = today.counts;
   add('Sentimentul zilei (0–100, 50 = neutru; calculat din toate știrile)', [
     `Index: ${today.index} (${today.confidence === 'high' ? 'încredere ridicată' : today.confidence === 'medium' ? 'încredere medie' : 'încredere scăzută'}); știri: ${counts.positive} pozitive, ${counts.neutral} neutre, ${counts.negative} negative, ${counts.pending} în analiză.`,
@@ -155,14 +157,19 @@ export async function buildDayContext(deps: DayContextDeps, userId: number, now 
     };
   }
 
-  // The day's most weighty news, one per story.
+  // The day's most weighty news, one per story (with the user's AI's scores where it gave one), the stock ones as the
+  // user's filter keeps them (FD-INDEXNEWS §2).
+  const stock = await stockScopeFor(deps.db, deps.settings, userId);
+  const stockFilter = stock ? stockScopeSql(stock) : null;
+  const score = scope === null ? 'n.sentiment' : 'COALESCE(a.score, n.sentiment)';
+  const impact = scope === null ? 'COALESCE(n.sentiment_impact, n.impact)' : 'COALESCE(a.impact, n.sentiment_impact, n.impact)';
   const news = await deps.db.all<NewsRow>(
-    `SELECT TOP (200) n.title, s.name AS source, n.category, n.published_at, n.sentiment, COALESCE(n.sentiment_impact, n.impact) AS impact, n.cluster_id,
-            (SELECT STRING_AGG(coin, ',') FROM news_coins c WHERE c.news_id = n.id) AS coins
-     FROM news n JOIN sources s ON s.id = n.source_id
-     WHERE s.enabled = 1 AND n.published_at >= ? AND n.published_at <= ? AND n.relevance > 0 AND n.sentiment IS NOT NULL
-     ORDER BY n.relevance * COALESCE(n.sentiment_impact, n.impact) * (0.3 + abs(n.sentiment)) DESC, n.published_at DESC, n.id`,
-    [start, now],
+    `SELECT TOP (200) n.title, s.name AS source, n.category, n.published_at, ${score} AS sentiment, ${impact} AS impact, n.cluster_id,
+            (SELECT STRING_AGG(coin, ',') FROM news_coins c WHERE c.news_id = n.id AND c.coin NOT LIKE N'#%') AS coins
+     FROM news n JOIN sources s ON s.id = n.source_id${scope === null ? '' : ' LEFT JOIN news_ai_scores a ON a.news_id = n.id AND a.user_id = ?'}
+     WHERE s.enabled = 1 AND n.published_at >= ? AND n.published_at <= ? AND n.relevance > 0 AND ${score} IS NOT NULL${stockFilter ? ` AND ${stockFilter.sql}` : ''}
+     ORDER BY n.relevance * ${impact} * (0.3 + abs(${score})) DESC, n.published_at DESC, n.id`,
+    [...(scope === null ? [start, now] : [scope, start, now]), ...(stockFilter ? [stockFilter.param] : [])],
   );
   const seen = new Set<string>();
   const picked = news.filter((n) => (seen.has(n.cluster_id) ? false : (seen.add(n.cluster_id), true))).slice(0, NEWS_IN_PROMPT);

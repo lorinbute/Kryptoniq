@@ -66,10 +66,10 @@ Porturi: server **4317** pe toate interfețele (`SENTIQ_BIND`, implicit `::`), V
 1. **Host allowlist** (anti DNS rebinding, `http/security.ts`): răspunde doar la `localhost`, adresele IPv4 / IPv6 ale Mac-ului, numele lui (cu și fără `.local`), `SENTIQ_ALLOWED_HOSTS` și gazda adresei publice; recitită la un minut. Altfel 403 „Sentiq răspunde doar pe adresele acestui Mac”.
 2. **Origin**: dacă există, trebuie să fie exact gazda cererii (același origin), altfel 403.
 3. **CSRF**: orice metodă ne-GET cere header-ul `X-Sentiq: 1` (`X-Kryptoniq: 1` încă acceptat, pentru taburile de dinainte de redenumire) și, cu corp, `Content-Type: application/json` (forțează preflight CORS, pe care nu îl permitem).
-4. **Autentificare** (`http/auth.ts`, TD-USERS): cookie `sentiq_session` (HttpOnly, SameSite=Strict, Secure pe HTTPS), sesiuni în DB după hash (`full` 30 de zile glisante, `pending` 5 minute între parolă și codul 2FA). Rute publice doar pentru login / cerere de cont / activare / resetare / passkey și `GET /api/ping`; restul cer sesiune `full`; `/api/admin/*`, `/api/health`, sursele, rescorarea și cheile globale cer rolul `admin`.
+4. **Autentificare** (`http/auth.ts`, TD-USERS): cookie `sentiq_session` (HttpOnly, SameSite=Strict, Secure pe HTTPS), sesiuni în DB după hash (`full` 30 de zile glisante, `pending` 5 minute între parolă și codul 2FA). Rute publice doar pentru login / cerere de cont / activare / resetare / passkey și `GET /api/ping`; restul cer sesiune `full` și un cont cu 2FA (TD-2FA: fără 2FA, doar configurarea; altfel 403 `TWO_FACTOR_REQUIRED`); `/api/admin/*`, `/api/health`, sursele, rescorarea și cheile globale cer rolul `admin`.
 5. **Parole**: `scrypt` (format `scrypt$N$r$p$salt$hash`, parametrii pot crește), minimum 12 caractere cu literă mare, mică și cifră. **TOTP**: SHA-1, 6 cifre, 30 s, ±1 pas, secretul criptat, un cod nu se poate refolosi (`totp_last_step`); 10 coduri de recuperare de unică folosință (SHA-256). **Passkey**: WebAuthn cu `userVerification: required`, RP = gazda cererii (merge pe `localhost`, nu pe IP). **Limitare**: 3 încercări greșite / dispozitiv → 15 minute.
 6. **Secrete** (chei exchange / broker, Claude, Twelve Data, Resend, secretul TOTP): AES-256-GCM cu cheia master de 32 de octeți din `SENTIQ_MASTER_KEY` (base64) sau `data/master.key` (generată la prima pornire, `chmod 600`). Format: `v1:<iv b64>:<tag b64>:<ct b64>`. API-ul nu returnează niciodată secretul, doar un indiciu (`abcd…wxyz`).
-7. **Fără cod de tranzacționare**: modulele exchange / broker fac doar citiri (`fetch*`, GET); un test verifică că nu există apeluri `createOrder|cancelOrder|cancelAllOrders|editOrder|withdraw|transfer|setLeverage|setMarginMode` în `src/server/exchange`.
+7. **Tranzacționare doar la cerere, fără mutări de fonduri** (TD-TRADING): ordinele, anulările, levierul și marja sunt doar în `src/server/exchange/trading/`, pe conturile cu tranzacționarea pornită (parola + 2FA). Retragerile și transferurile nu există nicăieri; un test verifică ambele reguli. Restul modulelor exchange / broker doar citesc.
 8. **Conținut din feed-uri**: doar text simplu (HTML eliminat, entități decodate); React escapează; link-urile doar `http(s)`, cu `rel="noopener noreferrer"`.
 9. **Header-e**: CSP pe HTML `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'` (tema se aplică dintr-un fișier, `public/theme.js`, nu inline), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`.
 10. **Log-uri** fără secrete (redactare `apiKey|api_key|secret|password|passphrase|claudeKey|x-api-key`); linkurile de activare / resetare nu apar niciodată în jurnal.
@@ -86,7 +86,7 @@ Porturi: server **4317** pe toate interfețele (`SENTIQ_BIND`, implicit `::`), V
 - **Citirile** nu așteaptă (`READ_COMMITTED_SNAPSHOT`).
 - **Erorile trecătoare** se reîncearcă. Baza indisponibilă → 503.
 
-Timp = **epoch ms (`BIGINT`)** peste tot. Schema e versionată în `schema_version` (`db/schema.ts`, migrări T-SQL care doar cresc; **1** = cele 8 migrări SQLite + `job_lease`; **2** = tabelele connectorului șterse, TD-MCPREMOVE), aplicate la pornire într-o tranzacție. Tot textul compară binar (`Latin1_General_100_BIN2`), ca în SQLite, în afară de emailuri (`CI_AS`). URL-urile și ID-urile de passkey sunt unice prin hash-ul lor. Backup: cel automat al Azure SQL. Datele de dinainte se mută o dată din `data/kryptoniq.db` (`scripts/sentiq.sh import-sqlite`, TD-AZURE §9).
+Timp = **epoch ms (`BIGINT`)** peste tot. Schema e versionată în `schema_version` (`db/schema.ts`, migrări T-SQL care doar cresc; **1** = cele 8 migrări SQLite + `job_lease`; **2** = tabelele connectorului șterse, TD-MCPREMOVE; **3** = cheile personale, scorurile AI ale fiecăruia și indicele lor, TD-AIKEYS / TD-TDKEYS; **4** = `users.totp_next_secret`, TD-2FA; **5** = tranzacționarea pe cont și `trade_log`, TD-TRADING), aplicate la pornire într-o tranzacție. Tot textul compară binar (`Latin1_General_100_BIN2`), ca în SQLite, în afară de emailuri (`CI_AS`). URL-urile și ID-urile de passkey sunt unice prin hash-ul lor. Backup: cel automat al Azure SQL. Datele de dinainte se mută o dată din `data/kryptoniq.db` (`scripts/sentiq.sh import-sqlite`, TD-AZURE §9).
 
 | Tabel | Ce ține | Din |
 |---|---|---|
@@ -98,9 +98,12 @@ Timp = **epoch ms (`BIGINT`)** peste tot. Schema e versionată în `schema_versi
 | `job_state` | starea job-urilor (și date persistate, ex. săptămânile FF, bugetul Twelve Data) | v1 |
 | `job_lease` | ce proces rulează job-urile (§4) | FD-AZURE |
 | `watchlist` | favoritele per utilizator (`kind` crypto / stock, `name`, `exchange`, aliasuri, ordine) | v1–FD-USERS |
-| `exchange_accounts`, `cost_basis` | conturile (credențiale criptate, `env`, `user_id`) și prețul mediu introdus manual | v1–FD-USERS |
+| `exchange_accounts`, `cost_basis` | conturile (credențiale criptate, `env`, `user_id`, tranzacționarea pornită și piețele ei) și prețul mediu introdus manual | v1–FD-USERS, FD-TRADING |
+| `trade_log` | ordinele, anulările și pornirile / opririle tranzacționării trimise din Sentiq (fără chei), cu cheia formularului (unică pe utilizator) | FD-TRADING |
 | `market_cache` | contextul pieței (F&G, CoinGecko, CNN, Nasdaq), lista de monede | v1 |
-| `users`, `sessions`, `passkeys`, `user_tokens`, `user_settings` | conturi, sesiuni (hash), passkey-uri (`credential_hash` unic), linkuri unice (`reset`, `activate`; hash), setările personale | FD-USERS, FD-INVITE |
+| `users`, `sessions`, `passkeys`, `user_tokens`, `user_settings` | conturi (cu 2FA: secretul criptat, `totp_next_secret` cât se schimbă aplicația), sesiuni (hash), passkey-uri (`credential_hash` unic), linkuri unice (`reset`, `activate`; hash), setările personale | FD-USERS, FD-INVITE, FD-2FA |
+| `user_keys` | cheile personale ale fiecăruia (AI: `anthropic` / `openai` / `gemini`; `twelvedata`), criptate | FD-AIKEYS, FD-TDKEYS |
+| `news_ai_scores`, `ai_daily_sentiment` | scorurile date știrilor de AI-ul fiecăruia și indicele zilei făcut din ele | FD-AIKEYS |
 | `econ_indicators`, `econ_releases` | indicatorii paginii Economie și publicările lor | FD-ECON |
 | `day_summaries` | ultimul rezumat al zilei, per utilizator și zi | FD-SUMMARY |
 | `account_requests` | cererile de cont | FD-INVITE |
@@ -326,7 +329,7 @@ Prefix `/api`; erorile au forma `{error: {code, message}}` cu 400 (validare), 40
 |---|---|---|
 | Stare | `GET /ping`; `GET /health` | public; admin |
 | Autentificare | `GET /auth/state`; `POST /auth/setup`, `/auth/request-account`, `/auth/activate[/check]`, `/auth/login`, `/auth/login/2fa`, `/auth/logout`, `/auth/forgot`, `/auth/reset[/check]`, `/auth/passkey/options`, `/auth/passkey` | public |
-| Contul meu | `GET /account`; `PUT /account/name`, `/account/password`; `POST /account/logout-all`; `GET /account/2fa`, `POST /account/2fa/start\|cancel\|enable\|disable\|recovery-codes`; `GET\|POST /account/passkeys`, `POST /account/passkeys/options`, `PUT\|DELETE /account/passkeys/:id` | utilizator |
+| Contul meu | `GET /account`; `PUT /account/name`, `/account/password`; `POST /account/logout-all`; `GET /account/2fa`, `POST /account/2fa/start\|enable\|recovery-codes\|replace\|replace/confirm\|replace/cancel` (TD-2FA); `GET\|POST /account/passkeys`, `POST /account/passkeys/options`, `PUT\|DELETE /account/passkeys/:id` | utilizator (fără 2FA: doar `GET /account/2fa`, `start`, `enable`) |
 | Admin | `GET /admin/users`, `POST /admin/users/:id/disable\|enable\|reset-2fa\|activation-link`, `DELETE /admin/users/:id`; `GET /admin/account-requests`, `POST /admin/account-requests/:id/approve`, `DELETE /admin/account-requests/:id` | admin |
 | Sentiment | `GET /sentiment/today`, `/sentiment/history?days=30`, `/sentiment/day/:day`; `POST /sentiment/rescore`, `/sentiment/recompute-history` | utilizator; POST admin |
 | Știri | `GET /news?range&coins&favorites&category&source&sentiment&q&cursor&limit` | utilizator |
@@ -337,6 +340,7 @@ Prefix `/api`; erorile au forma `{error: {code, message}}` cu 400 (validare), 40
 | Scanner | `GET /scanner`; `POST /scanner/run` | utilizator |
 | Favorite | `GET\|POST /watchlist`; `PUT /watchlist/order`; `PUT\|DELETE /watchlist/:coin` | utilizator |
 | Conturi | `GET\|POST /accounts`; `DELETE /accounts/:id`; `POST /accounts/:id/test`; `GET /portfolio/:id`, `/portfolio/:id/stats?period=` (TD-TRADESTATS); `PUT /portfolio/:id/cost-basis/:asset` | utilizator (doar conturile lui) |
+| Tranzacționare (TD-TRADING) | `GET /trading`, `/trading/log`; `POST /accounts/:id/trading`; `GET /trading/:id/symbols\|instrument`; `POST /trading/:id/preview\|orders\|cancel` | utilizator (doar conturile lui, cu tranzacționarea pornită) |
 | Setări | `GET\|PUT /settings`; `PUT /settings/claude-key\|twelvedata-key\|resend` | utilizator (globalele doar admin, §12; detaliile Resend doar adminului); cheile admin |
 | Rezumat | `GET\|POST /summary` | utilizator |
 
@@ -932,7 +936,14 @@ interface PortfolioAdapter {
   - client `new ccxt[id]({ apiKey, secret, password, enableRateLimit, options: { adjustForTimeDifference } })`;
   - `ensureMarkets`, apoi `fetchBalance()` (pentru Bybit `{ type: 'unified' }`, cu rezervă `{}`);
   - `fetchPositions()` când `has.fetchPositions`, ignorat dacă dă NotSupported;
-  - `fetchOpenOrders()` fără simbol; pentru Binance `options.warnOnFetchOpenOrdersWithoutSymbol = false`;
+  - `fetchOpenOrders()` fără simbol; pentru Binance `options.warnOnFetchOpenOrdersWithoutSymbol = false`; pentru Bybit `{ type: 'spot' }`, pagina 50 (clientul ccxt pornește pe linear: fără asta lipseau ordinele spot); la fel `fetchMyTrades` pe Bybit (`{ type: 'spot' }`, pagina 100), plus tranzacțiile linear separat (`{ type: 'swap', subType: 'linear' }`);
+  - FD-TRADING §4, `EXTRA_ORDER_READS`: ordinele pe care lista simplă nu le are, ca fiecare să se poată anula:
+    - Binance: futures USDⓈ-M (`{ type: 'swap', subType: 'linear' }`), obișnuite și cu declanșare (`trigger: true` → ordinele algo);
+    - Bybit: linear (`settleCoin: 'USDT'`, pagina 50; contul unificat dă toate felurile de ordine, stop-urile incluse);
+    - OKX: ordinele cu declanșare (`trigger: true` → algo `trigger`; cele obișnuite, din toate produsele, sunt deja în lista simplă);
+    - Bitget: stop-urile spot (`{ type: 'spot', trigger: true }`), futures USDT-M obișnuite și cu declanșare;
+    - fiecare citire separat; una pe care cheia sau contul nu o poate face (`NotSupported`, `PermissionDenied`, `AuthenticationError`, `AccountNotEnabled`, Binance `-2015` venit ca `DDoSProtection`, nereîncercat) nu listează nimic acolo și nu se mai cere 15 minute, iar una cerută greșit (`ArgumentsRequired`, `BadRequest`) se scrie o dată în jurnal și nu se mai cere 6 ore („Testează” și ștergerea contului le uită pe amândouă); orice altă eroare marchează secțiunea „orders”, ca la lista simplă;
+  - piața unui ordin și a unei tranzacții se ia din simbol: un perpetuu (`BTC/USDT:USDT`) e futures, oricare listă l-ar fi adus (contul unificat KuCoin, OKX). O tranzacție futures nu intră niciodată în costul mediu spot;
   - `fetchMyTrades(sym, since, 100)` pentru perechile `<ACTIV>/USDT` ale activelor deținute + favorite (maximum 25, ca la HF);
   - prețurile din `fetchTickers` (cache 15 s per exchange, aceeași rezervă ca la KuCoin);
   - costul mediu, cu `costBasis` din tranzacții;
@@ -1277,7 +1288,7 @@ Tranzacții afișează titlurile după tip: „Dețineri” / „Poziții” la 
 
 ### 5. API și interfață
 - `NewsItemDto`: `impact` = importanța folosită în index, `impactSource` = `'ai'` | `'rules'`, `ruleImpact` = cea din cuvinte-cheie.
-- `News.tsx`, „De ce acest scor?”: „Relevanță 0,8 · importanță 1 (Claude; după cuvinte-cheie ar fi 3)” sau „importanță 2 (după cuvinte-cheie)”.
+- `News.tsx`, „De ce acest scor?”: fiecare importanță cu sursa ei în paranteză, ca valori separate: „Relevanță 0,8, importanță 1 (Claude), importanță 3 (cuvinte-cheie)” când diferă; „importanță 2 (Claude și cuvinte-cheie)” când coincid; „importanță 2 (cuvinte-cheie)” fără notă AI. Prima importanță e cea folosită în index (formularea veche „(Claude; după cuvinte-cheie ar fi 3)” lăsa impresia că 3 e nota lui Claude).
 
 ### 6. Teste
 - Migrarea 4: completarea din meta (Claude da, local nu, meta invalid), relevanța geopolitică 0,6 → 0,8 (doar ea).
@@ -2160,3 +2171,1201 @@ Doar configurare: app setting `SENTIQ_MCP=1` pe `sentiq` (App Service); `SENTIQ_
   - `StockData`: 1h pentru un indice, 6h refuzat;
   - scanner-ul pe 1h pentru un indice;
   - API-ul (lumânări 1h prin `asset=index`).
+
+## TD-AIKEYS — implementează FD-AIKEYS
+
+### 1. Date (`db/schema.ts`, migrarea 3)
+- `user_keys(user_id, name, secret, updated_at)`, PK `(user_id, name)`: cheile personale criptate cu `SecretBox` (ca celelalte chei); pentru AI, `name` = furnizorul (`anthropic`, `openai`, `gemini`); Twelve Data le folosește și ea (TD-TDKEYS).
+- `news_ai_scores(user_id, news_id, score NULL, label NULL, engine, impact NULL, scored_at)`, PK `(user_id, news_id)`, index pe `news_id`; `score` NULL = AI-ul n-a dat scor (rămâne cel local, nu se mai trimite). `ON DELETE CASCADE` din `users` și din `news` (retenția, ștergerea unei surse).
+- `ai_daily_sentiment`: coloanele lui `daily_sentiment`, cu cheia `(user_id, day, tz)`.
+- `TABLES` le are (copiii întâi); importul SQLite le sare (nu există în fișier). `encryptedSecrets` numără și `user_keys`.
+
+### 2. Clienții (`server/ai/`)
+- `types.ts`: `AiClient.generate(req)` → `{ parsed, stop: 'done' | 'max_tokens' | 'refusal' | 'other', usage }`; `AiError(provider, kind, status, detail)` cu mesajul în română; `permanent` (auth / permission / model), `transient` (rate / overloaded / connection / 5xx).
+- `http.ts`: `callJson` (JSON, timeout + semnalul apelantului, 2 reîncercări pe erori trecătoare, `Retry-After` ≤ 20 s), `jsonSchemaOf` (`z.toJSONSchema` fără `$schema`; obiectele au deja `additionalProperties: false`), `parseAnswer`.
+- `openai.ts`: `POST /v1/responses` cu `instructions`, `input`, `max_output_tokens`, `store: false`, `text.format = { type: 'json_schema', name, schema, strict: true }`, `reasoning.effort`. Citește `output[].content[]` (`output_text` / `refusal`), `status` / `incomplete_details.reason`, `usage.input_tokens` / `output_tokens`. Un 400 despre `reasoning` → aceeași cerere fără el (ținut minte). `insufficient_quota` → `quota`.
+- `gemini.ts`: `POST /v1beta/models/{model}:generateContent` (Google îl numește acum „Generate Content API (Legacy)” și recomandă Interactions API pentru proiecte noi; e documentat și funcțional la 17 oct 2026: dacă e retras, se trece pe `/v1beta/interactions` cu `response_format` și `generation_config.thinking_level`), antetul `x-goog-api-key`; `systemInstruction`, `contents`, `generationConfig = { responseMimeType: 'application/json', responseJsonSchema, maxOutputTokens, thinkingConfig.thinkingLevel }` (nivelul doar de la Gemini 3; un 400 despre „thinking” → fără el). Sare părțile `thought`; tokenii de gândire intră la ieșire. `promptFeedback.blockReason` și `finishReason` SAFETY / PROHIBITED_CONTENT / … → `refusal`; `MAX_TOKENS` → `max_tokens`. `API_KEY_INVALID` (400) → `auth`; 429 cu `PerDay` sau `limit: 0` → `quota`, altfel `rate`.
+- `anthropic.ts`: SDK-ul, ca înainte: scorul prin `beta.messages.parse` (cu `server-side-fallback`, nu pe Haiku), Rezumatul prin `messages.stream` (`long`). `fromAnthropic` traduce erorile SDK-ului (mesajul API-ului, nu „400 {…}”; „credit balance” → `quota`).
+- `models.ts`: `listModels(provider, key)`: Anthropic `GET /v1/models?limit=1000`, OpenAI `GET /v1/models`, Gemini `GET /v1beta/models?pageSize=1000` (pe pagini, doar cele cu `generateContent`). `usableModels` păstrează modelele de text (fără audio, imagini, embeddings, snapshot-uri datate, generațiile vechi), cele din `shared/ai.ts` întâi.
+
+### 3. `AiService` (`server/ai/service.ts`)
+- `config(userId)`: `{ provider, model: effectiveModel(…), scoring, key }`, reținut 30 s (ca setările); `isScoring`, `scoringUsers()` (conturi active), `forget(userId?)`.
+- `setKey(userId, provider, key)`: forma (`checkAiKeyShape`: 20–300 caractere ASCII vizibile), apoi `listModels`; `auth` / `permission` → `ValidationError` (400); altă eroare → salvată, cu `warning`. Lista de modele a cheii e ținută 1 h (după amprenta cheii).
+- `models(userId, provider)`: lista cheii, sau `shared/ai.ts` (`source: 'default'`, cu `error` dacă furnizorul n-a răspuns).
+- `client(provider, key, model)`; `usage` = `AiUsage` (`market_cache`, `ai:usage:<userId>`, ziua UTC, cu modelul ultimului apel).
+- `migrateLegacy(adminId)` (în `createContext`, după `migrateLegacyToAdmin` și înaintea oricărei alte scrieri a setărilor globale: `migrateMarketData` le-ar rescrie fără `sentiment`), într-o tranzacție: `claude_key` → `user_keys(admin, anthropic)`; `sentiment` din `app` → `ai` în setările adminului (`scoring = engine === 'claude' && cheie`); scorurile `claude:%` → `news_ai_scores` ale adminului; cele publicate în ultimele 4 zile se golesc pe rândul știrii (le scorează modelul local); `sentiment` dispare din `app`, `claude_key` și `claude:usage` se șterg. Nimic de făcut fără `claude_key` și fără `sentiment`.
+
+### 4. Scorul (`sentiment/`)
+- `SentimentService`: `scorePending` doar cu `LocalEngine` (scorul comun). `scoreUsers(signal)`: pentru fiecare utilizator din `scoringUsers()`, cel mult 50 de știri pe rundă (`relevance > 0`, sursă activă, publicate în ultimele 48 h, fără rând în `news_ai_scores`), cele mai noi întâi, prin `AiScorer`; se scriu doar dacă știrea are același titlu. `resetUser(userId, since)`; `aiStatus(userId)`: starea scorării, din `market_cache` `ai:scorer:<userId>` (`{ sig, lastError, pausedUntil }`), scrisă de instanța cu joburile la fiecare schimbare (o eroare, sfârșitul ei; scrierile unui utilizator în ordine, așteptate la sfârșitul rundei) și citită de oricare; o stare a altui furnizor / model / cheie (`sig`) nu contează.
+- `ai-scorer.ts` (fostul `ClaudeEngine`, fără rezerva locală): loturi de 25, `effort: 'low'`, 8 192 de tokeni; pauză infinită pe erori permanente (până se schimbă furnizorul, modelul sau cheia: scorer nou), 30 min pe `quota`, 5 min în rest; titlurile lipsă / refuzate / necitite → rând cu `score` NULL. Motorul: `claude:<model>`, `openai:<model>`, `gemini:<model>` (`aiEngineId`).
+- Jobul nou `sentiment.ai` (1 min, cel mult 20 de runde); `news.fetch` îl împinge după știri noi; `PUT /api/settings` (alt `ai`) și `PUT /api/ai/key` îl împing, plus `sentiment.daily`.
+- `ingest.ts`: un titlu nou șterge rândurile `news_ai_scores` ale știrii.
+
+### 5. Indicele zilei (`sentiment/daily.ts`)
+- `IndexScope` = `null` (comun) sau `userId`; `scopeFor(userId)` = utilizatorul, dacă AI-ul său scorează.
+- `loadItems(…, scope)`: `COALESCE(a.score, n.sentiment)` și `COALESCE(a.impact, n.sentiment_impact, n.impact)` cu `LEFT JOIN news_ai_scores a`.
+- `save` / `today` / `refreshZone` / `history` primesc `scope`; al utilizatorului se scrie în `ai_daily_sentiment`. `refresh` face comunul pe toate fusurile, apoi fiecare utilizator pe fusul său, de la prima zi scorată de AI-ul său (nu ziua tăiată de retenție). `history(…, scope)` = zilele comune, înlocuite de ale utilizatorului unde există. `recomputeHistory` le șterge pe amândouă.
+
+### 6. API
+- `PUT /api/ai/key { provider, key | null }` → `SettingsView & { aiKeyWarning }`; `GET /api/ai/models?provider=`; `GET /api/ai/status` → `{ provider, model, keySet, scoring, scorer, usage }`; `POST /api/ai/rescore { hours ≤ 48 }` (400 fără scorul pe AI).
+- `PUT /api/settings/claude-key` dispare (și din `ADMIN_ONLY`).
+- `SettingsView`: `aiKeys: { anthropic | openai | gemini: { set, hint } }` (ale utilizatorului, cu hint doar pentru acesta); `ai` (`provider`, `model?`, `scoring`) e în `USER_KEYS`; `sentiment` iese din `settingsSchema` (zod îl ignoră în rândurile vechi).
+- `/api/sentiment/today | history | day/:day`, `/api/news`, contextul Rezumatului: cu `scopeFor(userId)`.
+- `/api/summary`: `hasKey` (cheia furnizorului ales), `ai: { provider, model }`; fără cheie: 400 `NO_AI_KEY`.
+- `/api/health`: `sentiment: { engine: 'local', model, pending, aiUsers }`; fără `claudeStatus` și `claudeUsage`.
+- Ștergerea unui utilizator: `ai.forget(id)`, `ai.usage.forget(id)` (restul prin chei străine).
+
+### 7. Interfață
+- `shared/ai.ts`: furnizorii (nume, produs, unde se face cheia, modelele curente, `modelRe`), `effectiveModel`, `modelLabel`, `providerOfModel`, `aiEngineId`, `engineLabel`.
+- `components/AiSettings.tsx` (`#ai` în `Settings.tsx`), `SettingsAdmin.tsx` (secțiunea „Sentimentul știrilor”), `DaySummary.tsx` (textele, `SummaryState` din `api-types`), `News.tsx` (`engineLabel`, numele AI-ului la importanță), `Health.tsx`.
+
+### 8. Teste
+- `ai/providers.test.ts` (fără rețea): cererile și răspunsurile OpenAI / Gemini / Anthropic, refuzuri, răspunsuri tăiate, reîncercări, abandon, erori → tipuri, listele de modele.
+- `ai/service.test.ts`: mutarea cheii comune (cu motor Claude / local / fără cheie; o singură dată), cine scorează.
+- `ai/usage.test.ts`: consumul pe utilizator.
+- `sentiment.test.ts`: `AiScorer` (pauze, consum, importanță 1–3, titluri lipsă).
+- `impact.test.ts`: scorurile AI ale unui utilizator (scrise, șterse la titlu nou, fereastra de 48 h) și efectul lor doar pentru acel utilizator (indice, istoric, lista de știri, filtre).
+- `summary.test.ts`: cheia fiecăruia, furnizorul ales (Gemini), erorile; `server.test.ts`: rutele `/api/ai/*` (cheie acceptată / refuzată / neverificabilă, modelele, starea, rescorarea); `users.test.ts`: cheile sunt ale fiecăruia.
+
+## TD-TDKEYS — implementează FD-TDKEYS
+
+### 1. Date
+- `user_keys(user_id, name, secret, updated_at)` (migrarea 3, comună cu FD-AIKEYS: numele `anthropic`, `openai`, `gemini`, `twelvedata`).
+- Planul și consumul: `market_cache` `td:plan:<userId>` și `td:usage:<userId>` (`tdPlanKey` / `tdUsageKey`; fără `scope`, cheile vechi).
+- `SettingsService`: `getTwelveDataKey(userId)`, `setTwelveDataKey(userId, key)` (forma: `TWELVEDATA_KEY_RE`), `usersWithKey(name)` (conturi active), `migrateTwelveData(adminId)`: `twelvedata_key` din `settings` → `user_keys(admin, twelvedata)`, `td:plan` / `td:usage` → ale adminului (doar dacă acolo nu e deja ceva), apoi cheia globală se șterge; într-o tranzacție, în `createContext`, după mutarea AI și înainte de `migrateMarketData`.
+- `viewFor`: `twelveDataKeySet` / `twelveDataKeyHint` ale utilizatorului (hint pentru el, indiferent de rol).
+
+### 2. `StockData` (`market/stocks.ts`)
+- `key(userId)`; `account(userId)` = `{ client: TwelveDataClient, budget: CreditBudget(scope = userId) }`, ținut în memorie; `td(userId)`, `budget(userId)`, `hasKey(userId)`, `forget(userId)`.
+- `timeframes(userId)`, `timeframesFor(sym, userId)`, `refreshPlan(userId, key?)`, `candles(sym, tf, count, userId)`, `search(q, userId)`.
+- Cache-ul lumânărilor: `td|<userId>|SYM|tf` (ale utilizatorului), `nq|SYM|tf` și `ix|…` (comune).
+- `CreditBudget.reset(spent)`: consumul zilei de la `spent` (cheie nouă: 1, verificarea ei); așteaptă, ca `setPlan` / `clearPlan`, prima citire din bază (altfel citirea, terminată după, ar pune la loc consumul sau planul vechi).
+- Mesajele: `TD_KEY_PLACE` = „Setări → Ale mele → Date pentru acțiuni”.
+
+### 3. Scanner
+- `stockRow(userId, …)`: timeframe-urile și lumânările cu cheia utilizatorului; cheia rândului ținut 30 min include `userId` când acțiunea e citită cu cheia lui (`null` pentru Nasdaq și indici: rând comun).
+
+### 4. API
+- `GET /api/stocks/info`, `/api/market/candles` (acțiuni), `/api/stocks/search`: ale utilizatorului.
+- `PUT /api/settings/twelvedata-key`, `POST /api/settings/twelvedata-plan`: ale utilizatorului (nu mai sunt în `ADMIN_ONLY`); o cheie nouă: verificată pe un buget al ei (nu pe al cheii vechi), salvată, consumul de la 1 (verificarea), planul citit (încă 1); aceeași cheie salvată din nou: verificată pe bugetul utilizatorului.
+- `/api/health`: `twelveData: { users }` (câți au cheie).
+- Jobul `twelvedata.plan`: planul fiecărui utilizator cu cheie; erorile se adună (unul nu le oprește pe celelalte).
+- Ștergerea unui utilizator: `stocks.forget(id)` și rândurile `td:*:<id>` din `market_cache`.
+
+### 5. Interfață
+- `components/StockDataSettings.tsx` (`#stock-data` în Setări → Ale mele): cheia, planul, consumul, „Recitește planul”.
+- `SettingsAdmin.tsx`: „Date de piață” fără Twelve Data. `Charts.tsx`: textele și linkul spre `/settings#stock-data`. `Health.tsx`: numărul de utilizatori cu cheie. `api-types.ts`: `Health.twelveData = { users }`.
+
+### 6. Teste
+- `CreditBudget` cu `scope` (două bugete separate, persistate), `reset`; `StockData` cu două chei (fiecare cu cheia și cache-ul lui; fără cheie: Nasdaq).
+- Mutarea cheii globale (cu plan și consum; o singură dată).
+- Rutele: cheia unui utilizator obișnuit, info / plan per utilizator, adminul nu vede cheia altuia; scanner-ul cu și fără cheie.
+
+## TD-2FA — implementează FD-2FA
+
+### 1. Baza de date (migrarea 4)
+- `ALTER TABLE users ADD totp_next_secret NVARCHAR(MAX) NULL`: secretul aplicației noi în timpul unei schimbări (criptat cu `SecretBox`, ca `totp_secret`); NULL în rest.
+- Nimic de mutat. Conturile fără `totp_confirmed_at` ajung la configurare la următoarea cerere.
+
+### 2. Bariera (`http/auth.ts`)
+- `AuthUser.twoFactor` = `totp_confirmed_at IS NOT NULL` (din același rând citit de hook, fără cerere în plus).
+- `TWO_FACTOR_SETUP`: ce poate face un cont fără 2FA, pe lângă rutele publice (`/api/auth/state`, `/api/auth/logout`…). Lista: `GET /api/account/2fa`, `POST /api/account/2fa/start`, `POST /api/account/2fa/enable`. Orice altă rută → 403 `TWO_FACTOR_REQUIRED` („Configurează mai întâi autentificarea în doi pași.”).
+- Bariera ține de **starea contului**, nu de felul sesiunii. Prinde la fel sesiunile vechi, login-ul cu parolă, passkey-ul, prima parolă a adminului și activarea. Sesiunea rămâne `full` (30 de zile): instalarea aplicației poate dura mai mult decât cele 5 minute ale unei sesiuni `pending`.
+- Ordinea în hook: sesiunea → rutele publice → `AUTH_REQUIRED` → `TWO_FACTOR_REQUIRED` → `FORBIDDEN` (admin). Adminul fără 2FA nu ajunge nici la rutele de admin.
+
+### 3. `UserService`
+- `confirmTwoFactor(userId, code)` → `string[] | 'on' | null`: `'on'` dacă 2FA e deja activ (alt tab), `null` pentru un cod greșit sau fără înrolare începută.
+- `beginReplace(userId, password, code)` → `boolean`:
+  - parola întâi (o parolă greșită nu consumă un cod de recuperare);
+  - apoi, într-o tranzacție, `verifySecondFactor` (codul aplicației de acum sau un cod de recuperare, consumat);
+  - la final, un secret nou în `totp_next_secret`; o schimbare deja începută e înlocuită.
+- `confirmReplace(userId, code)` → `'done' | 'none' | 'invalid'`:
+  - codul se verifică pe `totp_next_secret`, cu pragul anti-replay 0 (secretul nu a fost folosit încă; pragul vechi ține de secretul vechi și ar refuza un cod din aceeași fereastră de 30 s);
+  - apoi, într-o tranzacție: `totp_secret = next`, `totp_last_step` = pasul confirmat, `totp_confirmed_at` = acum, `totp_next_secret = NULL`;
+  - codurile de recuperare rămân.
+- `cancelReplace(userId)`: `totp_next_secret = NULL`.
+- `twoFactorState`:
+  - `replacing` = 2FA activ și `totp_next_secret` prezent;
+  - `pendingSecret` / `uri` = secretul aplicației noi în timpul unei schimbări, cel al înrolării înainte de confirmare, altfel nimic. Secretul confirmat nu iese niciodată din bază.
+- `resetTwoFactor(id)` (admin) șterge și `totp_next_secret`.
+- **Scoase:** `cancelTwoFactor`, `disableTwoFactor` (2FA nu se mai poate opri sau abandona).
+
+### 4. API (`http/auth-routes.ts`)
+- `POST /api/auth/activate`:
+  - browserul e deja în alt cont (`req.user`): `{ ok, email, signedIn: false }`, ca până acum;
+  - altfel `startSession`: `{ ok, email, signedIn: true, user }` (sesiune nouă, `last_login_at`).
+- `POST /api/account/2fa/enable` `{ code }` (bugetul `account:<id>`):
+  - 2FA deja activ → 409 `TWO_FACTOR_ON` (fără să consume bugetul);
+  - succes → celelalte sesiuni ale contului se închid (`destroyAll(id, sesiunea curentă)`), emailul `totp-on`, `{ codes, twoFactor, user }`.
+- `POST /api/account/2fa/replace` `{ password, code }` (bugetul contului; greșit → 400 „Parola sau codul nu sunt corecte.”) → vederea, cu `replacing: true` și QR-ul nou.
+- `POST /api/account/2fa/replace/confirm` `{ code }` (bugetul contului):
+  - greșit → 400 „Cod greșit. Scrie codul de 6 cifre arătat acum de aplicația nouă…”;
+  - nicio schimbare începută → 409 `NO_REPLACEMENT`;
+  - succes → emailul `totp-changed`, vederea.
+- `POST /api/account/2fa/replace/cancel` → vederea.
+- `POST /api/admin/users/:id/reset-2fa`: `sessions.destroyAll(id)` (înainte `destroyPending`), emailul `totp-reset`.
+- **Scoase:** `POST /api/account/2fa/cancel`, `POST /api/account/2fa/disable` (404).
+- `TwoFactorView.replacing` (nou).
+
+### 5. Emailuri (`auth/email.ts`)
+- `MailKind` adaugă `totp-on`, `totp-changed`, `totp-reset`: anunțuri fără link și fără cod, trimise în fundal (`sendLater`), ca `reset-done`.
+
+### 6. Interfață
+- **`auth.ts`:**
+  - un mic depozit extern (`useSyncExternalStore`) pentru configurarea terminată: codurile de recuperare și utilizatorul de după;
+  - `holdEnrolment(codes, user)`, `endEnrolment()`, `useEnrolment()`.
+- **`App.tsx`:**
+  - cu utilizator și (`!user.twoFactor` sau o configurare ținută pe ecran) → `TwoFactorSetupPage`, înaintea oricărei alte rute;
+  - evenimentul `sentiq:two-factor-required` (din `api.ts`, la 403 `TWO_FACTOR_REQUIRED`) recitește `['auth']`.
+- **`api.ts`:** 403 `TWO_FACTOR_REQUIRED` → `sentiq:two-factor-required`.
+- **`pages/Auth.tsx`:**
+  - `TwoFactorSetupPage` (`Shell`):
+    - `GET /api/account/2fa`, recitit la revenirea în tab;
+    - `start` automat cât nu e începută (`restart: false`, idempotent);
+    - QR-ul și cheia (`TotpQr`), codul, „Cheie nouă”, „Ieși din cont”;
+    - la `enable`, codurile se țin în depozit, iar `RecoveryCodes` cu „Intră în Sentiq” pune utilizatorul în `['auth']` și golește depozitul;
+    - `TWO_FACTOR_ON` (alt tab) → recitește `['auth']`;
+  - `ActivatePage`:
+    - cu `signedIn` → `landAfterSignIn('/')`, `useAuthChange()(user)`;
+    - fără (browser în alt cont) → „Contul e activ” cu „Ieși și intră cu …”: `logout`, apoi `landAfterSignOut('/login?activated=1&email=…')` (adresa completată), sau „Rămâi în contul de acum”;
+  - `SetupPage`: `landAfterSignIn('/')`;
+  - `SignedInAuthRoutes`: o țintă de după login (`afterSignInTarget()`) câștigă în fața paginii `/activate` sau `/reset-password` pe care s-a terminat login-ul. Altfel, după configurare, `/activate` ar fi arătat din nou pagina de activare, cu linkul deja folosit.
+- **`components/RecoveryCodes.tsx`** (mutat din Securitate; eticheta butonului final e un parametru) și **`components/TotpQr.tsx`** (QR-ul, alb pe negru pe orice temă, și cheia scrisă), comune ecranului de configurare și Securității.
+- **`pages/Security.tsx`:**
+  - fără „Dezactivează”, „Renunță” și înrolarea inițială;
+  - „Schimbă aplicația de autentificare”: `ConfirmWithCode` → `TotpQr` + codul → „Confirmă”, sau „Renunță”;
+  - fără îndemnul `?welcome=1`; mesajul de după un cod de recuperare actualizat.
+- **`pages/Users.tsx`:** „Resetează 2FA” cu textul nou; coloana Securitate: „2FA” / „2FA neconfigurat” / „—”.
+
+### 7. Scripturi
+- `scripts/admin.ts reset` șterge și `totp_next_secret`.
+- `scripts/smoke.ts` marchează adminul de test cu 2FA înainte de sesiune.
+
+### 8. Teste
+- Bariera:
+  - un cont fără 2FA vede doar rutele de configurare și pe cele publice (403 `TWO_FACTOR_REQUIRED` în rest, inclusiv la admin);
+  - după `enable`, totul se deschide, iar celelalte sesiuni sunt închise;
+  - 409 dintr-un al doilea tab.
+- Activarea: intră direct (sesiune), spre configurare; într-un browser cu alt cont, nu schimbă contul.
+- Prima parolă a adminului, login cu passkey și „Am uitat parola” pe un cont fără 2FA → configurare.
+- Schimbarea aplicației:
+  - cere parola și codul;
+  - aplicația veche merge până la confirmare;
+  - codul vechi e refuzat în câmpul nou;
+  - un cod din aceeași fereastră de 30 s e acceptat;
+  - „Renunță”; codurile de recuperare rămân.
+- Rutele scoase răspund 404. Resetarea de către admin închide sesiunile și duce la configurare.
+- Emailurile de anunț (fără link).
+- `api.test.ts`: evenimentul `TWO_FACTOR_REQUIRED`.
+- Testele care fac sesiuni direct (`server.test.ts`, `source.test.ts`, `summary.test.ts`) marchează conturile cu 2FA.
+
+## TD-TRADING — implementează FD-TRADING
+
+### 1. Baza de date (migrarea 5)
+- **`exchange_accounts`:**
+  - `trading_enabled_at BIGINT NULL`: tranzacționarea e pornită de atunci;
+  - `trading_markets NVARCHAR(40) NULL`: ce poate cheia la pornire: `spot`, `futures`, `spot,futures` sau `stock`.
+- **`trade_log`:**
+  - coloane: `id` IDENTITY, `user_id` (FK `users`, CASCADE), `account_id INT NULL` (fără FK: jurnalul rămâne după ștergerea contului de exchange), `exchange`, `env`, `account_label`, `idem_key NVARCHAR(64) NULL`, `action` (`order` | `cancel` | `enable` | `disable`), `market`, `symbol`, `side`, `kind`, `amount FLOAT`, `price FLOAT`, `trigger_price FLOAT`, `leverage FLOAT`, `status` (`pending` | `sent` | `rejected` | `error` | `unknown`), `order_id`, `message NVARCHAR(500)`, `detail NVARCHAR(MAX)` (JSON: tot ce a plecat și ce s-a întors, fără chei), `created_at`, `updated_at`;
+  - index unic filtrat `(user_id, idem_key) WHERE idem_key IS NOT NULL`;
+  - index `(user_id, created_at)`.
+- `TABLES` primește `trade_log` (înaintea lui `users`).
+
+### 2. Comun: `shared/trading.ts`
+- `TRADING: Record<ProviderId, PlatformTrading>` descrie, pe platformă:
+  - `supported` (IBKR: `false`, cu `reason`);
+  - piețele: `spot` / `futures` / `stock`;
+  - tipurile pe piață: `market` | `limit` | `stop` | `stop_limit` | `mit` | `limit_ioc`;
+  - cum se dă cantitatea: `base` | `quote`;
+  - valabilitățile: `gtc` | `day`;
+  - pentru futures: levier, moduri de marjă (`null` = ale contului: Bybit), TP / SL `attached` / `after-market` / `none`, reduce-only;
+  - eToro: short, levier, SL / TP; Alpaca: bracket, în afara orelor;
+  - `tradeSteps`: pașii pentru o cheie cu tranzacționare și fără retrageri.
+- **`orderTicketSchema` (zod)**, aceeași pe server și în formular:
+  - `{ accountId, idemKey (uuid), market, symbol, side, kind, amount > 0, amountIn: 'base'|'quote', price?, triggerPrice?, tif?, leverage?, marginMode?, reduceOnly?, takeProfit?, stopLoss?, extendedHours?, close?: { positionIds?: string[] } }`;
+  - regulile: `price` pentru limită și stop-limită, `triggerPrice` pentru stop / stop-limită / mit, TP / SL pozitive, levier întreg 1 – 125.
+- Tipurile:
+  - `TradingCaps` (pe cont): `supported`, `enabled`, `markets`, `reason`;
+  - `OrderPreview`: ticketul normalizat, cantitatea rotunjită (și contractele), prețurile rotunjite, prețul de acum, valoarea, marja, disponibilul, moneda, `warnings[]`, `errors[]`;
+  - `OrderResult`: `status` (`sent` | `filled` | `open` | `pending` | `cancelled` | `rejected` | `unknown`), `orderId`, `message`, `followUps[]` (TP / SL trimise după);
+  - `TradeLogRow`.
+
+### 3. Server: `exchange/trading/`
+- **`types.ts`:**
+  - interfața `Trader`:
+    - `instrument(market, symbol)` → pașii, minimele, `contractSize`, levierul maxim, prețul de acum, disponibilul, poziția;
+    - `symbols(market)`;
+    - `normalize(ticket)` → `OrderPreview`;
+    - `place(preview)` → `OrderResult`: trimite exact ordinul verificat; ID-ul de client vine din `preview.ticket.idemKey`;
+    - `cancel(order)` → `OrderResult`;
+  - `TradingError(code, message)`, cu codurile:
+    - `INVALID` | `PERMISSION` | `INSUFFICIENT` | `MIN_SIZE` | `HEDGE_MODE` | `MARKET_CLOSED` | `NOT_FOUND` | `RATE_LIMIT` | `REJECTED` | `UNKNOWN_OUTCOME` | `UNSUPPORTED`;
+    - `DISABLED`: tranzacționarea e oprită sau piața nu e permisă;
+    - `IN_PROGRESS`: același formular e în curs (409);
+    - `BAD_FACTORS`: parola sau codul la pornire, pe bugetul de încercări;
+    - `NO_ACCOUNT`: contul nu există sau nu e al utilizatorului (404).
+- **`crypto.ts` (`CcxtTrader`, prin ccxt), pe clienții contului:**
+  - **Clientul:**
+    - KuCoin clasic: futures pe clientul `kucoinfutures`, spot pe `kucoin`;
+    - KuCoin UTA și restul: totul pe clientul spot, care are și piețele contract.
+  - **Simbolurile:**
+    - spot `BASE/QUOTE`;
+    - futures `BASE/USDT:USDT`, doar `swap` liniare, active.
+  - **Cantitatea:**
+    - `amountIn: 'quote'` → bază = valoare ÷ prețul de acum (pentru o limită: ÷ prețul limită);
+    - futures: contracte = bază ÷ `contractSize`;
+    - `amountToPrecision` (rotunjește în jos), apoi verificat față de `limits.amount.min` / `limits.cost.min`; zero după rotunjire → `MIN_SIZE`.
+  - **Prețurile:** `priceToPrecision`.
+  - **Ordinul la piață:** pleacă cu prețul de acum, ca ccxt să calculeze costul unde exchange-ul cere suma pentru o cumpărare la piață (Coinbase, Bybit spot).
+  - **Stop:**
+    - `params.triggerPrice`, cu tipul `market` / `limit`;
+    - direcția din latură: cumpărarea peste preț, vânzarea sub el (verificată față de prețul de acum);
+    - KuCoin spot: `stop: 'entry' | 'loss'`;
+    - Kraken: `stopLossPrice` (Kraken numește orice stop „stop-loss”);
+    - Coinbase / Binance spot: doar stop-limită;
+    - Bitget unificat (UTA): refuzat la verificare, spot și futures (vezi mai jos).
+  - **Futures:**
+    - modul de poziție: `fetchPositionMode` (Binance, OKX, KuCoin) sau contul Bitget (clasic: `privateMixGetV2MixAccountAccount` → `posMode`; unificat: setările v3 → `holdMode`), ținut 10 min; hedge → `HEDGE_MODE`;
+    - Bitget clasic one-way → `oneWayMode: true`;
+    - **Bitget unificat (UTA):**
+      - recunoscut după `GET /api/v3/account/settings` (îl primesc doar conturile unificate; `accountMode` `upgrading` / `switching` → refuzat până se termină), ținut 10 min și dat lui ccxt (`options.uta`). O eroare de rețea → eroare, nu „clasic” (ccxt ar păstra presupunerea);
+      - ccxt 4.5 trimite parametrii brut pe `POST /api/v3/trade/place-order`: marja ca `crossed` / `isolated`, fără `oneWayMode`;
+      - `setLeverage(lev, symbol)` fără marjă (v3 → cross implicit; levierul isolated cere `posSide`);
+      - refuzate la verificare: ordinele stop, spot și futures (ccxt nu are ordine cu declanșare pe v3, iar prețul de declanșare s-ar pierde), și marja isolated la deschidere;
+      - reduce-only: marja poziției, în numele v3;
+      - cumpărarea spot la piață: v3 citește `qty` în moneda de cotare, iar ccxt trimite cantitatea așa cum e; Sentiq pune `qty` = suma din verificare (`costToPrecision(valoarea)`), care înlocuiește câmpul lui ccxt. Vânzarea și ordinele limită rămân în moneda de bază;
+    - levierul: Binance / Bybit / OKX / Bitget → `setLeverage(lev, symbol, { marginMode })` înainte; KuCoin clasic isolated → `leverage` în ordin; KuCoin cross → `setLeverage(lev, symbol, { marginMode: 'cross' })`; KuCoin UTA isolated → refuzat la verificare (`setLeverage` din ccxt suportă doar cross, iar ordinul UTA nu poartă marja). Un ordin reduce-only pe UTA trece: nu schimbă levierul. Un „leverage not modified” e ignorat;
+    - marja: OKX / Bitget / KuCoin → `marginMode` în ordin; Binance → `setMarginMode` înainte („No need to change” ignorat); Bybit → a contului;
+    - `reduceOnly: true` unde e cerut;
+    - TP / SL atașate (`attached`: KuCoin, Bybit, OKX, Bitget) → `params.stopLoss` / `takeProfit = { triggerPrice }`;
+    - Binance (`after-market`, doar la o intrare la piață) → după intrare, două ordine `reduceOnly` cu `stopLossPrice` / `takeProfitPrice` pe cantitatea intrării, raportate în `followUps`;
+    - un ordin `reduceOnly` (închidere) nu cheamă `setLeverage` / `setMarginMode`; trimite doar `marginMode` unde exchange-ul îl cere cu fiecare ordin (OKX, Bitget, KuCoin), din poziție.
+  - **ID-ul de client:** `clientOrderId` = un șir derivat din `idemKey` (32 de caractere hex, fără cratime), pe care ccxt îl trimite ca ID al exchange-ului (KuCoin `clientOid`, Bybit `orderLinkId`…). Coinbase își face singur ID-ul: acolo contează doar jurnalul Sentiq.
+  - **Anularea:**
+    - `cancelOrder(id, symbol, { trigger: true })` pentru ordinele cu preț de declanșare;
+    - KuCoin spot clasic: `stop: true`;
+    - `OrderNotFound` → `NOT_FOUND` („nu mai e deschis”).
+  - **Erorile ccxt:**
+    - `InsufficientFunds` → `INSUFFICIENT`;
+    - `InvalidOrder` → `REJECTED` / `MIN_SIZE`;
+    - `PermissionDenied` / `AuthenticationError` → `PERMISSION`; la fel Binance `-2015`, pe care ccxt îl aruncă drept `DDoSProtection` după ce cheia a mers o dată;
+    - `RateLimitExceeded` / `DDoSProtection` → `RATE_LIMIT`;
+    - `RequestTimeout` / `NetworkError` după trimitere → `UNKNOWN_OUTCOME`;
+    - `BadResponse` sau o eroare din afara celor ccxt (de ex. la citirea răspunsului) după trimitere → tot `UNKNOWN_OUTCOME`: ordinul poate fi în carte, deci cheia formularului rămâne legată.
+  - Niciun apel de ordin nu trece prin `withRetry`.
+- **`trading212.ts`:**
+  - `POST /equity/orders/{market|limit|stop|stop_limit}` cu `{ ticker, quantity (negativ = vânzare), limitPrice, stopPrice, timeValidity: DAY | GOOD_TILL_CANCEL, extendedHours }`;
+  - `DELETE /equity/orders/{id}`;
+  - instrumentele (`/equity/metadata/instruments`, 1 cerere la 50 s) ținute 24 h pe cont; simbolul → tickerul: `shortName` egal, întâi moneda contului, apoi `_US_EQ`; tickerul pozițiilor se ia direct;
+  - 403 → `PERMISSION` („activează «Orders: Execute»”); 429 → `RATE_LIMIT`, fără reîncercare;
+  - rezumatul contului și pozițiile (1 cerere la câteva secunde) ținute 6 s, ca verificarea și trimiterea să nu le ceară de două ori; uitate după un ordin sau o anulare.
+- **`etoro.ts`:**
+  - deschiderea: `POST /api/v2/trading/execution/{,demo/}orders` cu `{ action: 'open', transaction: 'buy' | 'sellShort', instrumentId, orderType: 'mkt' | 'mit' | 'limitIOC', triggerRate | limitRate, leverage, amount (orderCurrency 'usd') | units, stopLossRate, takeProfitRate }`, antetul `x-request-id` = `idemKey`;
+  - instrumentul: `GET /api/v1/market-data/search?internalSymbolFull=…` (potrivire exactă);
+  - închiderea: `POST /api/v1/trading/execution/{,demo/}market-close-orders/positions/{positionId}` `{ InstrumentId, UnitsToDeduct }`, pentru fiecare poziție a deținerii (una după alta). O poziție care nu se închide nu le ascunde pe celelalte: rezultatul le numește, iar una fără răspuns apare separat, ca „nu știm sigur”. Dacă nu e primită niciuna, eroarea (`UNKNOWN_OUTCOME` dacă vreuna a rămas fără răspuns);
+  - anularea: `DELETE /api/v2/trading/execution/{,demo/}orders/{orderId}`;
+  - starea: `GET /api/v2/trading/info/{,demo/}orders:lookup?orderId=` (sau `referenceId` după un timeout): 3 / 5 executat, 4 / 10 refuzat (cu motivul), 1 / 2 / 11 / 12 în curs; până la 5 citiri la 1 s.
+- **`alpaca.ts`:**
+  - `POST /v2/orders` `{ symbol, qty | notional, side, type, time_in_force, limit_price, stop_price, extended_hours, client_order_id (= idemKey), order_class: 'bracket' + take_profit / stop_loss }`;
+  - `DELETE /v2/orders/{id}` (422: nu se mai poate anula → `NOT_FOUND`); închiderea unei poziții („Închide”): un ordin la piață în sens opus, pe cantitatea ei;
+  - crypto (`BTC/USD`): `gtc`, fără bracket.
+- **Poziții și ordine din portofoliu, pentru acțiuni:** `PositionRow` / `BalanceRow` primesc `ref?: { positionIds?: string[]; instrumentId?: number; ticker?: string }` (eToro, Trading 212); `OrderRow` primește `cancellable: boolean` (fals pentru SL / TP-urile eToro deduse din poziții).
+
+### 4. `TradingService` (`exchange/trading/service.ts`)
+- `caps(userId)`: pe fiecare cont, `supported` / `enabled` / `markets` / `reason`.
+- `enable(userId, accountId, password, code)`:
+  - pasul de autentificare (`users.stepUp`: parola, apoi `verifySecondFactor`), pe bugetul `account:<id>`;
+  - permisiunile recitite (`keyPermissions`; Coinbase: `v3PrivateGetBrokerageKeyPermissions` → `can_trade` / `can_transfer`). O citire fără rezultat păstrează lista știută, aici și la „Testează”;
+  - `tradeRights(exchange, permissions)` → `{ spot, futures, withdraw }` (`null` = necunoscut):
+    - KuCoin `Spot` / `Futures` / `Withdrawal`;
+    - Binance `spot-trade` / `futures` / `withdraw`;
+    - Bybit `Spot:SpotTrade` / `ContractTrade:*` / `*Withdraw*`;
+    - OKX `trade` / `withdraw`;
+    - Bitget `trade` / `withdraw`;
+    - Coinbase `can_trade` / `can_transfer`;
+  - fără tranzacționare → 400; cu retragere sau transfer → 400;
+  - altfel `trading_enabled_at` și `trading_markets`, plus o intrare `enable` în jurnal.
+- `disable(userId, accountId)`.
+- `instrument`, `symbols`: pe trader.
+- **`preview(userId, ticket)`:**
+  - contul să fie al utilizatorului, cu tranzacționarea pornită și piața permisă;
+  - apoi `trader.normalize`.
+- **`place(userId, ticket)`:**
+  1. aceleași verificări;
+  2. limita de viteză (20 / min pe utilizator, fereastră glisantă în memorie);
+  3. `INSERT` în jurnal cu `status = 'pending'` și `idem_key`, într-o tranzacție cu `UPDLOCK, HOLDLOCK`. Dacă există deja, sau dacă indexul unic prinde o cursă, se întoarce rezultatul rândului existent: `pending` → 409 `IN_PROGRESS`, `unknown` → 502, `sent` → rezultatul salvat;
+  4. `trader.normalize` din nou: ce pleacă e exact ce a fost verificat, rotunjit la fel;
+  5. `trader.place`;
+  6. `UPDATE` cu starea, ID-ul și mesajul;
+  7. `accounts.invalidate(id)`.
+  - Un `UNKNOWN_OUTCOME` rămâne `unknown` în jurnal.
+  - `rejected` / `error` pun `idem_key = NULL`: ordinul n-a intrat în carte, formularul se poate retrimite.
+  - Rândul primește la final cantitatea în activ și prețurile rotunjite (o valoare scrisă în USDT apare în BTC).
+  - Un rând `pending` mai vechi de 2 minute (o repornire în timpul trimiterii) răspunde ca `UNKNOWN_OUTCOME`.
+  - `cancel`: piața unui simbol perpetuu (`…:USDT`) e `futures`, oricum ar lista-o contul; la brokeri e `stock`.
+  - Limita de viteză se verifică înaintea jurnalului, ca un refuz pentru viteză să nu lege formularul.
+  - `access` refuză și oprește tranzacționarea dacă permisiunile salvate permit mutarea fondurilor. `AccountsService.test` (butonul „Testează”) face la fel când citește o astfel de cheie. `enable` refuzat oprește și tranzacționarea pornită înainte.
+- `cancel(userId, accountId, order)`: verificările, limita de viteză, `trader.cancel`, jurnal, `invalidate`.
+- `log(userId)`: ultimele 50 de intrări.
+
+### 5. API
+- `GET /api/trading` → `{ accounts: TradingCaps[] }`.
+- `POST /api/accounts/:id/trading` `{ enabled: true, password, code }` / `{ enabled: false }`.
+- `GET /api/trading/:id/symbols?market=` (crypto, din lista de piețe deja încărcată a clientului; pagina o ține 10 min).
+- `GET /api/trading/:id/instrument?market=&symbol=`.
+- `POST /api/trading/:id/preview` (ticket) → `OrderPreview`.
+- `POST /api/trading/:id/orders` (ticket) → `OrderResult`.
+- `POST /api/trading/:id/cancel` `{ orderId, symbol, market, trigger }` → `OrderResult`.
+- `GET /api/trading/log` → `TradeLogRow[]`.
+- Toate:
+  - cer un utilizator cu 2FA (bariera FD-2FA);
+  - lucrează doar pe conturile lui (altfel 404);
+  - CSRF ca orice scriere;
+  - nu sunt în `ADMIN_ONLY`.
+- Erorile:
+  - `TradingError` → 400 cu `code`;
+  - `RATE_LIMIT` → 429;
+  - `UNKNOWN_OUTCOME` → 502 cu mesajul din FD §6.
+
+### 6. Interfață
+- **`components/OrderTicket.tsx`** (fereastră):
+  - formularul (§2), cu `useQuery` pe `instrument` și `symbols`;
+  - „Verifică ordinul” → `preview` → `ConfirmOrder`;
+  - „Confirmă și trimite” → `orders` (același `idemKey` la orice reîncercare a aceluiași formular; unul nou la o modificare);
+  - rezultatul;
+  - recitește `['portfolio', id]` și jurnalul.
+- **`pages/Trades.tsx`:**
+  - „Ordin nou” / „Pornește tranzacționarea” (`EnableTrading`: parola + codul) / „Oprește”;
+  - „Anulează” pe ordine (`cancellable`), „Închide” pe poziții, „Vinde” pe dețineri;
+  - panoul „Ordinele trimise din Sentiq”.
+- **`pages/Charts.tsx`:** „Tranzacționează” (doar cu un cont pornit care poate piața graficului) → `OrderTicket` precompletat.
+- **`AccountWizard.tsx` / `Settings.tsx`:** textele noi; pașii `tradeSteps`; avertismentul de permisiuni din §8 al FD.
+
+### 7. Siguranța codului
+- Testul de odinioară devine:
+  - `withdraw` / `transfer` (apeluri) nu apar nicăieri în `src/server`;
+  - `createOrder` / `cancelOrder` / `setLeverage` / `setMarginMode` / `POST`-urile de ordin apar doar în `src/server/exchange/trading/`;
+  - `cancelAllOrders`, `closeAllPositions` și `editOrder` nu apar nicăieri.
+- Jurnalul păstrează doar ce a plecat (fără chei). Log-urile serverului: o linie pe acțiune (contul, simbolul, latura, cantitatea, rezultatul), niciodată chei.
+
+### 8. Teste
+- `CcxtTrader`:
+  - pe clienți simulați, pentru toate cele 7 exchange-uri: parametrii pe care Sentiq îi dă lui ccxt;
+  - pe clasele ccxt reale (KuCoin futures și spot, Bybit, contul unificat Bitget, Coinbase), cu piețele puse din fixture (`setMarkets`) și `fetch` interceptat. Se verifică cererea HTTP care ar pleca:
+  - rotunjirea, contractele;
+  - levierul, marja, reduce-only, TP / SL;
+  - stopul, clientOrderId-ul;
+  - modul hedge refuzat;
+  - TP / SL după intrare la Binance;
+  - contul unificat KuCoin și Bitget (marja, stop-urile, suma la cumpărarea spot la piață), modul contului Bitget citit din setările v3;
+  - erorile: răspuns ilizibil după trimitere → necunoscut; Binance `-2015` → permisiune.
+- Brokerii, cu `fetch` simulat:
+  - corpul, antetele și erorile Trading 212 (403, 429);
+  - eToro: deschidere, închidere parțială, anulare, `lookup` executat / refuzat / timeout;
+  - Alpaca: bracket, notional, crypto, regulile (fracționat, stop pe crypto, în afara orelor), 403 / 422.
+- `TradingService`:
+  - pornirea (pasul de autentificare, cheie fără tranzacționare, cu retragere, permisiuni necunoscute);
+  - idempotența (aceeași cheie → același rezultat, un singur apel; `pending` → 409);
+  - limita de viteză;
+  - contul altuia → 404;
+  - tranzacționarea oprită → 400;
+  - jurnalul;
+  - `invalidate`.
+- Rutele, cap la cap, pe un exchange simulat.
+- Portofoliul (`server.test.ts`): ordinele futures și stop citite pe Binance, cheia fără futures (inclusiv `-2015` nereîncercat, citirea sărită și cerută din nou după „Testează”), altă eroare → secțiunea marcată; Bybit: listele spot, tranzacțiile linear ca futures.
+- Testul de siguranță a codului (§7).
+- Interfața: verificată în Chrome pe o schemă de test, cu un exchange simulat.
+
+## TD-INDICATORS — implementează FD-INDICATORS
+
+### 1. Codul preluat (`src/web/indicators/vendor/`)
+- **Sursa:** `deepentropy/lightweight-charts-indicators`, commit `f8e1b0ea80699a58f9d516ca74f0dfd5e6277ab2` (18 oct 2026, versiunea 0.16.8), licență MIT, păstrată în `vendor/LICENSE`.
+- **Fișiere:**
+  - `standard/*.ts`: cei 117 indicatori standard;
+  - `render/*.ts`: `IndicatorRenderer` și primitivele lui;
+  - ajutoarele pe care le importă: `types.ts`, `chart-context.ts`, `anchor-period.ts`, `alert-states.ts`, `other-symbol.ts`, `lower-tf-volume.ts`, `bar-time.ts`.
+  - `vendor/README.md` spune de unde vin și ce s-a schimbat.
+- **Singura modificare:** antetul `// @ts-nocheck` pe fiecare fișier.
+  - Codul e scris pentru setările upstream (`strict`, fără `noUncheckedIndexedAccess` și `erasableSyntaxOnly`); sub setările Sentiq ar da ~1.300 de erori de tip, nu de logică.
+  - Tipurile exportate rămân folosite de codul Sentiq.
+  - Importurile de tipuri au deja `type`, deci `verbatimModuleSyntax` nu schimbă nimic la build.
+- **Dependență nouă:** `oakscriptjs` **0.12.3** (MIT, fixată exact; aceeași cu upstream la commit).
+  - Verificat: fără `eval`, `Function`, `fetch`, `XMLHttpRequest` sau WebSocket, nici în ea, nici în codul preluat.
+  - `lightweight-charts` (5.2.1) există deja.
+- **Mărime:** toți cei 117 + renderer + ce folosesc din `oakscriptjs`: ~380 KB minificat / ~112 KB gzip (chunk-ul `runtime-impl`), încărcat dinamic (§5).
+- **Viteză (5.000 de bare, Node 24):** 117 indicatori în ~0,7 s în total; cei mai mulți sub 10 ms; cei mai grei ~100 ms (Auto Fib Retracement, Technical Ratings, Trading Sessions, Ghost Pivots).
+
+### 2. Catalogul (`src/web/indicators/catalog.ts`, `src/shared/studies.ts`)
+- **`shared/studies.ts`** (server și web):
+  - `STUDY_IDS`: cele 118 id-uri (117 + `volume`);
+  - `STUDY_MAX = 20`;
+  - `studySchema`: `{ uid, id, inputs, visible, plots?, hlines?, height? }`:
+    - `uid`: `/^[a-z0-9]{6,24}$/`;
+    - `inputs`: cel mult 80 de chei `/^[A-Za-z_][A-Za-z0-9_]{0,63}$/`, valori `boolean | number finit | string ≤ 300`;
+    - `plots` / `hlines`: cel mult 40 de chei, fiecare `{ visible?, color? (≤ 40, #hex sau rgba), width? (1–4) }`;
+    - `height`: raportul față de panoul prețului, 0,05–3.
+  - `studiesSchema`: listă de cel mult 20, cu `uid` unice.
+- **`web/indicators/catalog.ts`:** intrările generate din registrul upstream (`src/index.ts`, `group: 'standard'`):
+  - `id`, `name`, `shortName`, `description`, `category`;
+  - modulul indicatorului: `calculate`, `metadata`, `defaultInputs`, `inputConfig`, `plotConfig`, `hlineConfig`, `fillConfig`, `requiredSymbols`;
+  - `usesVisibleRange`;
+  - plus `volume` (scris în Sentiq, §3).
+  - Categoriile upstream: `Moving Averages`, `Oscillators`, `Momentum`, `Trend`, `Volatility`, `Channels & Bands`, `Volume`, cu numele românești din FD.
+- **Verificare în teste:** `STUDY_IDS` și catalogul au exact aceleași id-uri.
+
+### 3. `volume` (`web/indicators/volume.ts`)
+- Același format ca modulele upstream.
+- Intrări: `showMA` (false), `maLength` (20, 1–5000), culorile `#26A69A80` / `#EF535080`; o lumânare cu `close >= open` e „sus”.
+- Plot-uri:
+  - `plot0` „Volume”: coloane, culoarea fiecărei bare după lumânare;
+  - `plot1` „Volume MA”: linie `#2196F3`, vizibilă după `showMA`.
+- Desenat în panoul lui, nu overlay.
+
+### 4. Setările (`shared/settings.ts`, `server/settings.ts`)
+- **Cheie personală nouă de prim nivel: `studies: studiesSchema.default([])`.**
+  - E separată de `charts`, pentru că `salvage` recuperează cheie cu cheie: o listă stricată nu mai trage după ea perechea, bifele și înălțimea LMA.
+  - `USER_KEYS` primește `studies`.
+- **`salvage`** primește o regulă pentru `studies`: păstrează elementele care trec de `studySchema`, cu `id` cunoscut și `uid` unic, până la 20. Un id scos dintr-o versiune viitoare a catalogului lasă restul listei neatins.
+- **Scrierea** (`PUT /api/settings { studies: [...] }`): lista se înlocuiește întreagă (`deepMerge` înlocuiește listele). O listă invalidă dă 400, cu mesajul obișnuit.
+- `charts.showSlingshot` / `charts.showLma` / `charts.lmaPane` rămân neschimbate.
+
+### 5. Încărcarea (`web/indicators/runtime.ts`)
+- `loadStudyRuntime()`: `import('./runtime-impl.ts')`, o singură dată (promisiune ținută minte). Conține catalogul, `IndicatorRenderer` și calculul; e chunk-ul de ~112 KB gzip.
+- Pagina Grafice îl cere când lista are cel puțin un indicator vizibil sau când se deschide fereastra Indicatori.
+- `catalog-meta.ts` rămâne mic și static, fără calcul: id, nume, prescurtare, categorie, overlay, descriere, generat odată cu catalogul. Fereastra se deschide imediat; calculul vine după.
+
+### 6. Calculul (`web/indicators/compute.ts`)
+- **Barele:** `{ time: t / 1000, open, high, low, close, volume }` (secunde, ca graficul).
+- **Contextul graficului (`ChartContext`):**
+  - `timeframe` (Pine: `1`, `3`, `5`, `15`, `30`, `60`, `120`, `240`, `360`, `480`, `720`, `1D`, `1W`);
+  - `timezone` / `session`: crypto `Etc/UTC` / `24x7`; acțiuni și indici `America/New_York` / `0930-1600`;
+  - `tickerid`: crypto `EXCHANGE:BASEQUOTE`, acțiuni `NASDAQ:AAPL`, indici `INDEX:SPX`;
+  - `symbolType` (`crypto` / `stock` / `index`), `currency` (quote sau `USD`), `mintick` (10^-precizie), `timeUnit: 's'`;
+  - `lastBarConfirmed: false` (ultima lumânare e în formare);
+  - `leftVisibleBarTime` / `rightVisibleBarTime`, doar pentru `usesVisibleRange`;
+  - `bars(symbol, tf)`: doar pentru indicatorii cu `requiredSymbols` (§7).
+- **Intrările:** `sanitizeInputs(entry, saved)` pornește de la `defaultInputs` și ia fiecare valoare salvată doar dacă se potrivește câmpului:
+  - `int`: întreg în `[min, max]`; `float`: finit în `[min, max]`;
+  - `bool`; `string` cu `options`: una dintre ele; `string` liber: ≤ 300;
+  - `source`: una din cele 8; `color`: `#RRGGBB(AA)` sau `rgba()`;
+  - `timeframe`: `''` sau Pine valid; `symbol`: ≤ 300; `session`: `/^\d{4}-\d{4}(:[1-7]+)?$/`.
+  - Restul primește valoarea implicită; cheile necunoscute se ignoră.
+- **`runStudy(entry, bars, inputs, ctx)`** → `{ result, error, approximated, missing }`:
+  - excepțiile se prind;
+  - `MissingSymbolDataError` → `missing` (lista simbolurilor);
+  - mesajul altei erori → `error` (≤ 200 de caractere).
+- **Volum:** dacă toate barele au `volume = 0` și indicatorul e în `VOLUME_STUDIES`, nu se calculează: `error = 'Indicii nu au volum.'`. `VOLUME_STUDIES` = categoria Volume + VWMA, VWAP, MFI, Klinger, EOM, PVT, OBV, Chaikin, CVD, 24-hour Volume, Relative Volume at Time.
+- **`useStudies(...)`** (hook):
+  - calculează indicatorii vizibili câte unul pe macrotask (`setTimeout(0)` între ei), ca pagina să nu înghețe;
+  - rezultatele se țin pe cheia `uid + id + inputs + bars (lungime, ultimul timp și close) + extra`; o recalculare pornește doar când se schimbă cheia;
+  - un calcul nou îl anulează pe cel neterminat (generație);
+  - `usesVisibleRange`: recalcul la 300 ms după ultima schimbare a zonei vizibile.
+
+### 7. Date în plus (`web/indicators/extra-bars.ts`)
+- **`pineTf(tf)` ↔ `sentiqTf(pine)`:**
+  - `1`, `3`, `5`, `15`, `30`, `60`, `120`, `240`, `360`, `480`, `720` → minutele corespunzătoare;
+  - `D` / `1D` → `1d`; `W` / `1W` → `1w`; `M` / `1M` → `1M` (agregat din `1d`);
+  - restul (secunde, `2D`, `3M`…) → nesuportat.
+- **`resolveSymbol(request, chart)`:**
+  - **același simbol:** `tickerid`-ul graficului sau tickerul fără prefix;
+  - **crypto:** „BASE/QUOTE”; un prefix de exchange crypto; un ticker terminat în USDT / USDC; o monedă majoră cu quote-ul ei („BTCUSD”); iar pe un grafic crypto, orice ticker terminat în USD / BTC / ETH / EUR. USD → USDT;
+  - **forex** (prefixele FX, OANDA… sau două coduri de monedă, „EURUSD”) și futures („ES1!”) → nerezolvat;
+  - **acțiune:** `[NASDAQ|NYSE|AMEX|BATS|ARCA:]TICKER`, cu tickerul după `stock:` din `CHART_SYMBOL_RE`;
+  - altfel → nerezolvat.
+- **Încărcare:**
+  - fiecare cerere rezolvată, cu timeframe ≥ al graficului și pe care sursa îl are, se descarcă prin `/api/market/candles` (aceleași query-uri React Query ca graficul, deci aceeași cheie de cache);
+  - `limit`: pentru același simbol, câte lumânări acoperă istoria graficului + 50, cel mult limita graficului (ca `htfCandleCount`); pentru alt simbol, limita graficului;
+  - `refetchInterval` 5 min;
+  - `1M` = `1d` agregat pe luni calendaristice în fusul sursei (open primul, high max, low min, close ultimul, volume suma).
+- **Decizia per indicator:**
+  - toate cererile date → contextul are `bars`;
+  - altfel, dacă toate sunt pentru simbolul graficului → calcul **fără** `bars` (varianta originalului din barele graficului), `approximated = true`;
+  - altfel → `bars` întoarce barele date și `undefined` pentru restul; `MissingSymbolDataError` → `missing` (mesajul din FD §5).
+
+### 8. Desenarea (`web/chart/CandleChart.tsx`)
+- **Props noi:**
+  - `studies: StudyDraw[]` (`uid`, `entry`, `result`, `renderOptions`, `paneKey` sau `null` pentru overlay);
+  - `paneOrder: string[]` (`'lma'` și uid-urile cu panou, în ordine);
+  - `paneFactors: Record<string, number>`;
+  - `onPaneFactors(changed)`;
+  - `legends: Record<'main' | cheie de panou, (bar) => ReactNode>`;
+  - `onVisibleRange({ from, to })` (ms, la 300 ms după ce vederea se oprește), dat doar când un indicator citește zona vizibilă;
+  - `style` (înălțimea, `560 + 120 × panouri` px).
+  - Dispar: `lmaShare`, `onLmaShareChange`, `lmaLegend` (incluse în cele de mai sus).
+- **Panourile:** 0 = prețul; apoi, în ordinea `paneOrder`, LMA (dacă e) și fiecare indicator vizibil cu panou propriu.
+  - `layoutKey` = `paneOrder.join()`. La schimbarea lui: se șterg toate seriile din panourile > 0 (`IndicatorRenderer.clear()` pentru fiecare indicator, apoi seria LMA), iar panourile goale dispar; apoi se recreează în ordine (LMA la indexul ei, apoi `renderer.setPaneIndex(i)` + `render`).
+  - Fără schimbare de layout: `render(..., { reuseSeries: true })` pe fiecare.
+  - Overlay-urile: un renderer pe pane 0, cu `mainSeries` = lumânările.
+  - **Vederea:** punctele desenate înaintea ultimei lumânări (norul Ichimoku, 26 de bare în viitor) lungesc axa timpului, iar biblioteca mută vederea de pe lumânările arătate (măsurat: 25 de bare spre trecut). La fiecare desenare, indexul ultimei lumânări (`timeToIndex`) și zona vizibilă se citesc înainte și după; dacă vederea s-a mutat față de ultima lumânare, se pune înapoi (și în cadrul următor, când biblioteca își mai potrivește axa).
+  - **Vederea ținută minte** (TD-CHARTUX §4) se măsoară tot de la ultima lumânare (`zona vizibilă.to − indexul ultimei lumânări`), nu de la ultimul punct al axei: altfel, cu Ichimoku, la revenire ultima lumânare ar fi tăiată la margine. Fără indicatori care desenează înainte, e aceeași valoare ca `scrollPosition()`, deci vederile salvate rămân valabile. Vederea perechii părăsite se salvează înainte să intre lumânările noi.
+  - **Momentul:** biblioteca își aplică opțiunile (`rightOffset`, `barSpacing`) în primul ei cadru, peste o vedere pusă înainte, și ignoră o vedere cât graficul nu are lățime. Vederea ținută minte (sau cea implicită, ultimele 180 de bare) se pune deci după acel cadru (`requestAnimationFrame`), când `timeScale().width() > 0` (altfel la prima schimbare de mărime). Un contor (`viewEpoch`) oprește corecția de după desenarea indicatorilor să readucă o vedere mai veche.
+  - `shiftVisibleRangeOnNewBar: false`: lipirea de marginea din dreapta la lumânări noi o face codul (efectul datelor); a bibliotecii pornea și pentru punctele desenate în viitor de un indicator și muta vederea.
+- **Înălțimile:**
+  - stretch factor 1 pentru preț, `paneFactors[key]` pentru restul;
+  - LMA: `lmaPane / (1 − lmaPane)` (aceeași înălțime ca până acum);
+  - indicatorii: `height`, implicit 1/3;
+  - după `pointerup` pe grafic se citesc factorii; cei schimbați cu peste 1 % se raportează (`onPaneFactors`) și se salvează: LMA ca `lmaPane = f / (1 + f)`, limitat la 0,1–0,7; indicatorii ca `height`, limitat la 0,05–3.
+- **Înălțimea graficului:** `560 + 120 × panouri` px; ecran complet `h-full`.
+- **Legendele:** `boxes` măsoară fiecare panou (ca acum pentru LMA). Pentru fiecare legendă, un div `pointer-events-none` absolut în panoul ei; butoanele au `pointer-events-auto`. Bara de sub cursor e o singură stare (`HoverBar`), cu un singur abonament la crosshair.
+- **Stilul aplicat** (`renderOptions` + `entry` copiat):
+  - `plots[id] = { visible, color, lineWidth, palette: { [culoarea implicită]: color } }`;
+  - `hlineConfig` filtrat (`visible`) și recolorat;
+  - `fills` (rezultat și `fillConfig`) fără cele care leagă un plot ascuns;
+  - `inputs` pentru plot-urile vizibile după o intrare.
+
+### 9. Interfața
+- **`components/IndicatorPicker.tsx`** (în `Modal`):
+  - căutare (normalizată NFD, fără diacritice, litere mici);
+  - categoriile: un `role="group"` de butoane `aria-pressed` (coloană pe ecran lat, rând derulabil pe telefon); în timpul unei căutări, niciuna nu e apăsată (căutarea e în toate);
+  - lista: butoane cu numele, prescurtarea, „pe grafic” / „panou separat”, `title` = descrierea, insigna PREMIUM;
+  - „Adăugat” 1,5 s după click; „Pe grafic” pentru Slingshot / LMA afișate; dezactivat la 20.
+- **`components/StudySettings.tsx`:**
+  - formularul generat din `inputConfig`: `group` → `fieldset`, `inline` → un rând, `tooltip` → (i);
+  - `active: { input, eq | ne }` → câmp dezactivat cât condiția nu ține;
+  - tabul „Stil” din `plotConfig` (fără plot-urile cu culoarea `transparent` sau `display` `data_window` / `status_line`) și `hlineConfig`;
+  - „Salvează” validează cu regulile din §6 (mesajul cu câmpurile și limitele) și salvează lista întreagă (`optimistic: false`); „Valorile implicite” golește formularul la valorile din `defaultInputs` și fără suprascrieri de stil.
+- **`pages/Charts.tsx`:**
+  - bifele Slingshot / LMA scoase;
+  - „Indicatori” → `IndicatorPicker`;
+  - sertarul de setări primește ținta `slingshot` | `lma` | `study:<uid>` (fără tab-uri între indicatori);
+  - legendele: Slingshot în panoul prețului (rotiță, ×), overlay-urile după ea, LMA și panourile în ale lor;
+  - adăugarea, scoaterea, ochiul și înălțimile se salvează optimist (`saveSettingsPatch`), iar la eroare se recitesc setările (mecanismul existent);
+  - `uid` nou: 12 caractere `[a-z0-9]` din `crypto.getRandomValues`.
+- **Numerotarea legendelor:** doi indicatori cu același id și aceleași intrări primesc „#2”, „#3”.
+
+### 10. Teste
+- **`shared/studies.test.ts`:** schema (valid, id necunoscut, uid dublat, 21 de elemente, chei și valori greșite).
+- **`server.test.ts`:**
+  - `studies` salvat și citit per utilizator (și de un utilizator fără admin);
+  - `salvage` păstrează elementele valide;
+  - `charts` neatins de o listă stricată.
+- **`web/indicators/*.test.ts`:**
+  - catalogul ↔ `STUDY_IDS`;
+  - fiecare indicator calculat pe bare sintetice (1.500), fără excepții, în afară de Correlation / Performance fără date;
+  - `sanitizeInputs` pe fiecare tip;
+  - `pineTf` / `sentiqTf`;
+  - `resolveSymbol`;
+  - agregarea lunară;
+  - decizia din §7 (dat / aproximat / lipsă);
+  - `volume`;
+  - parametrii din legendă;
+  - factorii panourilor (LMA ↔ `lmaPane`).
+- **Interfața,** în Chrome pe o schemă de test:
+  - adaugă RSI, MACD, EMA, Bollinger, Volume;
+  - setările (o intrare, o culoare);
+  - ochiul, ×, trasul separatorului, ecranul complet;
+  - Slingshot / LMA scoase și adăugate din listă;
+  - fără erori în consolă.
+
+## TD-PREMIUMHIDE — implementează FD-PREMIUMHIDE
+
+### 1. Setările (`shared/settings.ts`)
+- `charts.slingshotHidden: z.boolean().default(false)` și `charts.lmaHidden: z.boolean().default(false)`.
+- Setările vechi primesc `false`. `salvage` nu se schimbă: cheia `charts` se recuperează ca întreg, iar câmpurile noi au valoare implicită.
+- `DEFAULT_CHART_PREFS` (Charts.tsx) primește ambele `false` (server vechi).
+
+### 2. Ce se desenează (`web/chart/premium.ts`)
+- `premiumState(prefs)` → `{ slingshot, lma }`, fiecare `'off' | 'shown' | 'hidden'`: `off` când `showX` e false, `hidden` când e pe grafic și ascuns.
+- `premiumNote(state)`: ce scrie în dreapta rândului din lista Indicatori: `null`, „Pe grafic” sau „Pe grafic, ascuns”.
+- **Charts.tsx:**
+  - `CandleChart` primește `result` doar cu Slingshot `shown`; caseta TP / SL și avertismentele Market Structure la fel;
+  - `runLma` rulează doar cu LMA `shown`. Ramura existentă `lma === null` din `CandleChart` scoate seria, panoul, liniile și culorile lumânărilor;
+  - `paneOrder` conține `lma` doar atunci; `paneFactors.lma` rămâne din `lmaPane`, deci înălțimea revine la loc.
+
+### 3. Legendele
+- **Slingshot:** `LegendRow dim={hidden}`, cu `LegendButtons hidden onToggle`; ochiul salvează `{ charts: { slingshotHidden: !hidden } }` (`remember`, optimist).
+- **LMA:**
+  - `shown`: legenda din panoul lui, cu ochi;
+  - `hidden`: un rând estompat în `legends.main`, după Slingshot, cu prescurtarea și parametrii din `effectiveLmaParams(lmaParams)` (fără calcul) și cu ochi.
+- **`legends.main`** există când Slingshot nu e `off`, LMA e `hidden` sau sunt indicatori în panoul prețului.
+- **×:** `{ showX: false, xHidden: false }`.
+- **Lista Indicatori:** `onAddPremium` salvează `{ showX: true, xHidden: false }`. Pentru un premium ascuns, rândul arată „Pe grafic, ascuns”: `premiumOn` devine `Record<PremiumKey, 'off' | 'shown' | 'hidden'>`.
+
+### 4. Teste
+- Schema: câmpurile noi implicit `false`, păstrate când sunt salvate.
+- `premiumState`: cele trei stări pentru fiecare.
+- `premiumNote`: textul rândului din listă pentru fiecare stare (proiectul nu are teste de componente; rândul îl folosește direct).
+- În Chrome: ochiul pe ambele, legenda estompată, panoul LMA și culorile lumânărilor, zoom-ul păstrat, după reîncărcare.
+
+## TD-TRADEUNLOCK — implementează FD-TRADEUNLOCK
+
+### 1. Server
+- **`UserService.stepUp`** → `'ok' | 'password' | 'code'` (în loc de boolean): parola întâi (una greșită nu consumă un cod de recuperare), apoi codul.
+- **`PasskeyService`:**
+  - `stepUpOptions(userId, rp)`: `generateAuthenticationOptions` cu `allowCredentials` = passkey-urile utilizatorului (e autentificat, deci lista lui nu spune nimic nou) și `userVerification: 'required'`; provocarea are scopul `'stepup'` și `userId`;
+  - `completeStepUp(userId, challengeId, response, rp)`: `consume(id, 'stepup', userId)`, apoi aceeași verificare ca la login (`verifyAssertion`, comună), plus `row.user_id === userId` înainte de verificare (contorul altui cont nu se atinge). Aruncă `PasskeyError`.
+- **Rute:**
+  - `POST /api/trading/passkey/options` (autentificat): opțiunile, plus cookie-ul `sentiq_webauthn` (`/api`, 5 min);
+  - `POST /api/accounts/:id/trading`: `{ enabled: true, password?, code? } | { enabled: true, passkey: {...} }`. Cu `passkey`: cookie-ul se citește și se șterge; `PasskeyError` → 400 `PASSKEY`, fără `registerFailure`, iar o pauză în curs nu-l oprește; reușita golește bugetul (`throttle.reset`). Cu parolă și cod: ca până acum, iar după un eșec mesajul primește încercările rămase (`throttle.remaining`).
+- **`TradingService.enable(userId, accountId, confirm)`** (fără `UserService` în dependențe; ruta dă `confirm`):
+  - `confirm: () => Promise<'ok' | 'password' | 'code'>`;
+  - ordinea: acces, platformă, permisiuni (recitite; refuz = `PERMISSION`), apoi `confirm()`;
+  - `'password'` / `'code'` → `BAD_FACTORS` cu mesajul factorului (numele platformei din `PROVIDERS`);
+  - `log.warn('trading: user N switching trading on for account M refused: wrong password|code')`; passkey-ul refuzat se notează în rută.
+
+### 2. Web (`TradingControls.tsx`)
+- Fereastra citește `/api/account` (aceeași cheie de cache `['account']` ca Securitate, mutată în `hooks.ts` ca `useAccountInfo`).
+- **„Confirmă cu passkey”** apare când `browserSupportsWebAuthn()`, `passkeysHere` și există cel puțin un passkey: opțiuni → `startAuthentication` → POST cu `passkey`. Erorile browserului trec prin `passkeyMessage` (mutat din `Auth.tsx` în `web/passkey.ts`).
+- Textele câmpurilor și indiciul, cu numele platformei.
+
+### 3. Teste
+- `stepUp`: parolă greșită → `'password'` (codul de recuperare nu se consumă); cod greșit → `'code'`; ambele corecte → `'ok'`.
+- Ruta: mesajul fiecărui factor, încercările rămase („Mai ai 2 încercări”), apoi 429.
+- Permisiunile întâi: o cheie doar de citire e refuzată fără să consume încercări (patru încercări la rând, toate `PERMISSION`, niciun 429), iar lista recitită se salvează.
+- Passkey: opțiunile au `allowCredentials` cu passkey-urile utilizatorului; o provocare de login nu merge pentru step-up și invers; passkey-ul altui utilizator e refuzat fără să-i atingă contorul; un `PasskeyError` nu consumă încercări. Testul semnează cu autentificatorul software din `users.test.ts` (aceeași verificare criptografică ca la login).
+
+## TD-STUDYUX — implementează FD-STUDYUX
+
+### 1. Favoritele
+- **`shared/studies.ts`:**
+  - `FAVORITE_IDS = [...PREMIUM_KEYS ('slingshot', 'lma'), ...STUDY_IDS]`;
+  - `studyFavoritesSchema = z.array(z.enum(FAVORITE_IDS)).max(FAVORITE_IDS.length)`, cu id-uri unice.
+- **`shared/settings.ts`:** cheia personală de prim nivel `studyFavorites: studyFavoritesSchema.default([])`.
+  - E separată de `studies`, ca o listă stricată să nu le ia pe celelalte.
+  - `USER_KEYS` primește `studyFavorites`.
+- **`server/settings.ts`:** `salvage` păstrează din `studyFavorites` id-urile cunoscute, fără dubluri (`salvageFavorites`).
+- **Scrierea:** `PUT /api/settings { studyFavorites: [...] }`. Lista se înlocuiește întreagă și se calculează din ultima din cache, ca la `studies` (două click-uri rapide contează amândouă).
+- **`IndicatorPicker`:**
+  - primește `favorites: readonly string[]` și `onToggleFavorite(id)`;
+  - categoria `'favorites'` e prima, cu numărul, și e cea inițială când lista nu e goală;
+  - rândul devine `<li class="flex">` cu butonul de adăugare (`flex-1`) și butonul stelei (`Star` din lucide, umplută cu `fill-current text-accent` când e favorit). Eticheta spune ce face un click („Adaugă X la favorite” / „Scoate X din favorite”), ca la butoanele ochi; un buton nu poate sta în alt buton.
+
+### 2. Bara de jos
+- **Formularele** (`StudySettings`, formularul Slingshot / LMA din `Charts.tsx`): `px-5 pt-4`, fără `pb`, ca bara să ajungă la marginea de jos a zonei care derulează.
+- **Bara:** `sticky bottom-0 -mx-5 mt-auto px-5 py-4 bg-panel border-t`, pe toată lățimea; `z-10`, ca textul derulat să treacă pe sub ea.
+
+### 3. Stilul liniilor
+- **`shared/studies.ts`:**
+  - `studyPlotStyleSchema`: `width` 1–6 (era 1–4) și `style?: 'solid' | 'dashed' | 'dotted'`;
+  - `studyHlineStyleSchema`: `width?` 1–6 și `style?`.
+- **`web/indicators/style.ts`:**
+  - `styledEntry` pune `linestyle` din `style` în copia `plotConfig` a intrării (renderer-ul citește `def.linestyle`) și `lineWidth` din `width` în override, ca acum;
+  - pentru hline-uri: `linestyle` și `linewidth` în `hlineConfig`.
+  - Codul preluat nu se schimbă.
+- **Funcții noi:**
+  - `lineKind(def)` → `'line'` (line, stepline, stepline_diamond, linebr, steplinebr, area, areabr: tip și grosime), `'width'` (histogram, circles, cross: doar grosime), `null` (restul);
+  - `plotWidth(def)`: grosimea desenată fără alegere (a liniei, altfel cea a renderer-ului: 2 px, 1 px la histogramă); la hline: `linewidth ?? 1`;
+  - `widthChoices(drawn)` → `[drawn, drawn + 1, drawn + 2]`, cu `drawn` limitat la 1–4.
+- **`StudySettings` („Stil”):** select-urile „Tip” și „Grosime”. O grosime salvată care nu e între cele trei apare ca opțiune în plus („N px”).
+
+### 4. Teste
+- Schema: favoriții (necunoscuți / dubluri refuzați; salvage păstrează ce e valid), `width` până la 6, `style`.
+- `styledEntry`: tipul și grosimea ajung în `plotConfig` / override / `hlineConfig`; fără alegeri, intrarea e cea originală.
+- `lineKind`, `widthChoices`.
+- Serverul: `studyFavorites` salvat și citit per utilizator; o listă veche cu un id necunoscut își păstrează restul.
+
+## TD-STUDYMEMORY — implementează FD-STUDYMEMORY
+
+### 1. Setarea (`shared/studies.ts`, `shared/settings.ts`, `server/settings.ts`)
+- **`studyMemorySchema`:**
+  - o listă de `{ id, inputs, plots?, hlines?, height? }`, cu aceleași reguli pe câmp ca `studySchema`;
+  - cel mult `STUDY_IDS.length`, fiecare `id` o singură dată;
+  - **listă, nu obiect:** `deepMerge` înlocuiește listele, deci memoria unui indicator se înlocuiește întreagă. Un obiect ar amesteca intrările vechi cu cele noi, iar `changedInputs` salvează doar diferențele față de valorile implicite.
+- **Cheia personală:** `studyMemory: studyMemorySchema.default([])`, cu `USER_KEYS` += `studyMemory`.
+- **`salvageStudyMemory`:** păstrează elementele valide, cu `id` cunoscut, primul pentru fiecare `id`.
+
+### 2. Pagina (`Charts.tsx`, `web/indicators/memory.ts`)
+- **`memoryOf(study)`** → `{ id, inputs, plots?, hlines?, height? }`.
+- **`remember(list, entry)`** → lista cu intrarea înlocuită sau adăugată.
+- **`fromMemory(id, entry, uid)`** → studiul nou: `visible: true` și câmpurile ținute minte.
+- **`saveStudies(change, optimistic, memo?)`** trimite `{ studies, studyMemory? }` într-un singur patch. Ambele se calculează din ultimele valori din cache, deci două click-uri rapide contează amândouă.
+  - `addStudy`: din memorie, dacă are;
+  - `removeStudy`: memoria primește copia scoasă;
+  - `saveStudy` (formularul): memoria primește copia salvată;
+  - salvarea formularului nu e optimistă (serverul poate refuza o valoare), deci ajunge în cache abia cu răspunsul. O scoatere pornită între timp o așteaptă (`formSave`), altfel ar ține minte setările de dinainte de salvare.
+
+### 3. Teste
+- **Schema:** câmpurile memoriei, dublurile refuzate, `salvageStudyMemory`.
+- **`memory.ts`:** `memoryOf` (fără `uid` și `visible`), `remember` (înlocuiește, adaugă), `fromMemory` (vizibil, uid nou, fără memorie = valorile TradingView).
+- **Serverul:** memoria salvată per utilizator, înlocuită întreagă (o intrare veche cu `src: 'hl2'` nu rămâne după una fără `src`).
+- **Chrome:**
+  - RSI cu lungimea 21 și linia punctată, scos și adăugat: vine cu 21 și punctat;
+  - după reîncărcare la fel;
+  - „Valorile implicite” + „Salvează”, scos și adăugat: vine cu valorile TradingView.
+
+## TD-GOLATEST — implementează FD-GOLATEST
+- **`CandleChart`:** `checkBehind()` compară `getVisibleLogicalRange().to` cu indexul logic al ultimei lumânări (`timeToIndex(shownLast)`, nu `n − 1`: un indicator poate desena înaintea ei). Rezultatul ajunge în starea `behind`.
+- **Când se recalculează:**
+  - la fiecare schimbare a vederii (`onRange`);
+  - după datele noi ale aceleiași perechi (la finalul efectului de date);
+  - la o schimbare de pereche / timeframe, butonul se ascunde până vine vederea cheii noi (un cadru mai târziu), ca să nu clipească după vederea veche.
+- **Butonul:**
+  - poziție absolută în colțul celui mai de jos panou din `boxes` (deasupra axei timpului, în stânga axei prețului), 32 px, `z-10`;
+  - click: `timeScale().scrollToRealTime()`.
+- **Overlay-ul panoului prețului** (caseta TP / SL) urcă cu `translateY(−42px)` cât timp butonul e în același panou.
+
+## TD-RODESC — implementează FD-RODESC
+- **`web/indicators/catalog-meta.ts`:** cele 118 `description` traduse.
+- **`vendor/README.md`:** o regenerare păstrează traducerile și traduce doar indicatorii noi.
+- **`catalog.test.ts`:** fiecare descriere are peste 10 caractere și niciun cuvânt englezesc frecvent (the / and / of / with / using / measures / shows / price / average).
+
+## TD-HLINELEVELS — implementează FD-HLINELEVELS
+- **`studyHlineStyleSchema`:** `price?` (număr finit, ±1e12).
+- **`styledEntry`:** `price` din stil în copia `hlineConfig`. Renderer-ul ia din ea și liniile, și umplerile dintre ele.
+- **`StudySettings`:**
+  - câmp numeric „nivel” pe rândul fiecărei linii orizontale (golit = `NaN`);
+  - la „Salvează”, un nivel invalid e refuzat cu numele liniei, iar formularul trece pe „Stil”.
+- **Teste:**
+  - schema (finit, limite);
+  - `styledEntry` pe Stochastic RSI: nivelurile 90 / 50 / 10 ajung în `hlineConfig`, iar `fillConfig` rămâne între aceleași linii.
+
+## TD-TICKETMEMORY — implementează FD-TICKETMEMORY
+
+### 1. Setarea (`shared/trading.ts`, `shared/settings.ts`, `server/settings.ts`)
+- **`ticketPrefsSchema`** (toate câmpurile opționale, `.strict()`):
+  - `market`: spot / futures / stock;
+  - `side`: buy / sell;
+  - `kind`: tipurile de ordin;
+  - `amountIn`: base / quote;
+  - `tif`: gtc / day;
+  - `leverage`: întreg 1–125;
+  - `marginMode`: cross / isolated;
+  - `reduceOnly`, `extendedHours`: boolean.
+- **`orderTicketMemorySchema`:**
+  - `lastAccount: { crypto?: id, stocks?: id }`;
+  - `accounts: Record<id, ticketPrefs>`, cu cel mult 200 de conturi (un patch nu poate șterge chei; limita e departe de numărul real de conturi, ca o salvare să nu fie refuzată pe tăcute); cheile sunt id-uri (`/^\d{1,9}$/`).
+  - Obiect, nu listă: un patch pe un câmp (`{ accounts: { "12": { kind: 'limit' } } }`) se unește câmp cu câmp, exact ce trebuie aici.
+- **Cheia personală:** `orderTicket: orderTicketMemorySchema.prefault({})`, cu `USER_KEYS` += `orderTicket`.
+- **`salvageOrderTicket`:** păstrează contul ultim valid și intrările valide ale conturilor.
+
+### 2. Formularul (`OrderTicket.tsx`, `web/components/ticket-memory.ts`)
+- **`rememberedFields(memory, accountId, seed)`:**
+  - întoarce setările de aplicat: fără cele pe care le dă seed-ul (`market`, `side`, `orderKind`, `reduceOnly`, `marginMode`);
+  - nimic pentru un formular de închidere (`seed.close` / `seed.reduceOnly`).
+- **`ticketPatch(accountId, prefs)`** → `{ orderTicket: { accounts: { [id]: prefs } } }`.
+- **`accountPatch(kind, id)`** → `{ orderTicket: { lastAccount: { [kind]: id } } }`.
+- **Contul inițial:** `seed.accountId`, altfel `lastAccount[seed.kind]`, dacă e eligibil, altfel primul eligibil. `lastAccount` se salvează când alegi contul în formular și după un „Verifică ordinul” reușit (nu la închideri).
+- **Aplicarea:**
+  - un efect, când contul rezolvat se schimbă și setările sunt încărcate, aplică `rememberedFields` o singură dată pe cont (`appliedFor`);
+  - schimbarea contului în formular aplică setările acelui cont.
+- **Salvarea:**
+  - setter-ele câmpurilor (piață, direcție, tip, unitate, valabilitate, levier, marjă, reduce-only, în afara orelor) salvează și câmpul lor, prin `saveSettingsPatch` (optimist, în coadă);
+  - nu în formularele de închidere;
+  - `fill()` (25 / 50 / 100 %) folosește setter-ul simplu al unității, deci nu se ține minte;
+  - o alegere făcută înainte să se încarce setările marchează contul ca aplicat (`appliedFor`), ca memoria venită mai târziu să n-o suprascrie;
+  - levierul se ține minte doar ca întreg valid.
+
+### 3. Teste
+- **Schema:** câmpurile, cheile id, limita de 200, câmpurile necunoscute refuzate; `salvageOrderTicket`.
+- **`rememberedFields`:** seed-ul câștigă; închiderea ignoră memoria; contul fără memorie.
+- **Serverul:** memoria salvată per utilizator, unită câmp cu câmp.
+- **Chrome:**
+  - Futures + limită + levier 10 + Cross, închis fără trimitere, apoi un ordin nou: același, cu cantitatea goală;
+  - după reîncărcare la fel;
+  - „Închide” o poziție nu o schimbă.
+
+## TD-KEYIPS — implementează FD-KEYIPS
+- **`shared/server-ips.ts`:** `SERVER_IPS` (cele 13 adrese) și `SERVER_IPS_TEXT` (despărțite prin virgulă).
+- **`ProviderDef.ipRestrict`:** adevărat la cele nouă platforme. Pașii lor (și `tradeSteps` la KuCoin, Binance, Trading 212) trimit la listă.
+- **`AccountWizard`:** `ServerIps` sub pași:
+  - `navigator.clipboard.writeText`, altfel selecția listei;
+  - avertismentul local când `location.hostname` nu e sentiq.money / azurewebsites.net.
+- **Texte:** Setări → Conturi, Tranzacții (fără conturi), ghidul (lista și unde se pune).
+
+## TD-ETOROUNITS — implementează FD-ETOROUNITS
+- **`closePlan(held, ids, units)`** (`etoro.ts`, exportat):
+  - fără `units`: toate întregi;
+  - altfel, întregi în ordinea `ids` până la ultima, din care se scade restul (8 zecimale, toleranță 1e-9);
+  - pozițiile care nu mai sunt deținute se sar.
+- **`normalize`:**
+  - scoate refuzul „o singură poziție”;
+  - mesajul de prea multe unități spune „Pozițiile au” la mai multe;
+  - avertismentul cu împărțirea.
+- **`place`:** cu `units` și mai multe poziții, recitește portofoliul și aplică planul. `UnitsToDeduct` e `null` (întreagă) sau restul; câte o cerere pe intrare din plan (`nthRequestId`); un plan gol dă `REJECTED`.
+- **`OrderTicket`:** câmpul nu mai e dezactivat; indiciul explică ordinea, iar placeholder-ul arată totalul.
+- **Teste:** `closePlan` (ordinea, o parte, sărite, peste total, sume zecimale) și închiderea a 3 din 5 unități în două cereri (`null`, apoi 1).
+
+## TD-ETOROPICK — implementează FD-ETOROPICK
+- **`InstrumentInfo.positions?`:** `{ id, units, openRate, openedAt, pnl, invested, isBuy, leverage }[]`, doar la eToro.
+  - Vine din `EtoroTrader.portfolio`: `unrealizedPnL.pnL` (altfel `netProfit`), `amount` (investit, USD), `openDateTime`.
+  - Celelalte platforme lasă câmpul nedefinit.
+- **`OrderTicket`:**
+  - cu `seed.close` și mai multe poziții, lista vine din `ins.positions`, filtrată la `seed.close.positionIds` și ordonată după `openedAt`;
+  - `picked` (Set) e inițial cu toate;
+  - `ticketBody().close.positionIds` = cele alese, în ordinea listei, deci `closePlan` le împarte în aceeași ordine;
+  - butoanele „Toate” / „Doar profitabile” / „Niciuna” și sumarul de sub listă;
+  - butonul de verificare e dezactivat fără alegere;
+  - fără `ins.positions`: formularul de până acum.
+- **Funcții pure în `web/components/close-picker.ts`:**
+  - `closeRows(positions, ids)`: filtrare + ordine;
+  - `pickedSummary(rows, picked)`: număr, unități, profit;
+  - `profitable(rows)`: id-urile cu profit peste 0.
+- **Teste:**
+  - `close-picker` (ordinea, sumarul, profitabilele, profitul necunoscut);
+  - `EtoroTrader.instrument` cu pozițiile și profitul lor;
+  - închiderea a 2 din 3 poziții trimite doar cererile lor.
+
+## TD-ETOROROWS — implementează FD-ETOROROWS
+- **`OrderTicket`, cu `seed.close` și `ins.positions`:** `rows = closeRows(ins.positions, seed.close.positionIds)`, pentru una sau mai multe poziții.
+  - **Tabelul** (`table`, `min-w-[720px]`, în `overflow-x-auto`): un rând pe poziție, câmpul „De vândut” (`rowUnits[id]`) și „Vinde”.
+  - **„Vinde” pe un rând:** `check.mutate(body)`, cu `body = ticketBody()` + `close: { positionIds: [id], units? }` + `amount`.
+    - Cheia vine din `keyFor(body)`, un `Map` semnătură → uuid. Același rând cu aceleași unități primește aceeași cheie.
+    - `check` primește corpul ca variabilă.
+  - **Rezultatul:** „Înapoi la poziții” resetează `preview` / `result` / mutațiile, revine la `form`, reîncarcă `info` și invalidează portofoliul.
+  - **Fără „Verifică ordinul”** în acest mod; „Renunță” rămâne.
+- **Lățimea:** `Modal width` 900 cu tabelul, 600 în rest.
+- **Text în loc de câmpuri:**
+  - `ReadOnly({ label, children })` pentru cont (la închidere sau cu un singur cont eligibil), simbol, piață și direcție (la închidere), pe un rând (3 coloane la futures, 2 la acțiuni);
+  - „Reduce-only” la închidere e text („Reduce-only: da”), nu o bifă blocată.
+- **Confirmarea:** pozițiile din `preview.ticket.close.positionIds`, cu data, unitățile și prețul; profitul la vânzarea întreagă.
+- **`close-picker.ts`:**
+  - rămân `closeRows` și `pnlPct`;
+  - `pickedSummary` / `profitable` se scot (și testele lor);
+  - nou: `rowUnitsProblem(text, units)` → `null` (gol sau valid) sau motivul.
+- **Teste:**
+  - `rowUnitsProblem`;
+  - `closeRows` / `pnlPct` rămân;
+  - serverul nu se schimbă (închiderea unei poziții e acoperită).
+
+## TD-INDEXNEWS — implementează FD-INDEXNEWS
+
+### 1. Indicii și setarea (`shared/stock-indices.ts`, `shared/settings.ts`)
+- **`FILTER_INDICES`:**
+  - `SPX` (^SPX, S&P 500, SPY / VOO);
+  - `NDX` (^NDX, Nasdaq-100, QQQ);
+  - `DJI` (^DJI, Dow Jones, DIA).
+- **`stockNewsSchema`:** `{ mode: 'all' | 'indices', indices: FilterIndexId[] }`, implicit `{ mode: 'all', indices: [] }`. Cu `mode: 'indices'`, cel puțin un indice; fiecare o singură dată.
+- **Cheia personală:** `stockNews`, cu `USER_KEYS` += `stockNews`. O valoare invalidă salvată revine la implicit (salvage-ul pe cheie).
+
+### 2. Listele (`server/news/index-members.ts`, `index-members.snapshot.json`)
+- **`IndexMembers`:**
+  - `{ asOf, members: { SPX|NDX|DJI: { symbol, name, aliases }[] }, listed: string[] }`;
+  - `listed`: toate simbolurile din screener-ul Nasdaq, normalizate (`BRK/B` → `BRK.B`, fără `^`, warrants sau units).
+- **Parsere** (pure, testate pe fixture-uri):
+  - `parseNasdaq100(json)`;
+  - `parseWikiConstituents(wikitext)`: tabelul cu `id="constituents"`; simbolul din `{{NYSE link|X}}` / `{{NASDAQ link|X}}` / text, numele din `[[Link|Nume]]`; S&P 500 și Dow;
+  - `parseScreener(json)`.
+- **Validare:**
+  - NDX 95–110, SPX 490–515, DJI = 30, listed > 5.000, simboluri `/^[A-Z][A-Z0-9]{0,6}(\.[A-Z])?$/`;
+  - o listă care nu trece păstrează versiunea anterioară a ei.
+- **Aliasurile (`memberAliases`):**
+  - `cleanCompanyName` (din `market/stocks.ts`);
+  - un tabel de nume curate pentru companiile mari (Alphabet → Alphabet, Google; Meta Platforms → Meta Platforms, Meta; JPMorgan Chase → JPMorgan, JPMorgan Chase; Exxon Mobil → Exxon, ExxonMobil; Walt Disney → Disney; Procter & Gamble → Procter & Gamble, P&G; Johnson & Johnson → Johnson & Johnson, J&J; Berkshire Hathaway → Berkshire Hathaway, Berkshire; UnitedHealth Group → UnitedHealth; Advanced Micro Devices → AMD, Advanced Micro Devices; IBM; Coca-Cola; McDonald's; Home Depot; Goldman Sachs; Dow Inc. → Dow Inc. etc.);
+  - un nume dintr-un singur cuvânt care e cuvânt din dicționar (`/usr/share/dict/words`, la generarea instantaneului) nu e alias, cu excepția unei liste de mărci sigure (Apple, Amazon, Oracle, Alphabet, Meta, Google);
+  - la reîmprospătare, un membru nou primește doar numele de cel puțin două cuvinte (fără dicționar pe server); cei cunoscuți își păstrează aliasurile din instantaneu.
+- **`scripts/index-members.ts`** regenerează instantaneul (rețea + dicționar), pentru actualizările aplicației.
+
+### 3. Serviciul și job-ul
+- **`IndexMembersService`:**
+  - `get()`: datele din `job_data['index.members']`, altfel instantaneul; ținute în memorie;
+  - `refresh(now)`: citește sursele (`fetchText`, 15 s fiecare), validează, salvează și întoarce dacă s-a schimbat ceva (semnătura listelor).
+- **Job-ul `index.members`:** zilnic, cu citire efectivă doar dacă datele au peste 7 zile.
+- **După o schimbare** (inclusiv prima pornire cu marcaje: semnătura din datele job-ului `news.retag-members` ≠ semnătura listelor):
+  - `CoinRegistry.invalidate()`;
+  - job-ul `news.retag-members` re-etichetează știrile păstrate, pe zile (o zi pe tranzacție, de la cea mai recentă), doar `news_coins` (`retagCoins`: relevanța și importanța rămân), cu un cursor salvat după fiecare zi (o rulare întreruptă continuă; limită 30 min), apoi salvează semnătura și pornește recalcularea scorurilor per utilizator.
+
+### 4. Detectorul (`news/coins.ts`, `news/coin-registry.ts`)
+- **`CoinDetector`** primește `members?: { byTicker: Map<ticker, { aliases, indices }>, listed: Set<string> }` (doar detectorul de etichetare, nu și clasificatorul scorului comun).
+  - Numele membrilor se potrivesc ca numele acțiunilor din favorite (majusculă, MAJUSCULE sau Title Case).
+  - `$X` și `EXCHANGE: X` acceptă membrii și `listed`.
+  - Tickerul singur: membrii cu cel puțin 3 caractere, nu din `SYMBOL_BLACKLIST` sau `MEMBER_TICKER_BLACKLIST` (USB, PSA, REG, DOC, GEN, AMP, CAT, MAR, MET, TAP, POOL, BALL, COST, FAST, TECH, DAY, LUV, HAL, HON, HUM, KIM, LEN, LIN, MAS, MOS, TEL, TER, WAT, ROL, ROP, PEG, ARE, ALL, NOW, KEY, LOW, HAS, ICE, WELL, ON, IT).
+  - **Marcaje:** o companie găsită (membru, `listed` sau acțiune din favorite) adaugă `#CO`; un membru adaugă `#SPX` / `#NDX` / `#DJI` după apartenență.
+  - Aliasurile celor trei indici (+ „QQQ” la NDX) se adaugă mereu.
+- **Cititorii lui `news_coins`** ignoră etichetele `#…`:
+  - lista știrilor (`query.ts`), contextul Rezumatului, iconițele știrilor din scor (`daily.ts`), gruparea la import (`ingest.ts`);
+  - filtrul de favorite nu le poate atinge (favoritele nu încep cu `#`).
+
+### 5. Filtrul (`news/stock-scope.ts`)
+- **`stockScopeFor(db, settings, userId)`** → `null` (toate) sau `{ indices, allowed }`, cu `allowed = ['#SPX', '^SPX', …] ∪ acțiunile din favorite`.
+- **`stockScopeSql(scope)`** → `(n.category <> 'stocks' OR NOT EXISTS (… coin = N'#CO') OR EXISTS (… coin IN (allowed)))`, plus parametrul JSON.
+- **Unde se aplică:**
+  - `queryNews` (pagina Știri și listele de pe Azi), care întoarce și `stockScope: { indices }` pentru nota din pagină;
+  - contextul Rezumatului;
+  - `DailySentimentService.loadItems` pentru un scor per utilizator.
+
+### 6. Scorul per utilizator (`sentiment/daily.ts`)
+- **`scopeFor(userId)`:** AI propriu **sau** filtru → `userId`; altfel `null`.
+- **`loadItems` cu `scope = userId`:** scorurile AI ale lui, dacă există (`LEFT JOIN news_ai_scores`, ca acum), plus filtrul, dacă îl are.
+- **`refresh()`:** utilizatorii cu AI propriu ∪ cei cu `stockNews.mode = 'indices'` (`JSON_VALUE` pe `user_settings`).
+- **`resetUser(userId, since)`:** șterge rândurile lui din `ai_daily_sentiment` de la ziua lui `since` (începutul păstrării știrilor) încolo.
+- **Ruta de setări:** după o schimbare a lui `stockNews`, `resetUser`, apoi `refreshZone` pentru el, în fundal.
+- Tabelul păstrează numele `ai_daily_sentiment` (scorul per utilizator; nicio schimbare de schemă).
+
+### 7. Web
+- **Setări → Ale mele:** secțiunea „Știrile despre acțiuni” (radio + bife, numărul companiilor, data listelor din `GET /api/stock-indices`), salvată cu `saveSettingsPatch`.
+- **Știri:** nota „Acțiuni: doar companiile din …” când `stockScope` e prezent.
+
+### 8. Teste
+- **Parserele** (fixture-uri scurte); validarea; aliasurile (curate, dicționar, membri noi).
+- **Detectorul:** nume, `$X`, `NYSE: X`, ticker simplu ≥ 3, lista neagră, marcajele, „Dow” vs „Dow Inc.”, „Target” singur nu.
+- **Filtrul (SQL, pe schema de test):**
+  - știre generală → rămâne;
+  - companie din indice → rămâne;
+  - companie din afară → iese;
+  - favorită din afară → rămâne;
+  - indicele numit → rămâne;
+  - alte categorii → rămân;
+  - etichetele `#` nu apar în listă.
+- **Scorul:** utilizator cu filtru, scor diferit de cel comun la o zi cu știri de ambele feluri; `resetUser` + recalculare.
+- **Setarea:** schema; serverul (per utilizator, implicit `all`).
+
+## TD-BROKERSTATS — implementează FD-BROKERSTATS
+
+### 1. Adaptorii (`exchange/brokers.ts`)
+- **`BrokerAdapter.closedTrades?(from)`** → `ClosedTrades`. Opțional: un adaptor fără ea dă `supported: false`. „Reîmprospătează” ocolește cache-ul serviciului (§2); rapoartele IBKR rămân 15 minute.
+  - `ClosedTrades = { currency: string | null; trades: ClosedTrade[]; coveredFrom: number; asOf: number | null }`:
+    - `coveredFrom`: de când e complet istoricul citit (0 = tot; `+∞` = nimic sigur);
+    - `asOf`: până când are date (IBKR: închiderea zilei din raport).
+  - `ClosedTrade = { id, closedAt, pnl: number | null, net: number | null }`:
+    - `pnl === null`: rezultat necunoscut (nu se numără);
+    - `net`: în moneda contului; `null` fără curs (se numără, nu intră în sumă).
+- **eToro:**
+  - `GET /api/v1/trading/info/trade/history` (Real) sau `/api/v1/trading/info/trade/demo/history` (Demo);
+  - parametri: `minDate` = data UTC a lui `from − 1 zi`, `page` de la 1 (convenția eToro, ex. clasamentele: minim 1), `pageSize=100`, `x-request-id` nou;
+  - răspunsul: un tablou (sau `trades` / `items` dintr-un obiect, defensiv);
+  - oprire: pagină goală, o pagină fără `positionId` noi, sau 20 de pagini;
+  - `coveredFrom`: fără limită atinsă → `from`; cu limită → cel mai vechi `closeTimestamp` dacă rândurile vin descrescător, altfel `+∞`;
+  - tranzacția: `id = positionId`, `closedAt = closeTimestamp` (fără fus orar = UTC), `pnl = net = netProfit`, moneda `USD`.
+- **Trading 212:**
+  - `GET /equity/history/orders?limit=50`, apoi `nextPagePath`, cel mult 10 pagini;
+  - un rând cu `(fill.filledAt ?? order.createdAt) < from` oprește după pagina curentă;
+  - se numără `fill.type === 'TRADE'` cu `order.side === 'SELL'` (sau cantitate negativă), grupate după `order.id`:
+    - `pnl` = suma `walletImpact.realisedProfitLoss`;
+    - `closedAt` = ultima execuție;
+    - fără `realisedProfitLoss` → `pnl: null`;
+  - `currency` = `walletImpact.currency` (moneda contului); fără niciun rând → `null` (serviciul ia moneda portofoliului);
+  - `coveredFrom`: istoric terminat → 0; oprit la `from` → `from`; limita de pagini → cel mai vechi moment văzut;
+  - erorile și 429 → `get()` existent (așteaptă o dată resetul ≤ 6 s).
+- **IBKR:**
+  - `statement(force, range?)` acceptă `{ fd, td }` (`yyyymmdd`) → `SendRequest?t&q&v=3&fd&td`. Cache-ul (15 min) e pe `token|query|fd|td`;
+  - **coadă per token** (`flexChains`): un raport la un moment dat, cel puțin 1,1 s între fluxuri (IBKR: 1 cerere / s, 10 / min);
+  - `fd` = data ET a lui `from`; `td` = ultima zi lucrătoare (luni–vineri) dinaintea zilei de azi, în ET;
+  - `td < fd` (nicio zi încheiată de la `from`) → fără cerere: nicio tranzacție, `asOf` = închiderea lui `td`;
+  - cache-ul rapoartelor: la fiecare raport nou se șterg cele expirate (cheile pe perioadă se schimbă zilnic);
+  - erorile 1003–1008 → `MAINTENANCE`, „raportul Flex nu e gata încă”;
+  - parsare:
+    - fără `<Trades` → `EXCHANGE`: „bifează secțiunea Trades”;
+    - rândurile `Trade` cu `levelOfDetail` `EXECUTION` (sau fără); dacă nu sunt, cele `ORDER`; dacă există `Trade`, dar niciunul nu are `fifoPnlRealized` → `EXCHANGE`: „bifează toate câmpurile (Select All)”;
+    - `assetCategory === 'CASH'` se ignoră;
+    - închidere: `openCloseIndicator` conține `C` (dacă rândul are câmpul), altfel `fifoPnlRealized ≠ 0`;
+    - grupare după `ibOrderID` (sau `orderID`, `tradeID`, `transactionID`): `pnl` = suma lui `fifoPnlRealized`; `net` = suma lui `fifoPnlRealized × fxRateToBase` (rândul în moneda de bază → × 1; fără curs → `null`); `closedAt` = ultima execuție;
+  - `asOf` = `toDate` + 16:00 ET (ca la portofoliu); `coveredFrom` = `from`; `currency` = moneda din `AccountInformation`.
+- **Alpaca:**
+  - `GET /v2/account` (`currency`, `shorting_enabled`), apoi `GET /v2/account/activities/FILL?direction=desc&page_size=100[&page_token=<id>]`, cel mult 40 de pagini;
+  - `side`: `buy`, `sell` sau `sell_short`; o vânzare `sell_short` deschide short cu ce vinde peste acțiunile deținute, oricât de complet ar fi istoricul;
+  - `complete` = ultima pagină are sub 100 de rânduri;
+  - **`fifoResults(execs, { complete, shorting })`** (pură, exportată):
+    - execuțiile crescător, pe simbol (fără `/`), cu loturi FIFO cu semn;
+    - un `buy` acoperă întâi loturile short, apoi deschide long;
+    - un `sell` închide întâi loturile long; restul deschide short doar cu `complete && shorting`, altfel e „fără cost” (ordinul devine `pnl: null`);
+    - opțiunile (simbol OCC `^[A-Z]{1,6}\d{6}[CP]\d{8}$`) au multiplicatorul 100;
+    - rezultatul pe `order_id`, doar ordinele care au închis ceva, cu `closedAt` = ultima execuție care închide;
+  - `coveredFrom`: complet → 0, altfel cea mai veche execuție citită; `currency` = cea a contului.
+
+### 2. Serviciul (`exchange/accounts.ts`, `exchange/trade-stats.ts`)
+- **`TradeStats`** primește:
+  - `currency` (crypto `'USD'`);
+  - `asOf: number | null`;
+  - `limited: boolean`;
+  - `unknownResults: number`.
+- **`summarizeResults(results: { pnl, net }[])`**: numărarea comună; `summarizeClosed` (crypto) o folosește.
+- **`brokerClosed(id, read, now, force)`**:
+  - `closedTrades(now − 90 zile)` al adaptorului, cu `now` = ceasul statisticilor cerute (așa istoricul acoperă exact cele 90 de zile, fără să pară „limitat” cu câteva milisecunde);
+  - cache 5 min per cont și cereri simultane unite;
+  - `force` îl ocolește.
+- `invalidate(id)` (după un ordin) și `delete(id)` uită și istoricul brokerului și statisticile contului (`forgetStats`).
+- **`loadStats` pentru broker:**
+  - fără `closedTrades` → `supported: false`;
+  - altfel tranzacțiile cu `closedAt ∈ [from, to]`;
+  - `asOf !== null && asOf < from` → numerele `null`, cu `asOf` (UI-ul explică);
+  - `limited = from < coveredFrom`;
+  - `unknownResults` = câte au `pnl === null`;
+  - `currency` = cea a adaptorului, altfel a portofoliului (`portfolio(id)`, de regulă din cache);
+  - erorile → `error`, ca la crypto.
+- **`tradeStats(…, force)`** transmite `force` la `brokerTrades`.
+
+### 3. Interfața (`Trades.tsx`)
+- Selectorul de perioadă: la toate conturile. `useRefreshAccount` și `statsQ` cer statisticile la toate conturile.
+- **`BrokerCards`** (în locul panourilor de acum ale brokerilor):
+  - aceeași grilă de `Stat` ca la crypto: `xl:grid-cols-5|6|7`, după câte carduri sunt;
+  - dedesubt, eroarea și rândul „actualizat …”;
+  - `Câștig net` = `fmtMoney(net, currency)`;
+  - nota de sub card, prima care se aplică: „parțial: fără curs valutar” (`netPartial`), „parțial: istoric prea lung” (`limited`), „N fără rezultat” (`unknownResults`);
+  - titlurile pe broker (`BROKER_STATS_NOTE`);
+  - IBKR cu `asOf < from` → „—” și explicația din FD §3.
+- `CryptoCards` neschimbat, în afară de câmpurile noi (ignorate).
+
+### 4. Pașii IBKR (`shared/providers.ts`)
+- Pasul 2 adaugă: „La Trades: nivelul „Execution” și toate câmpurile („Select All”).”
+- Interfața: data raportului apare ca „până la închiderea bursei de vineri, 16 octombrie”, ziua din New York (nu ora locală a închiderii).
+
+### 4b. Reparat pe drum
+- **Trading 212, comisionul execuțiilor** (`t212Taxes`): în API-ul documentat, `walletImpact.taxes` e o listă (`{ name, quantity, currency, chargedAt }`), nu un număr. Comisionul unei execuții e acum suma valorilor absolute din listă, în moneda portofelului; un număr (răspunsurile vechi) merge ca înainte.
+- **IBKR, codurile 1001 și 1003–1008** („raportul nu e gata”) → `MAINTENANCE`, cu reîncercare la următoarea citire (înainte: o eroare generică).
+
+### 5. Teste
+- **eToro:** calea Real / Demo, `minDate`, paginarea și oprirea, deduplicarea, timpul fără fus orar, limita de pagini → `coveredFrom`.
+- **Trading 212:** doar vânzările `TRADE`, grupate pe ordin; oprirea la `from`; limita de pagini; `realisedProfitLoss` lipsă → `null`.
+- **IBKR:**
+  - `fd` / `td` în `SendRequest`; gruparea pe `ibOrderID`; „C;O”; `CASH` ignorat; `fxRateToBase`; `ORDER` când nu sunt execuții;
+  - erorile: fără Trades, fără `fifoPnlRealized`, 1006;
+  - coada: două rapoarte cerute deodată pleacă unul după altul.
+- **Alpaca:**
+  - `fifoResults`: loturi multiple, execuții parțiale, short permis / nepermis, istoric incomplet, opțiuni ×100;
+  - adaptorul: `page_token`, limita de pagini.
+- **Serviciul / API:**
+  - un cont Trading 212 simulat: numerele, moneda, perioadele din același istoric (o singură citire), `force`;
+  - IBKR „Azi” → `null` cu `asOf`;
+  - un adaptor fără `closedTrades` → `supported: false`.
+
+## TD-CHARTSTEADY — implementează FD-CHARTSTEADY
+
+### 1. Antetul (`pages/Charts.tsx`, `ChartView`)
+- Partea din stânga: `min-w-0 flex-[1_1_34rem]` (o bază fixă de 544 px, care crește și se poate strânge). Așezarea pe rânduri depinde doar de această bază și de lățimea rândului din dreapta, nu de conținut.
+- Prețul: mereu redat. Fără `candles.data` → „—” cu `text-faint` și `aria-busy`.
+- Variația crypto (`chartSec ≤ 1 zi`): insigna e mereu redată. `change24h === null` → stilul neutru (`bg-panel-2 text-faint`) cu „— 24h”; `title`: „Se încarcă…” sau „Nu sunt lumânări de acum 24 de ore”.
+- Variația la acțiuni și indici: insigna e mereu redată. Fără `stockQuote?.changePct` → neutră cu „—”; după încărcare, ca până acum.
+- **Lățimea ținută** (pe telefon, partea din stânga se rupe pe rânduri după lățimea valorilor):
+  - `useLatched(text)`: ultima valoare nenulă;
+  - `Holding`: cât se încarcă, textul simbolului de dinainte, invizibil, cu „—” gri peste el;
+  - așa se țin prețul, variația (un singur loc, comun pentru monede și acțiuni) și sursa („KuCoin”, „Nasdaq · pre-market”);
+  - după încărcare, o valoare care lipsește (eroare, fără lumânarea de acum 24 h) e un „—” simplu;
+  - textul sursei nu e niciodată gol (un spațiu neîntrerupt): un rând gol ar muta linia de bază.
+
+### 2. Legenda (`components/StudyLegend.tsx`, `pages/Charts.tsx`)
+- `StudyLegendRow`: `LegendButtons` imediat după nume și parametri, apoi `body` (valorile sau mesajul).
+- Legenda LMA (`lmaLegend`): butoanele după parametri, apoi valoarea și starea.
+
+### 3. Verificare
+- În Chrome, în ecran complet, la 1440 și 1920 px: poziția rândului cu intervalele înainte de schimbarea simbolului, în timpul încărcării și după.
+- Poziția butonului X din legendă la două poziții ale cursorului, cu valori de lungimi diferite.
+
+## TD-GOLATESTMAIN — implementează FD-GOLATESTMAIN
+- **`CandleChart`:** butonul se așază în `boxes.panes.main`, nu în cel mai de jos panou:
+  - `top = max(main.top + 4, main.top + main.height − 32 − 10)`;
+  - `left = plotWidth − 32 − 10`;
+  - fără `main` (înainte de prima măsurare), butonul nu apare.
+- **Overlay-ul panoului prețului** (caseta TP / SL) urcă (`translateY(−42px)`) oricând butonul se vede.
+- **Verificare în Chrome:**
+  - cu RSI și LMA dedesubt: butonul în panoul prețului, deasupra separatorului;
+  - fără panouri: deasupra axei timpului;
+  - caseta TP / SL ridicată;
+  - click → ultima lumânare.
+
+## TD-SCROLLLOCK — implementează FD-SCROLLLOCK
+
+### 1. `web/scroll-lock.ts`
+- **`lockScroll(): () => void`**, cu un contor global:
+  - **prima blocare:** salvează `overflow` și `padding-right` din stilul lui `<html>`, pune `overflow: hidden`, iar dacă bara de derulare are lățime (`innerWidth − clientWidth > 0`) pune `padding-right` cu acea lățime;
+  - **ultima eliberare:** pune la loc ce era;
+  - **funcția întoarsă:** eliberează o singură dată (a doua apelare nu face nimic).
+- **`useScrollLock(active = true)`:** blochează cât `active` e adevărat și componenta e montată.
+
+### 2. Unde
+- **`useScrollLock()`:** `Modal`, `AccountWizard`, `CommandPalette`, `DaySummary` (în locul lui `body.style.overflow`), `SummaryFailed` (`App.tsx`), `SettingsDrawer` (`Charts.tsx`).
+- **`useFullscreen`:** în modul `css`, `lockScroll()` în locul lui `html.style.overflow`.
+- **`overscroll-contain`** (`overscroll-behavior: contain`) pe zonele care derulează:
+  - corpul `Modal`, al asistentului, al Rezumatului;
+  - lista ⌘K;
+  - formularele din panoul lateral (`IndicatorForm`, `StudySettings`);
+  - cadrul ecranului complet;
+  - listele de căutare din Grafice și Setări.
+
+### 3. Teste și verificare
+- **`scroll-lock.test.ts`**, cu un `document` / `window` falși:
+  - contorul (două blocări, eliberări în orice ordine);
+  - lățimea barei;
+  - restaurarea valorilor de dinainte;
+  - eliberarea dublă.
+- **În Chrome** (o pagină mai înaltă decât fereastra, `scrollY` măsurat):
+  - rotița peste panoul lateral la capăt și peste fundal;
+  - rotița peste fundalul unei ferestre;
+  - panoul și ⌘K deodată;
+  - pagina pe loc la închidere.
+
+## TD-PICKERSORT — implementează FD-PICKERSORT
+- **`web/indicators/order.ts`:** `compareIndicatorNames(a, b)`, cu `Intl.Collator('ro', { sensitivity: 'base', numeric: true, ignorePunctuation: true })`.
+- **`IndicatorPicker`:** rândurile fiecărei liste (căutare, Toți, Favorite, Premium, categorii) se sortează la final cu `compareIndicatorNames` după numele afișat. Lista de favorite din setări rămâne cum e.
+- **Teste:** `order.test.ts`:
+  - majuscule și diacritice;
+  - „[DI] …” la D;
+  - „24-hour Volume” primul;
+  - 2 < 10;
+  - catalogul întreg + Premium sortat (niciun element pierdut).
+
+## TD-HLINE — implementează FD-HLINE
+
+### 1. Datele (`shared/hlines.ts`, `shared/settings.ts`, `server/settings.ts`)
+- **`hlineStyleSchema`**, stilul fără preț și text:
+  - `color`, `textColor`: `#RRGGBB` sau `#RRGGBBAA`;
+  - `width`: 1–4; `style`: `solid | dashed | dotted`; `priceLabel`;
+  - `textSize`: una din 10, 11, 12, 14, 16, 20, 24, 28, 32, 40; `bold`, `italic`;
+  - `vAlign`: `top | middle | bottom`; `hAlign`: `left | center | right`;
+  - `visibility`: `{ minutes, hours, days, weeks }`, fiecare `{ on, from, to }`. Limitele: minute 1–59, ore 1–24, zile 1–366, săptămâni 1–52; `from ≤ to`.
+- **`hlineSchema`** = stilul + `id` (`[a-z0-9]{6,24}`), `price` (număr finit), `text` (≤ 500 de caractere).
+- **`chartLinesSchema`:**
+  - `record(CHART_SYMBOL_RE, array(hline).max(50))`, cel mult 100 de simboluri;
+  - listele goale dispar la parsare, deci un simbol fără linii nu rămâne salvat.
+- **`HLINE_DEFAULT_STYLE`** (albastru `#2962FF`, 1 px, continuă, eticheta prețului, text 14 px, Mijloc / Dreapta, tot vizibil), **`HLINE_MAX = 50`**.
+- **`hlineVisibleOn(style, tf)`:**
+  - unitatea intervalului (`1m…30m` → minutes, `1h…12h` → hours, `1d` → days, `1w` → weeks);
+  - `on` și `from ≤ n ≤ to`.
+- **`salvageChartLines(stored)`:** liniile valide, una câte una, pe simbolurile valide (cel mult 100 de simboluri, 50 de linii).
+- **Setări:**
+  - cheile personale noi `chartLines` (prefault `{}`) și `hlineTemplate` (`hlineStyleSchema` sau `null`);
+  - `USER_KEYS` += ambele; salvage pe cheie (o cheie invalidă revine la implicit);
+  - un patch `{ chartLines: { 'BTC/USDT': [...] } }` înlocuiește lista simbolului (`deepMerge` unește obiectele și înlocuiește listele).
+
+### 2. Desenul (`web/chart/primitives.ts`)
+- **`HLines`** (`ISeriesPrimitive` pe seria lumânărilor): `setData(lines, { selected, precision, background })`.
+- **`paneViews`:**
+  - linia pe toată lățimea, `setLineDash` după tip; cea selectată cu +1 px;
+  - textul, cu `font` din mărime / bold / italic, rândurile din `\n`:
+    - x după `hAlign`, cu 6 px de margine;
+    - y: deasupra (`top`), centrat cu un gol în linie (`middle`) sau dedesubt (`bottom`).
+- **`priceAxisViews`:** câte o etichetă pe linie cu `priceLabel`: textul `toFixed(precision)`, fundalul = culoarea liniei, textul alb sau negru după luminozitate.
+- **`hitTest(x, y)`:** linia cea mai apropiată, la cel mult 5 px → `{ externalId: 'hline:<id>', cursorStyle: 'ns-resize', zOrder: 'top', distance, hitTestPriority: 1 }`.
+
+### 3. Graficul (`web/chart/CandleChart.tsx`)
+- **Liniile cursorului:** `vertLine` / `horzLine` `visible: true`, `style: LargeDashed`, `width: 1`, culoarea `themeColors().muted` (și la schimbarea temei).
+- **Props noi:**
+  - `hlines`: liniile vizibile acum, cu previzualizarea panoului deja aplicată;
+  - `selectedHLine`;
+  - `onAddHLine(price)`, `onMoveHLine(id, price)`, `onOpenHLine(id)`;
+  - `hlineLimit`: cele 50 sunt atinse.
+- **Butonul „+” (`HLinePlus`):**
+  - stare proprie, din `subscribeCrosshairMove`: y și prețul, doar în `boxes.panes.main`;
+  - poziția: `left = plotWidth − 26`, centrat pe y;
+  - cât mouse-ul e pe buton sau meniul e deschis, poziția rămâne;
+  - meniul: „Linie orizontală la <preț>”, cu „Alt+H”.
+- **Alt+H:** `keydown` pe `window`, `e.altKey && e.code === 'KeyH'`, cu ultima poziție a cursorului în panoul prețului → `onAddHLine`.
+- **Tragerea** (`pointerdown` în faza de captură pe gazda graficului, doar butonul principal / un deget):
+  - **pornire:** dacă y e la cel mult 5 px de o linie, în panoul prețului → `preventDefault()` (fără `mousedown`, deci fără derularea graficului) și `stopPropagation()`;
+  - **`pointermove`:** prețul = `coordinateToPrice(y)`, limitat la panou și rotunjit la `precision`; se desenează pe loc;
+  - **`pointerup`:** după ≥ 3 px de mișcare → `onMoveHLine`, altfel `onOpenHLine`;
+  - **la atingere** (`pointerType === 'touch'`): doar `onOpenHLine`, fără tragere.
+
+### 4. Pagina (`web/pages/Charts.tsx`, `web/components/HLineSettings.tsx`)
+- **Liniile simbolului:** `settings.chartLines[savedSymbol]`, filtrate cu `hlineVisibleOn(…, activeTf)`, plus previzualizarea panoului deschis (`draft` în locul liniei cu același `id`).
+- **Salvarea:**
+  - `remember({ chartLines: { [savedSymbol]: next } })` (`saveSettingsPatch`, optimist, cu revenire la eroare);
+  - adăugarea: id nou, stilul din `hlineTemplate ?? HLINE_DEFAULT_STYLE`.
+- **Panoul:** `SettingsDrawer`, cu ținta `hline:<id>`, randează `HLineSettings`:
+  - formularul complet (§4 din FD) și cele trei butoane Șablon (`hlineTemplate`);
+  - butoanele Salvează / Anulează / Șterge linia;
+  - `onDraft` pentru previzualizare;
+  - ținta dispare dacă linia nu mai e în lista simbolului (alt simbol, ștearsă în altă parte);
+  - toate salvările liniilor sunt optimiste (adăugarea, tragerea, panoul, ștergerea), așa că o schimbare făcută cât alta e pe drum pornește de la ea. Panoul verifică aceeași schemă ca serverul, iar un refuz aduce înapoi liniile serverului;
+  - un click pe linia cu panoul deschis nu schimbă nimic;
+  - linia trasă cu panoul ei deschis: formularul ia prețul nou (`line.price`).
+
+### 5. Teste
+- **`shared/hlines.test.ts`:** schema (limitele, `from ≤ to`, culorile), listele goale eliminate, `salvageChartLines`, `hlineVisibleOn` pe toate intervalele.
+- **Serverul:** `chartLines` și `hlineTemplate` sunt ale fiecărui utilizator, înlocuite pe simbol, iar o linie invalidă e eliminată la citire.
+- **În Chrome:**
+  - liniile cursorului;
+  - „+” și meniul, apoi Alt+H;
+  - linia desenată, cu eticheta;
+  - tragerea, cu prețul salvat;
+  - click → panoul; previzualizarea, Anulează, Salvează, Șterge;
+  - vizibilitatea pe alt interval;
+  - textul în cele 3 × 3 alinieri.
+
+## TD-DENAMES — implementează FD-DENAMES
+- **`shared/indicator/params.ts`:** `SLINGSHOT_TITLE` (`[DE] Slingshot System ${SLINGSHOT_VERSION}`) și `SLINGSHOT_SHORT_TITLE` (`[DE] Slingshot ${SLINGSHOT_VERSION}`).
+- **`shared/indicator/lma-params.ts`:** `LMA_TITLE` = „[DE] Logarithmic Moving Average”, `LMA_SHORT_TITLE` = „[DE] LMA”.
+- **`Charts.tsx`:**
+  - `PREMIUM.slingshot.name` și titlul panoului: `SLINGSHOT_TITLE`;
+  - legenda Slingshot: `SLINGSHOT_SHORT_TITLE`;
+  - numele butoanelor din legenda Slingshot și LMA (etichetele lor): numele scurte.
+- **`order.test.ts`:** ordinea cu numele noi.

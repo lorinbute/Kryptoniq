@@ -1,17 +1,15 @@
-// The day summary by Claude (FD-SUMMARY, TD-SUMMARY §3): reads the day's context, asks Claude for a structured
-// summary and a verdict, keeps the latest one per user and day with the chart data it was written from.
-import Anthropic from '@anthropic-ai/sdk';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
+// The day summary (FD-SUMMARY, TD-SUMMARY §3), since FD-AIKEYS by the user's own AI, with their key: reads the day's
+// context, asks for a structured summary and a verdict, keeps the latest one per user and day with the chart data it
+// was written from.
 import { z } from 'zod';
+import { AI_PROVIDER_INFO } from '../../shared/ai.ts';
 import type { Db } from '../db/database.ts';
 import type { Logger } from '../log.ts';
-import type { ClaudeUsage } from '../sentiment/usage.ts';
-import { describeError } from '../sentiment/claude.ts';
-import type { SettingsService } from '../settings.ts';
+import type { AiConfig, AiService } from '../ai/service.ts';
+import { describeAiError } from '../ai/types.ts';
 import type { DayContext, SummaryChart } from './context.ts';
 
-export const SUMMARY_MODEL = 'claude-opus-5-5';
-/** One new summary at most this often per user (each one costs a Claude request). */
+/** One new summary at most this often per user (each one costs a request on their key). */
 export const SUMMARY_COOLDOWN_MS = 2 * 60_000;
 const MAX_CHARTS = 4;
 
@@ -52,7 +50,7 @@ export interface StoredSummary {
   charts: SummaryChart[];
 }
 
-/** No Claude key (400): the summary needs Claude. */
+/** No AI key of the user's provider (400): the summary needs one. */
 export class SummaryUnavailableError extends Error {}
 /** Asked again too soon (429): `retryAt` says when. */
 export class SummaryCooldownError extends Error {
@@ -62,20 +60,18 @@ export class SummaryCooldownError extends Error {
     this.retryAt = retryAt;
   }
 }
-/** Claude did not give a usable summary (502). */
+/** The AI did not give a usable summary (502). */
 export class SummaryFailedError extends Error {}
-
-type MessagesClient = Pick<Anthropic, 'messages'>;
 
 export interface SummaryDeps {
   db: Db;
-  settings: SettingsService;
+  /** The user's provider, model and key; a client for them; what the key spent (FD-AICLARITY). */
+  ai: AiService;
   log: Logger;
   build: (userId: number, now: number) => DayContext | Promise<DayContext>;
-  clientFactory?: (apiKey: string) => MessagesClient;
-  /** What the summaries spend on the key (FD-AICLARITY). */
-  usage?: ClaudeUsage;
 }
+
+export const NO_KEY_MESSAGE = 'Rezumatul folosește cheia ta AI: pune-o în Setări → Ale mele → Inteligență artificială.';
 
 interface Row {
   day: string;
@@ -94,8 +90,9 @@ export class SummaryService {
     this.deps = deps;
   }
 
-  async hasKey(): Promise<boolean> {
-    return (await this.deps.settings.getClaudeKey()) !== null;
+  /** The user has a key of the provider they chose. */
+  async hasKey(userId: number): Promise<boolean> {
+    return (await this.deps.ai.config(userId)).key !== null;
   }
 
   /** The user's latest summary of `day`, or null. */
@@ -122,59 +119,61 @@ export class SummaryService {
     if (running) return running;
     // Registered before the first await: a second request meanwhile gets this same one.
     const p = (async () => {
-      const key = await this.deps.settings.getClaudeKey();
-      if (!key) throw new SummaryUnavailableError('Rezumatul folosește Claude: cheia se pune în Setări → Admin → Motorul de sentiment.');
+      const ai = await this.deps.ai.config(userId);
+      const key = ai.key;
+      if (!key) throw new SummaryUnavailableError(NO_KEY_MESSAGE);
       const retryAt = await this.retryAt(userId, day, now);
       if (retryAt) throw new SummaryCooldownError(retryAt);
-      return this.write(userId, key, now);
+      return this.write(userId, { ...ai, key }, now);
     })().finally(() => this.inflight.delete(userId));
     this.inflight.set(userId, p);
     return p;
   }
 
-  private async write(userId: number, apiKey: string, now: number): Promise<StoredSummary> {
+  private async write(userId: number, ai: AiConfig & { key: string }, now: number): Promise<StoredSummary> {
     let ctx: DayContext;
     try {
       ctx = await this.deps.build(userId, now);
     } catch (err) {
-      this.deps.log.warn(`summary: the day's data could not be read (${describeError(err)})`);
+      this.deps.log.warn(`summary: the day's data could not be read (${describeAiError(err)})`);
       throw new SummaryFailedError('Datele zilei nu s-au putut citi. Încearcă din nou.');
     }
-    const client = this.deps.clientFactory ? this.deps.clientFactory(apiKey) : new Anthropic({ apiKey, maxRetries: 2, timeout: 180_000 });
-    let message;
+    const product = AI_PROVIDER_INFO[ai.provider].product;
+    let answer;
     try {
-      // Streamed: the answer can take a while (adaptive thinking), and a long request is safer as a stream.
-      const stream = client.messages.stream({
-        model: SUMMARY_MODEL,
-        max_tokens: 16_000,
+      answer = await this.deps.ai.client(ai.provider, ai.key, ai.model).generate({
         system: SYSTEM,
-        messages: [{ role: 'user', content: `Datele zilei:\n\n${ctx.prompt}\n\nScrie rezumatul zilei de până acum.` }],
-        output_config: { effort: 'medium', format: zodOutputFormat(summarySchema) },
+        prompt: `Datele zilei:\n\n${ctx.prompt}\n\nScrie rezumatul zilei de până acum.`,
+        schema: summarySchema,
+        name: 'day_summary',
+        maxTokens: 24_000,
+        effort: 'medium',
+        long: true,
+        timeoutMs: 180_000,
       });
-      message = await stream.finalMessage();
     } catch (err) {
-      this.deps.log.warn(`summary: Claude failed (${describeError(err)})`);
-      throw new SummaryFailedError(`Rezumatul nu s-a putut genera: ${describeError(err)}.`);
+      this.deps.log.warn(`summary: ${ai.provider} failed (${describeAiError(err)})`);
+      throw new SummaryFailedError(`Rezumatul nu s-a putut genera: ${describeAiError(err)}.`);
     }
     // Billed whatever the answer (a refusal or a cut-off one too): counted before it is read (FD-AICLARITY).
-    if (message.usage) await this.deps.usage?.record('summary', { input: message.usage.input_tokens, output: message.usage.output_tokens });
-    if (message.stop_reason === 'refusal') throw new SummaryFailedError('Claude a refuzat să facă rezumatul. Încearcă din nou.');
-    const parsed = message.parsed_output as SummaryContent | null | undefined;
-    if (!parsed) throw new SummaryFailedError(message.stop_reason === 'max_tokens' ? 'Rezumatul a ieșit prea lung și s-a oprit. Încearcă din nou.' : 'Răspunsul lui Claude nu a putut fi citit. Încearcă din nou.');
+    if (answer.usage) await this.deps.ai.usage.record(userId, 'summary', { input: answer.usage.input, output: answer.usage.output, model: ai.model });
+    if (answer.stop === 'refusal') throw new SummaryFailedError(`${product} a refuzat să facă rezumatul. Încearcă din nou.`);
+    const parsed = answer.parsed;
+    if (!parsed) throw new SummaryFailedError(answer.stop === 'max_tokens' ? 'Rezumatul a ieșit prea lung și s-a oprit. Încearcă din nou.' : `Răspunsul lui ${product} nu a putut fi citit. Încearcă din nou.`);
     const tidied = tidy(parsed);
     // Only charts the app has data for (its own keys: never "constructor" and the like), each once, at most four.
     const seen = new Set<string>();
     const chosen = tidied.charts.filter((c) => Object.hasOwn(ctx.charts, c.id) && !seen.has(c.id) && (seen.add(c.id), true)).slice(0, MAX_CHARTS);
     const content = { ...tidied, charts: chosen };
     const charts = chosen.map((c) => ({ ...(ctx.charts[c.id] as SummaryChart), caption: c.caption }));
-    const stored: StoredSummary = { day: ctx.day, tz: ctx.tz, createdAt: Date.now(), model: SUMMARY_MODEL, content, charts };
+    const stored: StoredSummary = { day: ctx.day, tz: ctx.tz, createdAt: Date.now(), model: ai.model, content, charts };
     await this.deps.db.run(
       `UPDATE day_summaries SET tz = @tz, created_at = @at, model = @model, content = @content, charts = @charts WHERE user_id = @u AND day = @day;
        IF @@ROWCOUNT = 0 INSERT INTO day_summaries(user_id, day, tz, created_at, model, content, charts) VALUES (@u, @day, @tz, @at, @model, @content, @charts)`,
       { u: userId, day: stored.day, tz: stored.tz, at: stored.createdAt, model: stored.model, content: JSON.stringify(stored.content), charts: JSON.stringify(stored.charts) },
     );
     // The tokens say what it cost (research §12).
-    const usage = message.usage ? `, ${message.usage.input_tokens} in / ${message.usage.output_tokens} out tokens` : '';
+    const usage = answer.usage ? `, ${answer.usage.input} in / ${answer.usage.output} out tokens` : '';
     this.deps.log.info(`summary: day summary written for user ${userId} (${content.verdict}, ${charts.length} charts${usage})`);
     return stored;
   }

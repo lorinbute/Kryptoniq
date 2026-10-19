@@ -13,6 +13,9 @@ import { useIsAdmin } from '../auth.ts';
 import { ErrorNote, Loading, Panel } from '../components/ui.tsx';
 import { CoinLogo } from '../components/icons.tsx';
 import { AccountWizard } from '../components/AccountWizard.tsx';
+import { AiSection } from '../components/AiSettings.tsx';
+import { StockDataSection } from '../components/StockDataSettings.tsx';
+import { StockNewsSection } from '../components/StockNewsSettings.tsx';
 import { FavoritesDnd, SortableFavorite } from '../components/SortableFavorites.tsx';
 import { ProviderLogo } from '../components/ProviderLogo.tsx';
 import { SettingsTabs } from '../components/SettingsTabs.tsx';
@@ -193,7 +196,7 @@ function WatchlistSection() {
             className="h-full w-full"
           />
           {term && (hits || searching.isError) && (
-            <ul className="absolute z-30 mt-1 max-h-72 w-full overflow-auto rounded-md border border-line bg-panel-2 py-1 shadow-pop">
+            <ul className="absolute z-30 mt-1 max-h-72 w-full overflow-auto overscroll-contain rounded-md border border-line bg-panel-2 py-1 shadow-pop">
               {searching.isError && <li className="px-3 py-1.5 text-[13px] text-bear">{errorMessage(searching.error)}</li>}
               {hits?.length === 0 && <li className="px-3 py-1.5 text-[13px] text-faint">{kind === 'crypto' ? 'Nicio pereche cu acest simbol' : 'Nicio acțiune din SUA cu acest nume'}</li>}
               {hits?.map((h) => (
@@ -330,7 +333,8 @@ function AccountsSection() {
     >
       <div id="accounts" className="flex flex-col gap-3 text-[13px]">
         <p className="max-w-[75ch] text-muted">
-          Exchange-uri crypto și brokeri de acțiuni, cu chei doar pentru citire. Cheile se salvează criptat în baza Sentiq și nu mai sunt afișate după salvare.
+          Exchange-uri crypto și brokeri de acțiuni. Cheia trebuie să poată citi; ca să tranzacționezi din Sentiq, și să tranzacționeze, dar niciodată să retragă sau să transfere
+          fonduri. Restricționează cheile la IP-urile serverului Sentiq (lista e în pașii fiecărei platforme). Tranzacționarea se pornește pe cont, din Tranzacții. Cheile se salvează criptat în baza Sentiq și nu mai sunt afișate după salvare.
         </p>
         {accounts.isError && <ErrorNote error={accounts.error} onRetry={() => accounts.refetch()} />}
         {accounts.data && list.length === 0 && <p className="text-faint">Niciun cont conectat încă.</p>}
@@ -349,7 +353,12 @@ function AccountsSection() {
               </span>
               <span className="num text-faint">{a.keyHint}</span>
               {a.lastError ? <span className="text-bear">{a.lastError}</span> : a.lastOkAt ? <span className="text-bull">conectat {fmtAgo(a.lastOkAt)}</span> : null}
-              {a.permissionWarning && <span className="text-warn">permisiuni în plus față de citire: {a.permissions}</span>}
+              {a.fundsRisk ? (
+                <span className="text-bear">cheia poate retrage / transfera fonduri: {a.permissions}</span>
+              ) : (
+                a.permissionWarning && <span className={a.trading.enabled ? 'text-muted' : 'text-warn'}>permisiuni în plus față de citire: {a.permissions}</span>
+              )}
+              {a.trading.enabled && <span className="text-bull">tranzacționare pornită</span>}
               <span className="ml-auto flex gap-2">
                 <button className="btn" onClick={() => test.mutate(a.id)} disabled={test.isPending}>
                   Testează
@@ -404,7 +413,7 @@ export default function SettingsPage() {
   return (
     <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-3.5">
       <h1 className="page-title">Setări</h1>
-      {/* FD-ADMINSET: everyone's settings (sources, sentiment, keys, retention, mail) are on the admin's own tab. */}
+      {/* FD-ADMINSET: everyone's settings (sources, the common sentiment, market data, retention, mail) are on the admin's own tab. */}
       {admin && <SettingsTabs />}
       {!settings.data && !settings.isError ? (
         <Loading />
@@ -414,6 +423,9 @@ export default function SettingsPage() {
         <>
           <WatchlistSection />
           <AccountsSection />
+          <StockDataSection s={settings.data} />
+          <AiSection s={settings.data} />
+          <StockNewsSection s={settings.data} />
           <GeneralSection s={settings.data} />
         </>
       )}

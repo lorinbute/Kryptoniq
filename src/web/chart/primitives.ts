@@ -1,8 +1,22 @@
 // Custom lightweight-charts primitives: the EMA cloud fill, horizontal segments (TP/SL, market structure) and the
 // LMA gradient fill and state label (TD-CHARTUX §3).
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
-import type { IChartApi, IPrimitivePaneRenderer, IPrimitivePaneView, ISeriesApi, ISeriesPrimitive, Logical, SeriesAttachedParameter, SeriesType, Time, UTCTimestamp } from 'lightweight-charts';
+import type {
+  IChartApi,
+  IPrimitivePaneRenderer,
+  IPrimitivePaneView,
+  ISeriesApi,
+  ISeriesPrimitive,
+  ISeriesPrimitiveAxisView,
+  Logical,
+  PrimitiveHoveredItem,
+  SeriesAttachedParameter,
+  SeriesType,
+  Time,
+  UTCTimestamp,
+} from 'lightweight-charts';
 import { colorNew, rgbaCss, type Rgba } from '../../shared/indicator/lma.ts';
+import type { HLine } from '../../shared/hlines.ts';
 
 interface Attached {
   chart: IChartApi;
@@ -542,5 +556,181 @@ export class ShapeLabels implements ISeriesPrimitive<Time> {
   }
   paneViews(): readonly IPrimitivePaneView[] {
     return this.views;
+  }
+}
+
+// ---------------- FD-HLINE: the horizontal lines the user draws ----------------
+
+/** How near (CSS px) the pointer must be to a line to catch it. */
+export const HLINE_CATCH_PX = 5;
+
+/** White or black, whichever reads better on a colour (#RRGGBB[AA]). */
+function contrastOn(color: string): string {
+  const h = color.replace('#', '');
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) || 0) as [number, number, number];
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? '#0b0e14' : '#ffffff';
+}
+
+/** The colour without its transparency (the axis label is always solid). */
+const solid = (color: string) => color.slice(0, 7);
+
+const DASH: Record<HLine['style'], (hr: number) => number[]> = { solid: () => [], dashed: (hr) => [6 * hr, 4 * hr], dotted: (hr) => [1.5 * hr, 3 * hr] };
+
+class HLinesRenderer implements IPrimitivePaneRenderer {
+  private readonly items: { y: number; line: HLine; selected: boolean }[];
+  constructor(items: { y: number; line: HLine; selected: boolean }[]) {
+    this.items = items;
+  }
+  draw(target: CanvasRenderingTarget2D): void {
+    target.useBitmapCoordinateSpace(({ context: ctx, horizontalPixelRatio: hr, verticalPixelRatio: vr, bitmapSize }) => {
+      for (const { y: cssY, line: l, selected } of this.items) {
+        const width = Math.max(1, Math.round((l.width + (selected ? 1 : 0)) * hr));
+        const y = Math.round(cssY * vr) + (width % 2 ? 0.5 : 0);
+        ctx.save();
+        // The text first measured: "Mijloc" leaves a gap in the line for it.
+        const rows = l.text ? l.text.split('\n') : [];
+        let text: { x: number; top: number; lh: number; font: string } | null = null;
+        let gap: [number, number] | null = null;
+        if (rows.length) {
+          const fs = l.textSize * vr;
+          const font = `${l.italic ? 'italic ' : ''}${l.bold ? 700 : 400} ${fs}px "Geist Variable", system-ui, sans-serif`;
+          ctx.font = font;
+          const tw = Math.max(...rows.map((r) => ctx.measureText(r).width));
+          const lh = fs * 1.25;
+          const th = rows.length * lh;
+          const pad = 8 * hr;
+          const x = l.hAlign === 'left' ? pad : l.hAlign === 'center' ? (bitmapSize.width - tw) / 2 : bitmapSize.width - tw - pad;
+          const top = l.vAlign === 'top' ? y - width / 2 - 3 * vr - th : l.vAlign === 'bottom' ? y + width / 2 + 3 * vr : y - th / 2;
+          if (l.vAlign === 'middle') gap = [x - 5 * hr, x + tw + 5 * hr];
+          text = { x, top, lh, font };
+        }
+        ctx.strokeStyle = l.color;
+        ctx.lineWidth = width;
+        ctx.setLineDash(DASH[l.style](hr));
+        ctx.beginPath();
+        if (gap) {
+          ctx.moveTo(0, y);
+          ctx.lineTo(Math.max(0, gap[0]), y);
+          ctx.moveTo(Math.min(bitmapSize.width, gap[1]), y);
+          ctx.lineTo(bitmapSize.width, y);
+        } else {
+          ctx.moveTo(0, y);
+          ctx.lineTo(bitmapSize.width, y);
+        }
+        ctx.stroke();
+        if (text) {
+          ctx.setLineDash([]);
+          ctx.font = text.font;
+          ctx.fillStyle = l.textColor;
+          ctx.textBaseline = 'middle';
+          rows.forEach((r, i) => ctx.fillText(r, text.x, text.top + text.lh * (i + 0.5)));
+        }
+        ctx.restore();
+      }
+    });
+  }
+}
+
+class HLinesView implements IPrimitivePaneView {
+  private readonly source: HLines;
+  private items: { y: number; line: HLine; selected: boolean }[] = [];
+  constructor(source: HLines) {
+    this.source = source;
+  }
+  zOrder() {
+    return 'top' as const;
+  }
+  update(): void {
+    const a = this.source.attachedTo;
+    this.items = [];
+    if (!a) return;
+    for (const line of this.source.lines) {
+      const y = a.series.priceToCoordinate(line.price);
+      if (y !== null) this.items.push({ y, line, selected: line.id === this.source.selected });
+    }
+  }
+  renderer(): IPrimitivePaneRenderer {
+    return new HLinesRenderer(this.items);
+  }
+}
+
+class HLineAxisView implements ISeriesPrimitiveAxisView {
+  private readonly source: HLines;
+  private readonly line: HLine;
+  private y: number | null = null;
+  constructor(source: HLines, line: HLine) {
+    this.source = source;
+    this.line = line;
+  }
+  update(): void {
+    this.y = this.source.attachedTo?.series.priceToCoordinate(this.line.price) ?? null;
+  }
+  coordinate(): number {
+    return this.y ?? -1000;
+  }
+  text(): string {
+    return this.line.price.toFixed(this.source.precision);
+  }
+  textColor(): string {
+    return contrastOn(this.line.color);
+  }
+  backColor(): string {
+    return solid(this.line.color);
+  }
+  visible(): boolean {
+    // Out of the price pane: no label (the line is not drawn there either).
+    const h = this.source.attachedTo?.chart.panes()[0]?.getHeight() ?? 0;
+    return this.y !== null && this.y >= 0 && this.y <= h;
+  }
+}
+
+/** The lines on the price pane: drawn full width with their text, a label on the price axis, caught by the pointer. */
+export class HLines implements ISeriesPrimitive<Time> {
+  attachedTo: Attached | null = null;
+  lines: HLine[] = [];
+  selected: string | null = null;
+  precision = 2;
+  private readonly views: HLinesView[] = [new HLinesView(this)];
+  private axisViews: HLineAxisView[] = [];
+
+  attached(p: SeriesAttachedParameter<Time>): void {
+    this.attachedTo = { chart: p.chart as IChartApi, series: p.series as ISeriesApi<SeriesType>, requestUpdate: p.requestUpdate };
+  }
+  detached(): void {
+    this.attachedTo = null;
+  }
+  setData(lines: HLine[], selected: string | null, precision: number): void {
+    this.lines = lines;
+    this.selected = selected;
+    this.precision = precision;
+    this.axisViews = lines.filter((l) => l.priceLabel).map((l) => new HLineAxisView(this, l));
+    this.attachedTo?.requestUpdate();
+  }
+  updateAllViews(): void {
+    for (const v of this.views) v.update();
+    for (const v of this.axisViews) v.update();
+  }
+  paneViews(): readonly IPrimitivePaneView[] {
+    return this.views;
+  }
+  priceAxisViews(): readonly ISeriesPrimitiveAxisView[] {
+    return this.axisViews;
+  }
+  /** The line nearest to `y` (CSS px from the price pane's top), within reach; null when none. */
+  lineAt(y: number): { id: string; distance: number } | null {
+    const a = this.attachedTo;
+    if (!a) return null;
+    let best: { id: string; distance: number } | null = null;
+    for (const l of this.lines) {
+      const ly = a.series.priceToCoordinate(l.price);
+      if (ly === null) continue;
+      const distance = Math.abs(ly - y);
+      if (distance <= HLINE_CATCH_PX && (!best || distance < best.distance)) best = { id: l.id, distance };
+    }
+    return best;
+  }
+  hitTest(_x: number, y: number): PrimitiveHoveredItem | null {
+    const hit = this.lineAt(y);
+    return hit ? { externalId: `hline:${hit.id}`, cursorStyle: 'ns-resize', zOrder: 'top', distance: hit.distance, hitTestPriority: 1, itemType: 'primitive' } : null;
   }
 }

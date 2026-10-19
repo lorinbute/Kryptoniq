@@ -2,8 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SettingsView } from '../shared/settings.ts';
-import type { CalendarResponse, MarketSourceInfo, StocksInfo, WatchItem } from '../shared/api-types.ts';
+import type { AccountInfo, CalendarResponse, MarketSourceInfo, StocksInfo, WatchItem } from '../shared/api-types.ts';
 import { api, qs } from './api.ts';
+
+/** The signed-in user's own account (Security; the passkeys the trading switch can confirm with, FD-TRADEUNLOCK). */
+export const ACCOUNT_KEY = ['account'] as const;
+export function useAccountInfo(enabled = true) {
+  return useQuery({ queryKey: ACCOUNT_KEY, queryFn: () => api.get<AccountInfo>('/api/account'), enabled });
+}
 
 export function useSettings() {
   return useQuery({ queryKey: ['settings'], queryFn: () => api.get<SettingsView>('/api/settings'), staleTime: 60_000 });

@@ -1,24 +1,20 @@
-// The signed-in user's own security (FD-USERS §7): name, password, two-factor with recovery codes, passkeys and signing
-// out everywhere.
+// The signed-in user's own security (FD-USERS §7): name, password, two-factor with recovery codes (required since
+// FD-2FA: it can be moved to a new phone, never turned off), passkeys and signing out everywhere.
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { browserSupportsWebAuthn, startRegistration } from '@simplewebauthn/browser';
-import { Copy, Download, Fingerprint, KeyRound, LogOut, Pencil, ShieldCheck, Trash2, UserRound } from 'lucide-react';
+import { Fingerprint, KeyRound, LogOut, Pencil, ShieldCheck, Trash2, UserRound } from 'lucide-react';
 import type { AccountInfo, PasskeySummary, PublicUser, TwoFactorView } from '../../shared/api-types.ts';
-import { api, errorMessage } from '../api.ts';
+import { api, ApiError, errorMessage } from '../api.ts';
 import { AUTH_KEY, landAfterSignOut, useAuthChange } from '../auth.ts';
 import { fmtAgo, fmtDateTime } from '../format.ts';
-import { useTz } from '../hooks.ts';
+import { ACCOUNT_KEY, useAccountInfo, useTz } from '../hooks.ts';
 import { ErrorNote, Loading, Panel, Warning } from '../components/ui.tsx';
-import { passkeyMessage } from './Auth.tsx';
-import { copyText } from '../clipboard.ts';
+import { RecoveryCodes } from '../components/RecoveryCodes.tsx';
+import { TotpManualKey, TotpQrImage } from '../components/TotpQr.tsx';
+import { passkeyMessage } from '../passkey.ts';
 
-const ACCOUNT_KEY = ['account'] as const;
-
-function useAccount() {
-  return useQuery({ queryKey: ACCOUNT_KEY, queryFn: () => api.get<AccountInfo>('/api/account') });
-}
 
 /** After a change: the account page and the user in the auth state (menu, counts) read again. */
 function useRefreshAccount() {
@@ -120,53 +116,8 @@ function PasswordSection({ email }: { email: string | null }) {
 }
 
 
-/** The ten codes, shown once: copy, download, and say they are kept. */
-function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void }) {
-  const [copied, setCopied] = useState<boolean | null>(null);
-  const [kept, setKept] = useState(false);
-  const text = `Sentiq — coduri de recuperare (fiecare merge o singură dată)\n\n${codes.join('\n')}\n`;
-  const download = () => {
-    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'sentiq-coduri-recuperare.txt';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-  return (
-    <div className="flex flex-col gap-3 rounded-[14px] border border-accent-dim bg-accent/[0.05] p-4">
-      <p className="text-[13.5px]">
-        <strong>Păstrează aceste coduri într-un loc sigur.</strong> Fiecare îți deschide contul o singură dată dacă nu ai telefonul la tine. Nu le vei mai vedea.
-      </p>
-      <ol className="num grid grid-cols-2 gap-x-6 gap-y-1.5 text-[15px] tracking-[0.04em] sm:w-fit">
-        {codes.map((c) => (
-          <li key={c}>{c}</li>
-        ))}
-      </ol>
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className="btn" onClick={() => void copyText(text).then(setCopied)}>
-          <Copy size={14} aria-hidden />
-          {copied ? 'Copiate' : 'Copiază'}
-        </button>
-        <button type="button" className="btn" onClick={download}>
-          <Download size={14} aria-hidden />
-          Descarcă .txt
-        </button>
-        <label className="ml-1 inline-flex items-center gap-2 text-[13px]">
-          <input type="checkbox" checked={kept} onChange={(e) => setKept(e.target.checked)} />
-          Le-am salvat
-        </label>
-        <button type="button" className="btn btn-primary" disabled={!kept} onClick={onDone}>
-          Gata
-        </button>
-      </div>
-      {copied === false && <Msg tone="error">Browserul nu a permis copierea; folosește „Descarcă .txt” sau notează-le.</Msg>}
-    </div>
-  );
-}
-
-/** Password + a code: what turning 2FA off or renewing the codes asks for (FD-USERS §7). */
-function ConfirmWithCode({ action, danger, onSubmit, busy, error, onCancel }: { action: string; danger?: boolean; onSubmit: (password: string, code: string) => void; busy: boolean; error: unknown; onCancel: () => void }) {
+/** Password + a code: what changing the authenticator or renewing the codes asks for (FD-USERS §7, FD-2FA §3). */
+function ConfirmWithCode({ action, onSubmit, busy, error, onCancel }: { action: string; onSubmit: (password: string, code: string) => void; busy: boolean; error: unknown; onCancel: () => void }) {
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   return (
@@ -185,7 +136,7 @@ function ConfirmWithCode({ action, danger, onSubmit, busy, error, onCancel }: { 
         <span className="text-faint">Cod din aplicație sau de recuperare</span>
         <input value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" required maxLength={20} spellCheck={false} className="w-52 max-w-full" />
       </label>
-      <button className={danger ? 'btn btn-danger' : 'btn'} disabled={busy}>
+      <button className="btn" disabled={busy}>
         {action}
       </button>
       <button type="button" className="btn" onClick={onCancel}>
@@ -202,25 +153,38 @@ function TwoFactorSection({ tf }: { tf: TwoFactorView }) {
   const tz = useTz();
   const [code, setCode] = useState('');
   const [codes, setCodes] = useState<string[] | null>(null);
-  const [mode, setMode] = useState<'none' | 'disable' | 'renew'>('none');
+  const [mode, setMode] = useState<'none' | 'replace' | 'renew'>('none');
   const setView = (v: TwoFactorView) => qc.setQueryData<AccountInfo>(ACCOUNT_KEY, (a) => (a ? { ...a, twoFactor: v } : a));
-  const start = useMutation({ mutationFn: (restart: boolean) => api.post<TwoFactorView>('/api/account/2fa/start', { restart }), onSuccess: setView });
-  const cancel = useMutation({ mutationFn: () => api.post<TwoFactorView>('/api/account/2fa/cancel'), onSuccess: setView });
-  const enable = useMutation({
-    mutationFn: () => api.post<{ codes: string[]; twoFactor: TwoFactorView }>('/api/account/2fa/enable', { code }),
-    onSuccess: (r) => {
+  // FD-2FA §3: a new phone. The old app works until the new one's first code is confirmed.
+  const replace = useMutation({
+    mutationFn: (b: { password: string; code: string }) => api.post<TwoFactorView>('/api/account/2fa/replace', b),
+    onSuccess: (v) => {
+      setMode('none');
+      // A new change starts clean: no code typed or error left from an earlier one.
       setCode('');
-      setCodes(r.codes);
-      setView(r.twoFactor);
+      confirm.reset();
+      setView(v);
       refresh();
     },
   });
-  const disable = useMutation({
-    mutationFn: (b: { password: string; code: string }) => api.post<TwoFactorView>('/api/account/2fa/disable', b),
+  const confirm = useMutation({
+    mutationFn: () => api.post<TwoFactorView>('/api/account/2fa/replace/confirm', { code }),
     onSuccess: (v) => {
-      setMode('none');
+      setCode('');
       setView(v);
       refresh();
+    },
+    // Finished or abandoned in another tab: the state of now.
+    onError: (err) => {
+      if (err instanceof ApiError && err.code === 'NO_REPLACEMENT') refresh();
+    },
+  });
+  const cancel = useMutation({
+    mutationFn: () => api.post<TwoFactorView>('/api/account/2fa/replace/cancel'),
+    onSuccess: (v) => {
+      setCode('');
+      confirm.reset();
+      setView(v);
     },
   });
   const renew = useMutation({
@@ -236,13 +200,49 @@ function TwoFactorSection({ tf }: { tf: TwoFactorView }) {
   let body: ReactNode;
   if (codes) {
     body = <RecoveryCodes codes={codes} onDone={() => setCodes(null)} />;
+  } else if (tf.replacing && tf.qr) {
+    body = (
+      <div className="flex flex-col gap-4 text-[13.5px] md:flex-row md:items-start">
+        <TotpQrImage qr={tf.qr} />
+        <div className="flex min-w-0 flex-col gap-3">
+          <ol className="flex list-decimal flex-col gap-1.5 pl-5">
+            <li>Deschide aplicația de autentificare pe telefonul nou.</li>
+            <li>Scanează codul QR.</li>
+            <li>Scrie mai jos codul de 6 cifre pe care îl arată aplicația nouă.</li>
+          </ol>
+          <TotpManualKey secret={tf.secret} />
+          <p className="text-faint">Până confirmi, aplicația de acum merge în continuare; „Renunță” o păstrează.</p>
+          <form
+            className="flex flex-wrap items-end gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              confirm.mutate();
+            }}
+          >
+            <label className="flex flex-col gap-1">
+              <span className="text-faint">Codul din aplicația nouă</span>
+              <input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" maxLength={8} required className="num w-36 tracking-[0.2em]" />
+            </label>
+            <button className="btn btn-primary" disabled={confirm.isPending}>
+              Confirmă
+            </button>
+            <button type="button" className="btn" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
+              Renunță
+            </button>
+          </form>
+          {(confirm.error || cancel.error) && <Msg tone="error">{errorMessage(confirm.error ?? cancel.error)}</Msg>}
+        </div>
+      </div>
+    );
   } else if (tf.enabled) {
     body = (
       <div className="flex flex-col gap-3 text-[13.5px]">
         <p>
           <span className="text-bull">Activă</span>
-          {tf.confirmedAt ? ` din ${fmtDateTime(tf.confirmedAt, tz)}` : ''}. La intrare, după parolă, îți cerem codul din aplicația de autentificare.
+          {tf.confirmedAt ? ` din ${fmtDateTime(tf.confirmedAt, tz)}` : ''}. La intrare, după parolă, îți cerem codul din aplicația de autentificare. E obligatorie pentru toate
+          conturile, deci nu se poate opri; pentru un telefon nou, schimbă aplicația.
         </p>
+        {confirm.isSuccess && <Msg>Aplicația nouă e activă; cea veche nu mai merge.</Msg>}
         {tf.recoveryCodesLeft <= 3 ? (
           <Warning>
             Mai ai {tf.recoveryCodesLeft === 1 ? 'un singur cod' : `${tf.recoveryCodesLeft} coduri`} de recuperare. Generează altele noi cât ai acces la aplicație.
@@ -252,80 +252,32 @@ function TwoFactorSection({ tf }: { tf: TwoFactorView }) {
         )}
         {mode === 'none' && (
           <div className="flex flex-wrap gap-2">
+            <button className="btn" onClick={() => setMode('replace')}>
+              Schimbă aplicația de autentificare
+            </button>
             <button className="btn" onClick={() => setMode('renew')}>
               Coduri de recuperare noi
             </button>
-            <button className="btn btn-danger" onClick={() => setMode('disable')}>
-              Dezactivează
-            </button>
           </div>
+        )}
+        {mode === 'replace' && (
+          <ConfirmWithCode
+            action="Continuă"
+            busy={replace.isPending}
+            error={replace.error}
+            onCancel={() => setMode('none')}
+            onSubmit={(password, c) => replace.mutate({ password, code: c })}
+          />
         )}
         {mode === 'renew' && (
           <ConfirmWithCode action="Generează coduri noi" busy={renew.isPending} error={renew.error} onCancel={() => setMode('none')} onSubmit={(password, c) => renew.mutate({ password, code: c })} />
         )}
-        {mode === 'disable' && (
-          <ConfirmWithCode
-            action="Dezactivează"
-            danger
-            busy={disable.isPending}
-            error={disable.error}
-            onCancel={() => setMode('none')}
-            onSubmit={(password, c) => disable.mutate({ password, code: c })}
-          />
-        )}
-      </div>
-    );
-  } else if (tf.pending && tf.qr) {
-    body = (
-      <div className="flex flex-col gap-4 text-[13.5px] md:flex-row md:items-start">
-        {/* Black on white with a quiet zone: what phone cameras read best, also on a dark page. */}
-        <img src={tf.qr} alt="Cod QR pentru aplicația de autentificare" width={220} height={220} className="size-[220px] shrink-0 rounded-[10px] bg-white" />
-        <div className="flex min-w-0 flex-col gap-3">
-          <ol className="flex list-decimal flex-col gap-1.5 pl-5">
-            <li>Deschide aplicația de autentificare (Google Authenticator, Microsoft Authenticator, 1Password, Authy…).</li>
-            <li>Scanează codul QR.</li>
-            <li>Scrie mai jos codul de 6 cifre pe care îl arată.</li>
-          </ol>
-          <p className="text-muted">
-            Nu poți scana? Introdu cheia de mână: <span className="num break-all text-text select-all">{tf.secret}</span>
-          </p>
-          <form
-            className="flex flex-wrap items-end gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              enable.mutate();
-            }}
-          >
-            <label className="flex flex-col gap-1">
-              <span className="text-faint">Codul de 6 cifre</span>
-              <input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" maxLength={8} required className="num w-36 tracking-[0.2em]" />
-            </label>
-            <button className="btn btn-primary" disabled={enable.isPending}>
-              Activează
-            </button>
-            <button type="button" className="btn" onClick={() => start.mutate(true)} disabled={start.isPending}>
-              Cheie nouă
-            </button>
-            <button type="button" className="btn" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
-              Renunță
-            </button>
-          </form>
-          {(enable.error || start.error || cancel.error) && <Msg tone="error">{errorMessage(enable.error ?? start.error ?? cancel.error)}</Msg>}
-        </div>
       </div>
     );
   } else {
-    body = (
-      <div className="flex flex-col items-start gap-3 text-[13.5px]">
-        <p className="max-w-[70ch] text-muted">
-          Pe lângă parolă, la intrare îți cerem un cod de 6 cifre dintr-o aplicație de pe telefon. Cineva care îți află parola tot nu poate intra.
-        </p>
-        <button className="btn btn-primary" onClick={() => start.mutate(false)} disabled={start.isPending}>
-          Activează autentificarea în doi pași
-        </button>
-        {start.error && <Msg tone="error">{errorMessage(start.error)}</Msg>}
-      </div>
-    );
+    // Not reachable from the app (an account without two-factor sees only its setup, FD-2FA); a page left open while
+    // the admin reset it closes with the session.
+    body = <p className="text-[13.5px] text-muted">Autentificarea în doi pași nu e configurată. Reîncarcă pagina ca s-o configurezi.</p>;
   }
   return (
     <Panel title="Autentificare în doi pași" icon={ShieldCheck}>
@@ -392,7 +344,7 @@ function PasskeyRow({ p, tz }: { p: PasskeySummary; tz: string }) {
           aria-label={`Șterge ${p.name}`}
           disabled={remove.isPending}
           onClick={() => {
-            if (window.confirm(`Ștergi passkey-ul „${p.name}”? Vei intra cu parola (și codul, dacă ai 2FA).`)) remove.mutate();
+            if (window.confirm(`Ștergi passkey-ul „${p.name}”? Vei intra cu parola și codul din aplicația de autentificare.`)) remove.mutate();
           }}
         >
           <Trash2 size={14} aria-hidden />
@@ -510,7 +462,7 @@ function SessionsSection() {
 }
 
 export default function SecurityPage() {
-  const account = useAccount();
+  const account = useAccountInfo();
   const [params] = useSearchParams();
   if (account.isPending) return <Loading />;
   if (!account.data) return <ErrorNote error={account.error} onRetry={() => void account.refetch()} />;
@@ -520,12 +472,9 @@ export default function SecurityPage() {
       <h1 className="page-title">Securitate</h1>
       {params.get('recovery') === '1' && (
         <Warning>
-          Ai intrat cu un cod de recuperare; mai ai {a.twoFactor.recoveryCodesLeft}. Dacă ți-ai pierdut telefonul, dezactivează autentificarea în doi pași și activeaz-o din nou pe
-          telefonul nou, sau generează coduri noi.
+          Ai intrat cu un cod de recuperare; mai ai {a.twoFactor.recoveryCodesLeft}. Dacă ți-ai pierdut telefonul, schimbă aplicația de autentificare (cu parola și un cod de
+          recuperare) sau generează coduri noi.
         </Warning>
-      )}
-      {params.get('welcome') === '1' && !a.twoFactor.enabled && (
-        <Warning>Contul de admin e gata. Activează autentificarea în doi pași: contul tău vede cheile și setările tuturor.</Warning>
       )}
       <ProfileSection user={a.user} />
       <PasswordSection email={a.user.email} />

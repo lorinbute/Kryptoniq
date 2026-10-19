@@ -1,5 +1,5 @@
 // Exchanges and brokers an account can be connected to (FD-SENTIQ §2, TD-SENTIQ §3): what each one asks for,
-// how to create a read-only key there, and what Sentiq reads. Only platforms with an API are listed (FD-NOAPI).
+// how to create a read-only key there, and what Sentiq reads (trading: shared/trading.ts, FD-TRADING). Only platforms with an API are listed (FD-NOAPI).
 // Shared by the server (validation) and the wizard.
 import { z } from 'zod';
 
@@ -43,11 +43,13 @@ export interface ProviderDef {
   fields: ProviderField[];
   /** Live / demo / paper; the first one is the default. */
   envs?: ProviderEnv[];
-  /** How to create a read-only key, step by step. */
+  /** How to create the key, step by step: reading, and trading from Sentiq if wanted, never withdrawals (FD-KEYTEXT). */
   steps: string[];
   keysUrl?: string;
   /** What Sentiq reads from it. */
   reads: string;
+  /** The key can be restricted to IP addresses (FD-KEYIPS): the wizard shows Sentiq's server addresses. */
+  ipRestrict?: boolean;
   /** Under /provider-logos/ (an initials badge when missing). */
   logo?: string;
 }
@@ -60,13 +62,14 @@ const READ_CRYPTO = 'solduri, poziții futures, ordine deschise și tranzacții 
 export const PROVIDERS: ProviderDef[] = [
   {
     id: 'kucoin',
+    ipRestrict: true,
     name: 'KuCoin',
     kind: 'crypto',
     fields: [KEY, SECRET, PASSPHRASE],
     steps: [
       'Pe KuCoin: Profil → API Management → Create API (tipul „API Trading”).',
-      'Bifează doar permisiunea „General” (citire). Nu bifa Spot, Margin, Futures, Transfer sau Withdrawal.',
-      'Alege un passphrase și notează-l. Opțional, restricționează cheia la IP-ul tău.',
+      'Bifează „General” (citire). Ca să tranzacționezi din Sentiq, bifează și „Spot” și / sau „Futures”. Nu bifa niciodată Transfer sau Withdrawal (Sentiq refuză cheile care le permit); Margin nu e folosit.',
+      'Alege un passphrase și notează-l. Restricționează cheia la IP-urile serverului Sentiq (lista de mai jos).',
       'Copiază API Key, Secret și passphrase-ul.',
     ],
     keysUrl: 'https://www.kucoin.com/account/api',
@@ -75,13 +78,14 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'binance',
+    ipRestrict: true,
     name: 'Binance',
     kind: 'crypto',
     fields: [KEY, { ...SECRET, label: 'Secret Key' }],
     steps: [
       'Pe Binance: Profil → API Management → Create API → System generated.',
-      'Lasă bifat doar „Enable Reading”. Nu activa Spot & Margin Trading, Futures sau Withdrawals.',
-      'Opțional: „Restrict access to trusted IPs only”, cu IP-ul tău.',
+      'Lasă bifat „Enable Reading”. Ca să tranzacționezi din Sentiq, activează și „Enable Spot & Margin Trading” și / sau „Enable Futures”. Nu activa niciodată „Enable Withdrawals”.',
+      'Alege „Restrict access to trusted IPs only” și pune IP-urile serverului Sentiq (lista de mai jos); Binance o cere pentru tranzacționare.',
       'Copiază API Key și Secret Key (secretul apare o singură dată).',
     ],
     keysUrl: 'https://www.binance.com/en/my/settings/api-management',
@@ -90,13 +94,14 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'bybit',
+    ipRestrict: true,
     name: 'Bybit',
     kind: 'crypto',
     fields: [KEY, SECRET],
     steps: [
       'Pe Bybit: Profil → API → Create New Key → System-generated API Keys.',
-      'La permisiuni alege „Read-Only”.',
-      'Opțional: leagă cheia de IP-ul tău.',
+      'Doar pentru citire: „Read-Only”. Ca să tranzacționezi din Sentiq: „Read-Write”, cu „Spot → Trade” și / sau „Contracts → Orders, Positions”. Nu bifa niciodată Withdraw sau Transfer.',
+      'La „IP restriction”, leagă cheia de IP-urile serverului Sentiq (lista de mai jos).',
       'Copiază API Key și API Secret.',
     ],
     keysUrl: 'https://www.bybit.com/app/user/api-management',
@@ -105,13 +110,14 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'okx',
+    ipRestrict: true,
     name: 'OKX',
     kind: 'crypto',
     fields: [KEY, { ...SECRET, label: 'Secret Key' }, { ...PASSPHRASE, label: 'Passphrase' }],
     steps: [
       'Pe OKX: Profil → API → Create API key.',
-      'Permisiuni: doar „Read”. Nu bifa Trade sau Withdraw.',
-      'Alege un passphrase și notează-l. Opțional, adaugă IP-ul tău.',
+      'Permisiuni: „Read”; ca să tranzacționezi din Sentiq, și „Trade”. Nu bifa niciodată „Withdraw”.',
+      'Alege un passphrase și notează-l. La adresele IP, pune IP-urile serverului Sentiq (lista de mai jos).',
       'Copiază API Key, Secret Key și passphrase-ul.',
     ],
     keysUrl: 'https://www.okx.com/account/my-api',
@@ -120,12 +126,14 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'kraken',
+    ipRestrict: true,
     name: 'Kraken',
     kind: 'crypto',
     fields: [KEY, { ...SECRET, label: 'Private Key' }],
     steps: [
       'Pe Kraken: Settings → API → Create API key.',
-      'Bifează doar „Query Funds”, „Query Open Orders & Trades” și „Query Closed Orders & Trades”. Nu bifa Deposit, Withdraw sau Trade.',
+      'Bifează „Query Funds”, „Query Open Orders & Trades” și „Query Closed Orders & Trades”. Ca să tranzacționezi din Sentiq, și „Create & Modify Orders” și „Cancel & Close Orders”. Nu bifa niciodată „Withdraw Funds” sau „Deposit Funds”.',
+      'La „IP address restrictions”, pune IP-urile serverului Sentiq (lista de mai jos).',
       'Copiază API Key și Private Key.',
     ],
     keysUrl: 'https://www.kraken.com/u/security/api',
@@ -134,6 +142,7 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'coinbase',
+    ipRestrict: true,
     name: 'Coinbase',
     kind: 'crypto',
     fields: [
@@ -142,8 +151,8 @@ export const PROVIDERS: ProviderDef[] = [
     ],
     steps: [
       'Coinbase Developer Platform (portal.cdp.coinbase.com) → API Keys → Create API key.',
-      'Permisiuni: doar „View” (citire). Nu bifa Trade sau Transfer.',
-      'La „Signature algorithm” alege ECDSA.',
+      'Permisiuni: „View” (citire); ca să tranzacționezi din Sentiq, și „Trade”. Nu bifa niciodată „Transfer”.',
+      'La „Signature algorithm” alege ECDSA. La „IP allowlist”, pune IP-urile serverului Sentiq (lista de mai jos).',
       'Copiază numele cheii (organizations/…/apiKeys/…) și cheia privată, cu tot cu liniile BEGIN / END.',
     ],
     keysUrl: 'https://portal.cdp.coinbase.com/access/api',
@@ -152,13 +161,14 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'bitget',
+    ipRestrict: true,
     name: 'Bitget',
     kind: 'crypto',
     fields: [KEY, { ...SECRET, label: 'Secret Key' }, { ...PASSPHRASE, label: 'Passphrase' }],
     steps: [
       'Pe Bitget: Profil → API Management → Create API → System-generated API key.',
-      'Permisiuni: doar „Read-only”.',
-      'Alege un passphrase și notează-l. Opțional, adaugă IP-ul tău.',
+      'Doar pentru citire: „Read-only”. Ca să tranzacționezi din Sentiq: „Read-write”, cu „Trade” (spot și / sau futures). Nu bifa niciodată „Withdraw” sau „Transfer”.',
+      'Alege un passphrase și notează-l. La „IP address”, pune IP-urile serverului Sentiq (lista de mai jos).',
       'Copiază API Key, Secret Key și passphrase-ul.',
     ],
     keysUrl: 'https://www.bitget.com/account/newapi',
@@ -167,6 +177,7 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'trading212',
+    ipRestrict: true,
     name: 'Trading 212',
     kind: 'stocks',
     fields: [KEY, SECRET],
@@ -176,8 +187,8 @@ export const PROVIDERS: ProviderDef[] = [
     ],
     steps: [
       'În Trading 212 (aplicație sau web): Settings → API (Beta) → Generate API key.',
-      'Bifează doar permisiunile de citire: Account data, Metadata, Portfolio, Orders (read) și History. Lasă oprită execuția de ordine.',
-      'Opțional: restricționează cheia la IP-ul tău.',
+      'Bifează permisiunile de citire: Account data, Metadata, Portfolio, Orders (read) și History. Ca să tranzacționezi din Sentiq, bifează și „Orders: Execute” (permisiunile nu se mai pot schimba după).',
+      'Restricționează cheia la IP-urile serverului Sentiq (lista de mai jos).',
       'Copiază API Key și API Secret (secretul apare o singură dată).',
       'API-ul funcționează doar pentru conturile Invest și Stocks ISA.',
     ],
@@ -187,6 +198,7 @@ export const PROVIDERS: ProviderDef[] = [
   },
   {
     id: 'etoro',
+    ipRestrict: true,
     name: 'eToro',
     kind: 'stocks',
     fields: [
@@ -199,8 +211,8 @@ export const PROVIDERS: ProviderDef[] = [
     ],
     steps: [
       'Pe eToro: Settings → Trading → API Key Management → Create New Key.',
-      'Alege mediul (Real sau Demo) și permisiunea „Read”. Nu alege „Write”.',
-      'Confirmă cu codul primit prin SMS. Opțional: IP whitelist și o dată de expirare.',
+      'Alege mediul (Real sau Demo) și permisiunea: „Read” doar pentru citire, „Write” ca să tranzacționezi din Sentiq (permisiunea nu se mai poate schimba după).',
+      'Confirmă cu codul primit prin SMS. La „IP whitelist”, pune IP-urile serverului Sentiq (lista de mai jos); opțional, o dată de expirare.',
       'Copiază Public API Key și User Key (User Key apare o singură dată).',
     ],
     keysUrl: 'https://api-portal.etoro.com/getting-started',
@@ -217,7 +229,7 @@ export const PROVIDERS: ProviderDef[] = [
     ],
     steps: [
       'În Client Portal: Performance & Reports → Flex Queries.',
-      'Creează un „Activity Flex Query” (format XML, perioada „Last Business Day”) cu secțiunile Open Positions, Trades și Cash Report. Notează Query ID-ul.',
+      'Creează un „Activity Flex Query” (format XML, perioada „Last Business Day”) cu secțiunile Open Positions, Trades și Cash Report. La Trades: nivelul „Execution” și toate câmpurile („Select All”). Notează Query ID-ul.',
       'Tot acolo, la „Flex Web Service Configuration”: activează serviciul, alege la „Should Expire After” perioada cea mai lungă, apoi „Generate New Token”.',
       'Copiază tokenul și Query ID-ul. Datele sunt cele de la închiderea zilei precedente.',
     ],
@@ -241,7 +253,7 @@ export const PROVIDERS: ProviderDef[] = [
       'În dashboard-ul Alpaca: alege contul (Live sau Paper) → API Keys → Generate New Keys.',
       'Copiază API Key ID și Secret Key (secretul apare o singură dată).',
       'Cheile Paper merg doar cu mediul Paper, iar cele Live doar cu Live.',
-      'Alpaca nu are chei doar pentru citire; Sentiq folosește cheia numai pentru citire.',
+      'Cheile Alpaca pot tranzacționa întotdeauna; Sentiq le folosește doar pentru citire până pornești tranzacționarea pe cont, din Tranzacții.',
     ],
     keysUrl: 'https://app.alpaca.markets/dashboard/overview',
     reads: 'pozițiile, ordinele deschise și execuțiile recente',

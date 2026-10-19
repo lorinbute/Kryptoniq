@@ -13,6 +13,8 @@ const NOW_MS = "DATEDIFF_BIG(MILLISECOND, '19700101', SYSUTCDATETIME())";
 
 /** Every table, children before parents: the order to empty them (tests, import); reversed, the order to fill them. */
 export const TABLES = [
+  'trade_log',
+  'news_ai_scores',
   'news_coins',
   'news',
   'sources',
@@ -27,6 +29,8 @@ export const TABLES = [
   'market_cache',
   'settings',
   'user_settings',
+  'user_keys',
+  'ai_daily_sentiment',
   'user_tokens',
   'sessions',
   'passkeys',
@@ -38,7 +42,7 @@ export const TABLES = [
 ] as const;
 
 /** Tables whose `id` is an IDENTITY column. */
-export const IDENTITY_TABLES = new Set(['users', 'calendar_custom', 'exchange_accounts', 'passkeys', 'account_requests']);
+export const IDENTITY_TABLES = new Set(['users', 'calendar_custom', 'exchange_accounts', 'passkeys', 'account_requests', 'trade_log']);
 
 /** The admin (id 1) every new database starts with, without e-mail or password (FD-USERS §3). */
 export const SEED_ADMIN = `SET IDENTITY_INSERT users ON;
@@ -356,6 +360,75 @@ export const MIGRATIONS: string[][] = [
   ],
   // 2 — FD-MCPREMOVE: the AI connector is gone; its tables with it (children first).
   ['DROP TABLE IF EXISTS mcp_tokens; DROP TABLE IF EXISTS mcp_codes; DROP TABLE IF EXISTS mcp_grants; DROP TABLE IF EXISTS mcp_clients;'],
+  // 3 — FD-AIKEYS, FD-TDKEYS: each user's own keys (AI providers, Twelve Data), the news scores their AI gave and the
+  // daily index made from them.
+  [
+    `CREATE TABLE user_keys (
+      user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name ${t(20)} NOT NULL,
+      secret ${t('MAX')} NOT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (user_id, name)
+    );
+    CREATE TABLE news_ai_scores (
+      user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      news_id ${t(64)} NOT NULL REFERENCES news(id) ON DELETE CASCADE,
+      score FLOAT NULL,
+      label ${t(20)} NULL,
+      engine ${t(100)} NOT NULL,
+      impact FLOAT NULL,
+      scored_at BIGINT NOT NULL,
+      PRIMARY KEY (user_id, news_id)
+    );
+    CREATE INDEX news_ai_scores_news ON news_ai_scores(news_id);
+    CREATE TABLE ai_daily_sentiment (
+      user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      day ${t(16)} NOT NULL,
+      tz ${t(64)} NOT NULL,
+      value FLOAT NOT NULL,
+      raw FLOAT NOT NULL,
+      confidence ${t('MAX')} NOT NULL,
+      counts ${t('MAX')} NOT NULL,
+      breakdown ${t('MAX')} NOT NULL,
+      drivers ${t('MAX')} NOT NULL,
+      computed_at BIGINT NOT NULL,
+      final INT NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, day, tz)
+    );`,
+  ],
+  // 4 — FD-2FA: the new authenticator's secret while the user changes it (the old one works until it is confirmed).
+  [`ALTER TABLE users ADD totp_next_secret ${t('MAX')} NULL;`],
+  // 5 — FD-TRADING: trading switched on per account, and the journal of what Sentiq sent (kept after the exchange
+  // account goes, with the user; one row per idempotency key).
+  [
+    `ALTER TABLE exchange_accounts ADD trading_enabled_at BIGINT NULL, trading_markets ${t(40)} NULL;`,
+    `CREATE TABLE trade_log (
+      id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+      user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      account_id INT NULL,
+      exchange ${t(40)} NOT NULL,
+      env ${t(20)} NOT NULL,
+      account_label ${t(200)} NOT NULL,
+      idem_key ${t(64)} NULL,
+      action ${t(16)} NOT NULL,
+      market ${t(16)} NULL,
+      symbol ${t(80)} NULL,
+      side ${t(8)} NULL,
+      kind ${t(16)} NULL,
+      amount FLOAT NULL,
+      price FLOAT NULL,
+      trigger_price FLOAT NULL,
+      leverage FLOAT NULL,
+      status ${t(16)} NOT NULL,
+      order_id ${t(120)} NULL,
+      message ${t(500)} NULL,
+      detail ${t('MAX')} NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+    CREATE UNIQUE INDEX trade_log_idem ON trade_log(user_id, idem_key) WHERE idem_key IS NOT NULL;
+    CREATE INDEX trade_log_user ON trade_log(user_id, created_at);`,
+  ],
 ];
 
 const VERSION_TABLE = "OBJECT_ID(QUOTENAME(SCHEMA_NAME()) + N'.schema_version', N'U')";

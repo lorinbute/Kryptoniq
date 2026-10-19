@@ -101,6 +101,10 @@ export interface TdPlan {
 /** The job that reads the plan (FD-TDPLAN). */
 export const TD_PLAN_JOB = 'twelvedata.plan';
 
+/** Where a key's day count and plan are kept: one pair per user since FD-TDKEYS (`td:usage` / `td:plan` before). */
+export const tdUsageKey = (scope?: string) => (scope ? `td:usage:${scope}` : 'td:usage');
+export const tdPlanKey = (scope?: string) => (scope ? `td:plan:${scope}` : 'td:plan');
+
 /** The free plan's limits: what Sentiq assumes until the key's plan was read. */
 export const TD_BASIC_PLAN: TdPlan = { category: 'basic', perMinute: 8, perDay: 800 };
 /** The plan another instance read is picked up this often. */
@@ -126,7 +130,7 @@ const parseStoredPlan = (raw: string | undefined): StoredPlan | null => {
 /**
  * Twelve Data credits: per minute and, on plans that have one, per day (UTC). The limits are the key's plan, read from
  * Twelve Data (FD-TDPLAN), the free plan's until then. The day's count and the plan are persisted: a restart does not
- * reset the day, and the Mac and Azure use the same plan.
+ * reset the day, and the Mac and Azure use the same plan. Since FD-TDKEYS each user's key has its own (`scope`).
  */
 export class CreditBudget {
   private minute: number[] = [];
@@ -138,11 +142,16 @@ export class CreditBudget {
   private readonly fixed: TdPlan | null;
   private planReadAt = 0;
   private planReading: Promise<void> | null = null;
+  /** Where the day's count and the plan are kept (`market_cache`): `td:usage:<user>`, `td:plan:<user>`. */
+  private readonly usageKey: string;
+  private readonly planKey: string;
 
-  /** `perMinute` / `perDay`: fixed limits (tests); otherwise the plan's. */
-  constructor(opts: { db?: Db | null; now?: () => number; perMinute?: number; perDay?: number | null } = {}) {
+  /** `perMinute` / `perDay`: fixed limits (tests); otherwise the plan's. `scope`: whose key (a user id). */
+  constructor(opts: { db?: Db | null; now?: () => number; perMinute?: number; perDay?: number | null; scope?: string } = {}) {
     this.db = opts.db ?? null;
     this.now = opts.now ?? Date.now;
+    this.usageKey = tdUsageKey(opts.scope);
+    this.planKey = tdPlanKey(opts.scope);
     this.fixed = opts.perMinute !== undefined || opts.perDay !== undefined ? { category: 'fixed', perMinute: opts.perMinute ?? 8, perDay: opts.perDay === undefined ? 800 : opts.perDay } : null;
     this.ready = this.load();
   }
@@ -163,7 +172,7 @@ export class CreditBudget {
   private async load(): Promise<void> {
     if (!this.db) return;
     try {
-      const row = await this.db.get<{ value: string }>("SELECT value FROM market_cache WHERE [key] = N'td:usage'");
+      const row = await this.db.get<{ value: string }>('SELECT value FROM market_cache WHERE [key] = ?', [this.usageKey]);
       if (row) {
         const v = JSON.parse(row.value) as { day: string; used: number };
         if (this.day === '' || this.day === v.day) {
@@ -182,7 +191,7 @@ export class CreditBudget {
     if (!this.db) return;
     this.planReadAt = this.now();
     try {
-      const row = await this.db.get<{ value: string }>("SELECT value FROM market_cache WHERE [key] = N'td:plan'");
+      const row = await this.db.get<{ value: string }>('SELECT value FROM market_cache WHERE [key] = ?', [this.planKey]);
       this.plan = parseStoredPlan(row?.value);
     } catch {
       // keep the last one
@@ -197,10 +206,13 @@ export class CreditBudget {
 
   /** The plan read for the key ending in `keyHint` (FD-TDPLAN): its limits apply from now on. */
   async setPlan(p: TdPlan, keyHint: string): Promise<void> {
+    // After the first read: a read still under way would put the stored (older) plan back over this one.
+    await this.ready;
     this.plan = { category: p.category, perMinute: p.perMinute, perDay: p.perDay, at: this.now(), keyHint };
     this.planReadAt = this.now();
     if (this.db) {
-      await this.db.run(`UPDATE market_cache SET value = @v, fetched_at = @t WHERE [key] = N'td:plan'; IF @@ROWCOUNT = 0 INSERT INTO market_cache([key], value, fetched_at) VALUES (N'td:plan', @v, @t)`, {
+      await this.db.run(`UPDATE market_cache SET value = @v, fetched_at = @t WHERE [key] = @k; IF @@ROWCOUNT = 0 INSERT INTO market_cache([key], value, fetched_at) VALUES (@k, @v, @t)`, {
+        k: this.planKey,
         v: JSON.stringify(this.plan),
         t: this.now(),
       });
@@ -209,9 +221,10 @@ export class CreditBudget {
 
   /** The key was removed or replaced: back to the free plan's limits until the new key's plan is read. */
   async clearPlan(): Promise<void> {
+    await this.ready;
     this.plan = null;
     this.planReadAt = this.now();
-    if (this.db) await this.db.run("DELETE FROM market_cache WHERE [key] = N'td:plan'");
+    if (this.db) await this.db.run('DELETE FROM market_cache WHERE [key] = ?', [this.planKey]);
   }
 
   /** The stored plan, when it belongs to the key ending in `keyHint`. */
@@ -231,7 +244,8 @@ export class CreditBudget {
     if (!db) return;
     this.saving = this.saving
       .then(() =>
-        db.run(`UPDATE market_cache SET value = @v, fetched_at = @t WHERE [key] = N'td:usage'; IF @@ROWCOUNT = 0 INSERT INTO market_cache([key], value, fetched_at) VALUES (N'td:usage', @v, @t)`, {
+        db.run(`UPDATE market_cache SET value = @v, fetched_at = @t WHERE [key] = @k; IF @@ROWCOUNT = 0 INSERT INTO market_cache([key], value, fetched_at) VALUES (@k, @v, @t)`, {
+          k: this.usageKey,
           v: JSON.stringify({ day: this.day, used: this.used }),
           t: this.now(),
         }),
@@ -276,6 +290,17 @@ export class CreditBudget {
     }
     for (let i = 0; i < n; i++) this.minute.push(now);
     this.used += n;
+    this.persist();
+  }
+
+  /** Another key (FD-TDKEYS): its use starts from nothing, plus `spent` credits it already used (its check). */
+  async reset(spent = 0): Promise<void> {
+    // After the first read: it keeps the larger of the stored and the counted use, which would undo this.
+    await this.ready;
+    const now = this.now();
+    this.day = this.today();
+    this.used = spent;
+    this.minute = Array.from({ length: spent }, () => now);
     this.persist();
   }
 
@@ -486,7 +511,9 @@ export class TwelveDataClient {
 
   private async get(path: string, params: Record<string, string>, credits: number, keyOverride?: string): Promise<Record<string, unknown>> {
     const key = keyOverride ?? (await this.key());
-    if (!key) throw new MarketError('UNSUPPORTED_TIMEFRAME', 'Cheia Twelve Data lipsește (Setări → Admin → Date de piață)');
+    if (!key) throw new MarketError('UNSUPPORTED_TIMEFRAME', `Cheia ta Twelve Data lipsește (${TD_KEY_PLACE})`);
+    // A user's budget is made on their first request (FD-TDKEYS): its stored plan and day count first.
+    await this.budget.ready;
     if (credits > 0) this.budget.take(credits);
     const qs = new URLSearchParams({ ...params, apikey: key }).toString();
     let r;
@@ -561,6 +588,15 @@ export class TwelveDataClient {
 
 // ---------------------------------------------------------------- StockData
 
+/** Where each user puts their own Twelve Data key (FD-TDKEYS). */
+export const TD_KEY_PLACE = 'Setări → Ale mele → Date pentru acțiuni';
+
+/** One user's Twelve Data (FD-TDKEYS): their key's client and its credits. */
+interface TdAccount {
+  client: TwelveDataClient;
+  budget: CreditBudget;
+}
+
 interface CacheEntry {
   candles: Candle[];
   fetchedAt: number;
@@ -596,27 +632,63 @@ export function weeklyFromDaily(days: Candle[]): Candle[] {
   return out;
 }
 
+/**
+ * Stocks and indices. Nasdaq (daily, quotes, search) and the indices' sources are free and common; Twelve Data (1m – 4h,
+ * and the daily too with a key) is each user's own since FD-TDKEYS: their key, their credits, their candles.
+ */
 export class StockData {
   readonly nasdaq: NasdaqClient;
-  readonly td: TwelveDataClient;
-  readonly budget: CreditBudget;
   /** US indices (FD-INDICES): an id with "^" in front is served from here. */
   readonly indices: IndexData;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inflight = new Map<string, Promise<CandlesResult>>();
   private readonly quotes = new Map<string, StockQuote>();
   private readonly sparks = new Map<string, { symbol: string; closes: number[]; fetchedAt: number }>();
+  private readonly accounts = new Map<number, TdAccount>();
   private status: MarketStatus | null = null;
+  private readonly db: Db | null;
   private readonly now: () => number;
-  private readonly key: () => Promise<string | null>;
+  private readonly key: (userId: number) => Promise<string | null>;
+  private readonly fixedBudget: CreditBudget | null;
 
-  constructor(opts: { db?: Db | null; key: () => Promise<string | null>; now?: () => number; nasdaq?: NasdaqClient; budget?: CreditBudget; cboe?: CboeClient; cnbc?: CnbcClient }) {
+  /** `key`: a user's Twelve Data key; `budget`: one budget for every user (tests), else each user's own. */
+  constructor(opts: { db?: Db | null; key: (userId: number) => Promise<string | null>; now?: () => number; nasdaq?: NasdaqClient; budget?: CreditBudget; cboe?: CboeClient; cnbc?: CnbcClient }) {
+    this.db = opts.db ?? null;
     this.now = opts.now ?? Date.now;
-    this.budget = opts.budget ?? new CreditBudget({ db: opts.db, now: this.now });
+    this.fixedBudget = opts.budget ?? null;
     this.nasdaq = opts.nasdaq ?? new NasdaqClient();
-    this.td = new TwelveDataClient(opts.key, this.budget);
     this.key = opts.key;
     this.indices = new IndexData({ nasdaq: this.nasdaq, cboe: opts.cboe, cnbc: opts.cnbc, now: this.now, status: () => this.confirmedStatus() });
+  }
+
+  private account(userId: number): TdAccount {
+    let a = this.accounts.get(userId);
+    if (!a) {
+      const budget = this.fixedBudget ?? new CreditBudget({ db: this.db, now: this.now, scope: String(userId) });
+      a = { budget, client: new TwelveDataClient(() => this.key(userId), budget) };
+      this.accounts.set(userId, a);
+    }
+    return a;
+  }
+
+  /** The user's Twelve Data client (their key). */
+  td(userId: number): TwelveDataClient {
+    return this.account(userId).client;
+  }
+
+  /** The credits of the user's key. */
+  budget(userId: number): CreditBudget {
+    return this.account(userId).budget;
+  }
+
+  hasKey(userId: number): Promise<boolean> {
+    return this.td(userId).hasKey();
+  }
+
+  /** The user was deleted: their credits' state and their candles leave memory. */
+  forget(userId: number): void {
+    this.accounts.delete(userId);
+    for (const k of this.cache.keys()) if (k.startsWith(`td|${userId}|`)) this.cache.delete(k);
   }
 
   /** US market state, re-read at most every 5 minutes. */
@@ -637,28 +709,30 @@ export class StockData {
     return last && this.now() - last.fetchedAt < 15 * 60_000 ? last : null;
   }
 
-  async timeframes(): Promise<Timeframe[]> {
-    return stockTimeframes(await this.td.hasKey());
+  /** A share's timeframes for the user: 1m – 1w with their Twelve Data key, 1d and 1w (Nasdaq) without. */
+  async timeframes(userId: number): Promise<Timeframe[]> {
+    return stockTimeframes(await this.hasKey(userId));
   }
 
   /**
-   * Reads the Twelve Data key's plan and applies its limits (FD-TDPLAN): after a key is saved, at start-up, every 6 hours
-   * and on request. Without a key, the plan is forgotten. A failed read keeps the last plan (and throws).
+   * Reads the user's Twelve Data key's plan and applies its limits (FD-TDPLAN): after a key is saved, at start-up, every
+   * 6 hours and on request. Without a key, the plan is forgotten. A failed read keeps the last plan (and throws).
    */
-  async refreshPlan(key: string | null = null): Promise<TdPlan | null> {
-    const k = key ?? (await this.key());
+  async refreshPlan(userId: number, key: string | null = null): Promise<TdPlan | null> {
+    const k = key ?? (await this.key(userId));
+    const { client, budget } = this.account(userId);
     if (!k) {
-      await this.budget.clearPlan();
+      await budget.clearPlan();
       return null;
     }
-    const p = await this.td.plan(k);
-    await this.budget.setPlan(p, k.slice(-4));
+    const p = await client.plan(k);
+    await budget.setPlan(p, k.slice(-4));
     return p;
   }
 
-  /** The timeframes of one symbol: an index has 1d and 1w only (FD-INDICES), a share what the source has. */
-  async timeframesFor(sym: string): Promise<Timeframe[]> {
-    return isIndexId(sym) ? [...INDEX_TIMEFRAMES] : this.timeframes();
+  /** The timeframes of one symbol for the user: an index's (FD-INDEXINTRA, no key needed), a share's by their key. */
+  async timeframesFor(sym: string, userId: number): Promise<Timeframe[]> {
+    return isIndexId(sym) ? [...INDEX_TIMEFRAMES] : this.timeframes(userId);
   }
 
   /**
@@ -671,20 +745,27 @@ export class StockData {
     return entry.closedAt && outsideSession(status);
   }
 
-  async candles(symbol: string, tf: Timeframe, count: number): Promise<CandlesResult> {
+  /** A share's candles for the user: from Twelve Data with their key (their credits, their cache), else Nasdaq's daily. */
+  async candles(symbol: string, tf: Timeframe, count: number, userId: number): Promise<CandlesResult> {
     const sym = symbol.toUpperCase();
     if (isIndexId(sym)) return this.indexCandles(sym, tf, count);
     if (!STOCK_SYMBOL_RE.test(sym)) throw new MarketError('UNKNOWN_SYMBOL', `Simbol invalid: ${symbol}`);
-    const hasKey = await this.td.hasKey();
+    const hasKey = await this.hasKey(userId);
     const useTd = hasKey && TD_INTERVALS[tf] !== undefined;
     if (!useTd && !NASDAQ_TIMEFRAMES.includes(tf)) {
-      throw new MarketError('UNSUPPORTED_TIMEFRAME', hasKey ? `Timeframe-ul ${tf} nu există la Twelve Data (alege 1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d sau 1w)` : `Timeframe-ul ${tf} are nevoie de cheia gratuită Twelve Data (Setări → Admin → Date de piață); fără ea sunt disponibile 1d și 1w`);
+      throw new MarketError(
+        'UNSUPPORTED_TIMEFRAME',
+        hasKey
+          ? `Timeframe-ul ${tf} nu există la Twelve Data (alege 1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d sau 1w)`
+          : `Timeframe-ul ${tf} are nevoie de cheia ta Twelve Data (${TD_KEY_PLACE}; planul gratuit ajunge); fără ea sunt disponibile 1d și 1w`,
+      );
     }
-    const key = `${useTd ? 'td' : 'nq'}|${sym}|${tf}`;
+    // Twelve Data's candles are the user's (bought with their key); Nasdaq's are everyone's.
+    const key = useTd ? `td|${userId}|${sym}|${tf}` : `nq|${sym}|${tf}`;
     const pending = this.inflight.get(key);
     if (pending) return pending;
-    const p = this.load(sym, tf, count, key, useTd ? 'td' : 'nq')
-      .catch((err: unknown) => this.withSuggestions(sym, err))
+    const p = this.load(sym, tf, count, key, useTd ? 'td' : 'nq', userId)
+      .catch((err: unknown) => this.withSuggestions(sym, err, userId))
       .finally(() => this.inflight.delete(key));
     this.inflight.set(key, p);
     return p;
@@ -697,15 +778,15 @@ export class StockData {
     const key = `ix|${id}|${tf}`;
     const pending = this.inflight.get(key);
     if (pending) return pending;
-    const p = this.load(id, tf, count, key, 'ix').finally(() => this.inflight.delete(key));
+    const p = this.load(id, tf, count, key, 'ix', null).finally(() => this.inflight.delete(key));
     this.inflight.set(key, p);
     return p;
   }
 
   /** A symbol the source does not know (renamed, delisted, mistyped): the error names the closest listed ones (FD §5). */
-  private async withSuggestions(sym: string, err: unknown): Promise<never> {
+  private async withSuggestions(sym: string, err: unknown, userId: number): Promise<never> {
     if (!(err instanceof MarketError) || err.code !== 'UNKNOWN_SYMBOL') throw err;
-    const hits = await this.search(sym.replace(/[.-].*$/, '')).catch(() => []);
+    const hits = await this.search(sym.replace(/[.-].*$/, ''), userId).catch(() => []);
     // The closest spellings first ("APPL" → AAPL before AADX).
     const suggestions = hits
       .map((h) => h.symbol)
@@ -718,7 +799,7 @@ export class StockData {
     throw new MarketError('UNKNOWN_SYMBOL', `${err.message}; încearcă ${suggestions.join(', ')}`, suggestions);
   }
 
-  private async load(sym: string, tf: Timeframe, count: number, key: string, mode: 'td' | 'nq' | 'ix'): Promise<CandlesResult> {
+  private async load(sym: string, tf: Timeframe, count: number, key: string, mode: 'td' | 'nq' | 'ix', userId: number | null): Promise<CandlesResult> {
     const now = this.now();
     const cached = this.cache.get(key);
     // A state Nasdaq could not confirm for a while is not trusted (a Friday "closed" must not freeze Monday's chart).
@@ -729,8 +810,8 @@ export class StockData {
       entry = cached;
     } else {
       try {
-        if (mode === 'td') {
-          const r = await this.td.timeSeries(sym, TD_INTERVALS[tf] as string, count);
+        if (mode === 'td' && userId !== null) {
+          const r = await this.td(userId).timeSeries(sym, TD_INTERVALS[tf] as string, count);
           entry = { candles: r.candles, fetchedAt: now, count, exchange: 'twelvedata', closedAt: outsideSession(status) };
         } else if (mode === 'ix') {
           // Daily and weekly from the index's daily history; intraday from CNBC (FD-INDEXINTRA).
@@ -787,10 +868,11 @@ export class StockData {
     }
   }
 
-  async search(q: string): Promise<StockSearchHit[]> {
-    if (await this.td.hasKey()) {
+  /** Search: Twelve Data with the user's key (free of credits), else Nasdaq. */
+  async search(q: string, userId: number): Promise<StockSearchHit[]> {
+    if (await this.hasKey(userId)) {
       try {
-        const hits = await this.td.search(q);
+        const hits = await this.td(userId).search(q);
         if (hits.length) return dedupe(hits);
       } catch {
         // Nasdaq below
