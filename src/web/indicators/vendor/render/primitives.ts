@@ -18,6 +18,7 @@ import type {
 } from 'lightweight-charts';
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
 import { barInterval } from 'oakscriptjs';
+import { candleBodyRect } from '../../../chart/candle-colors.ts';
 import type { Bar, FillData, ArrowData } from 'oakscriptjs';
 import type {
   BgColorData,
@@ -1538,19 +1539,6 @@ export function getBarWidth(timeScale: ReturnType<IChartApi['timeScale']>, media
 
 // ─── Bar colours (barcolor) ─────────────────────────────────────────────────
 
-/** lightweight-charts candle body width (bitmap px) */
-function candleWidth(barSpacing: number, pixelRatio: number): number {
-  let w: number;
-  if (barSpacing >= 2.5 && barSpacing <= 4) {
-    w = Math.floor(3 * pixelRatio);
-  } else {
-    const coeff = 1 - (0.2 * Math.atan(Math.max(4, barSpacing) - 4)) / (Math.PI * 0.5);
-    w = Math.max(Math.floor(pixelRatio), Math.min(Math.floor(barSpacing * coeff * pixelRatio), Math.floor(barSpacing * pixelRatio)));
-  }
-  if (w >= 2 && Math.floor(pixelRatio) % 2 !== w % 2) w--;
-  return w;
-}
-
 /** lightweight-charts OHLC bar width (bitmap px) */
 function ohlcBarWidth(barSpacing: number, pixelRatio: number): number {
   let w = Math.max(Math.floor(pixelRatio), Math.floor(barSpacing * 0.3 * pixelRatio));
@@ -1558,12 +1546,13 @@ function ohlcBarWidth(barSpacing: number, pixelRatio: number): number {
   return w;
 }
 
-type Ohlc = { open: number; high: number; low: number; close: number };
+type Ohlc = { open: number; high: number; low: number; close: number; color?: string };
 
 /**
  * barcolor: the bars of the host's main series (candlestick or bar series, Heikin Ashi included) repainted in their
  * colour, with the same geometry as lightweight-charts, so the main series data is never rewritten. Other series
- * types have no bars to colour: nothing is drawn.
+ * types have no bars to colour: nothing is drawn. FD-BARCOLORBODY: a candle's body fill only (inside its border); its
+ * wick and border keep the chart settings' colours, and a body switched off stays empty.
  */
 export class BarColorPrimitive extends BasePrimitive {
   private _colors = new Map<number, string>();
@@ -1608,8 +1597,18 @@ export class BarColorPrimitive extends BasePrimitive {
     const ohlc = this.ohlc(series);
     const timeScale = chart.timeScale();
     const barSpacing = timeScale.options().barSpacing;
-    const opts = series.options() as { thinBars?: boolean; openVisible?: boolean };
-    target.useBitmapCoordinateSpace(({ context: ctx, horizontalPixelRatio: hpr, verticalPixelRatio: vpr }) => {
+    const opts = series.options() as { thinBars?: boolean; openVisible?: boolean; borderVisible?: boolean; upColor?: string; downColor?: string };
+    // The chart's background (solid, or a gradient from the pane's top to its bottom), laid under a body before its colour:
+    // a see-through colour shows the background, not the body the library drew there.
+    const bg = (chart.options() as { layout?: { background?: { type?: string; color?: string; topColor?: string; bottomColor?: string } } }).layout?.background;
+    target.useBitmapCoordinateSpace(({ context: ctx, bitmapSize, horizontalPixelRatio: hpr, verticalPixelRatio: vpr }) => {
+      let under: string | CanvasGradient | null = bg?.type === 'gradient' ? null : (bg?.color ?? null);
+      if (bg?.type === 'gradient' && bg.topColor && bg.bottomColor) {
+        const g = ctx.createLinearGradient(0, 0, 0, bitmapSize.height);
+        g.addColorStop(0, bg.topColor);
+        g.addColorStop(1, bg.bottomColor);
+        under = g;
+      }
       for (const [time, color] of this._colors) {
         const bar = ohlc.get(time);
         const x = timeScale.timeToCoordinate(time as unknown as Time);
@@ -1619,14 +1618,16 @@ export class BarColorPrimitive extends BasePrimitive {
         ctx.fillStyle = color;
         const cx = Math.round((x as number) * hpr);
         if (type === 'Candlestick') {
-          const w = candleWidth(barSpacing, hpr);
-          const wick = Math.max(Math.floor(hpr), Math.min(Math.floor(hpr), Math.floor(barSpacing * hpr), w));
-          const high = Math.round(h * vpr);
-          const low = Math.round(l * vpr);
-          ctx.fillRect(cx - Math.floor(wick * 0.5), high, wick, low - high + 1);
-          const top = Math.round(Math.min(o, c) * vpr);
-          const bottom = Math.round(Math.max(o, c) * vpr);
-          ctx.fillRect(cx - Math.floor(w * 0.5), top, w, bottom - top + 1);
+          const own = bar.color ?? (bar.open <= bar.close ? opts.upColor : opts.downColor);
+          if (own !== undefined && isTransparent(own)) continue;
+          const r = candleBodyRect(x as number, o, c, barSpacing, hpr, vpr, opts.borderVisible !== false);
+          if (!r) continue;
+          if (under) {
+            ctx.fillStyle = under;
+            ctx.fillRect(r.left, r.top, r.width, r.height);
+            ctx.fillStyle = color;
+          }
+          ctx.fillRect(r.left, r.top, r.width, r.height);
         } else {
           const w = ohlcBarWidth(barSpacing, hpr);
           const lineW = opts.thinBars !== false ? Math.min(w, Math.floor(hpr)) : w;

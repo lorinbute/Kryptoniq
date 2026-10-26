@@ -57,7 +57,7 @@ export function StockNewsSection({ s }: { s: SettingsView }) {
         </div>
         {draft.mode === 'indices' && draft.indices.length === 0 && <p className="text-warn">Alege cel puțin un indice.</p>}
         <p className="text-[12.5px] text-faint">
-          Rămân oricum: știrile generale de bursă (fără o companie anume), acțiunile din favoritele tale, știrile crypto, macro și de geopolitică.
+          Rămân oricum: știrile generale de bursă (fără o companie anume), acțiunile din listele tale de urmărire, știrile crypto, macro și de geopolitică.
           {info.data && ` Listele de companii: ${new Date(info.data.asOf).toLocaleDateString('ro-RO', { day: 'numeric', month: 'short', year: 'numeric' })}, actualizate săptămânal.`}
         </p>
         <div className="flex flex-wrap items-center gap-2">

@@ -1,9 +1,9 @@
 // The HTTP side of the OpenAI and Gemini clients and of the model lists (TD-AIKEYS §2): JSON in and out, a timeout,
 // the caller's abort, a few retries on a busy provider, and the provider's error turned into an `AiError`.
 import { z } from 'zod';
-import type { AiProvider } from '../../shared/ai.ts';
+import { AI_PROVIDER_INFO, type AiProvider } from '../../shared/ai.ts';
 import { USER_AGENT } from '../config.ts';
-import { AiError, type AiErrorKind } from './types.ts';
+import { AiError, withinRo, type AiErrorKind, type AiExplained } from './types.ts';
 
 export type FetchFn = typeof fetch;
 
@@ -32,6 +32,8 @@ export interface JsonCall {
   model?: string;
   /** Says which error the provider meant (status, its JSON body). */
   classify: (status: number, body: unknown, text: string) => AiErrorKind;
+  /** Says it more precisely, when the provider tells which limit (FD-AIQUOTA). */
+  explain?: (kind: AiErrorKind, status: number, body: unknown, text: string) => AiExplained | null;
 }
 
 /** The provider's error text: `{ error: { message } }` for both OpenAI and Google. */
@@ -41,8 +43,12 @@ export function errorText(body: unknown, text: string): string {
   return text.slice(0, 300);
 }
 
-async function once(call: JsonCall, fetchImpl: FetchFn): Promise<{ status: number; body: unknown; text: string; retryAfter: number | null }> {
-  const timeout = AbortSignal.timeout(call.timeoutMs);
+/** No answer in the call's time: said with that time (FD-AISLOW §1). */
+const timedOut = (call: JsonCall) =>
+  new AiError(call.provider, 'timeout', 0, '', call.model, { said: `${AI_PROVIDER_INFO[call.provider].name} nu a răspuns ${withinRo(call.timeoutMs)}` });
+
+async function once(call: JsonCall, fetchImpl: FetchFn, ms: number): Promise<{ status: number; body: unknown; text: string; retryAfter: number | null }> {
+  const timeout = AbortSignal.timeout(ms);
   const signal = call.signal ? AbortSignal.any([call.signal, timeout]) : timeout;
   let res: Response;
   try {
@@ -55,7 +61,7 @@ async function once(call: JsonCall, fetchImpl: FetchFn): Promise<{ status: numbe
   } catch (err) {
     if (call.signal?.aborted) throw err;
     const e = err as Error & { cause?: { code?: string } };
-    if (timeout.aborted || e.name === 'TimeoutError') throw new AiError(call.provider, 'timeout', 0, '');
+    if (timeout.aborted || e.name === 'TimeoutError') throw timedOut(call);
     throw new AiError(call.provider, 'connection', 0, e.cause?.code ?? e.message);
   }
   const declared = Number(res.headers.get('content-length') ?? 0);
@@ -68,7 +74,7 @@ async function once(call: JsonCall, fetchImpl: FetchFn): Promise<{ status: numbe
     text = await res.text();
   } catch (err) {
     if (call.signal?.aborted) throw err;
-    if (timeout.aborted) throw new AiError(call.provider, 'timeout', 0, '');
+    if (timeout.aborted) throw timedOut(call);
     throw new AiError(call.provider, 'connection', 0, (err as Error).message);
   }
   let body: unknown = null;
@@ -81,29 +87,36 @@ async function once(call: JsonCall, fetchImpl: FetchFn): Promise<{ status: numbe
   return { status: res.status, body, text, retryAfter: Number.isFinite(ra) && ra > 0 ? ra * 1000 : null };
 }
 
-/** The JSON answer of a successful call; an `AiError` otherwise (after the retries a busy provider is worth). */
+/**
+ * The JSON answer of a successful call; an `AiError` otherwise (after the retries a busy provider is worth). The time
+ * is the whole call's, retries included (FD-AISLOW §1): a slow provider holds the caller up that long at most.
+ */
 export async function callJson(call: JsonCall, deps: HttpDeps = {}): Promise<unknown> {
   const fetchImpl = deps.fetch ?? ((...args) => fetch(...args));
   const sleep = deps.sleep ?? defaultSleep;
+  const deadline = Date.now() + call.timeoutMs;
   for (let attempt = 0; ; attempt++) {
     let error: AiError;
     let wait: number | null = null;
     try {
-      const r = await once(call, fetchImpl);
+      const r = await once(call, fetchImpl, Math.max(1, deadline - Date.now()));
       if (r.status >= 200 && r.status < 300) {
         if (r.body === null) throw new AiError(call.provider, 'other', r.status, 'răspunsul nu e JSON');
         return r.body;
       }
-      error = new AiError(call.provider, call.classify(r.status, r.body, r.text), r.status, errorText(r.body, r.text), call.model);
+      const kind = call.classify(r.status, r.body, r.text);
+      error = new AiError(call.provider, kind, r.status, errorText(r.body, r.text), call.model, call.explain?.(kind, r.status, r.body, r.text));
       wait = r.retryAfter;
     } catch (err) {
       if (!(err instanceof AiError)) throw err;
       error = err;
     }
     const delay = RETRY_DELAYS_MS[attempt];
-    // A timeout is not repeated: the caller's time is already spent.
+    // A timeout is not repeated: the caller's time is already spent; nor is a call whose time would go on the wait.
     if (!error.transient || delay === undefined || call.signal?.aborted) throw error;
-    await sleep(wait !== null && wait <= MAX_RETRY_AFTER_MS ? wait : delay);
+    const pause = wait !== null && wait <= MAX_RETRY_AFTER_MS ? wait : delay;
+    if (Date.now() + pause >= deadline) throw error;
+    await sleep(pause);
   }
 }
 

@@ -13,6 +13,9 @@ const NOW_MS = "DATEDIFF_BIG(MILLISECOND, '19700101', SYSUTCDATETIME())";
 
 /** Every table, children before parents: the order to empty them (tests, import); reversed, the order to fill them. */
 export const TABLES = [
+  'bot_events',
+  'bot_trades',
+  'bots',
   'trade_log',
   'news_ai_scores',
   'news_coins',
@@ -23,6 +26,8 @@ export const TABLES = [
   'calendar_custom',
   'job_state',
   'job_lease',
+  'watch_list_items',
+  'watch_lists',
   'watchlist',
   'cost_basis',
   'exchange_accounts',
@@ -42,7 +47,7 @@ export const TABLES = [
 ] as const;
 
 /** Tables whose `id` is an IDENTITY column. */
-export const IDENTITY_TABLES = new Set(['users', 'calendar_custom', 'exchange_accounts', 'passkeys', 'account_requests', 'trade_log']);
+export const IDENTITY_TABLES = new Set(['users', 'calendar_custom', 'exchange_accounts', 'passkeys', 'account_requests', 'trade_log', 'watch_lists', 'bots', 'bot_trades', 'bot_events']);
 
 /** The admin (id 1) every new database starts with, without e-mail or password (FD-USERS §3). */
 export const SEED_ADMIN = `SET IDENTITY_INSERT users ON;
@@ -428,6 +433,86 @@ export const MIGRATIONS: string[][] = [
     );
     CREATE UNIQUE INDEX trade_log_idem ON trade_log(user_id, idem_key) WHERE idem_key IS NOT NULL;
     CREATE INDEX trade_log_user ON trade_log(user_id, created_at);`,
+  ],
+  // 6 — FD-WHYPLAIN §3: the user's AI says in a sentence why it gave the score (null for scores given before).
+  [`ALTER TABLE news_ai_scores ADD reason ${t(400)} NULL;`],
+  // 7 — FD-MULTICAT: a source covering several categories ("crypto,stocks,macro,geopolitics"); null for one (`category`).
+  [`ALTER TABLE sources ADD categories ${t(100)} NULL;`],
+  // 8 — FD-HTMLFEED: a source read from a site's page: how (null: its address is a feed), and the address then read.
+  [`ALTER TABLE sources ADD read_as ${t(20)} NULL, read_url ${t('MAX')} NULL;`],
+  // 9 — FD-WATCHLISTS: named lists of symbols; `watchlist` stays the register of the symbols in any of them (their pair,
+  // aliases, name). Each user's favourites so far become their list "Favorite", in the same order.
+  [
+    `CREATE TABLE watch_lists (
+      id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+      user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name ${t(40)} NOT NULL,
+      position INT NOT NULL DEFAULT 0,
+      created_at BIGINT NOT NULL
+    );
+    CREATE INDEX watch_lists_user ON watch_lists(user_id, position);
+    CREATE TABLE watch_list_items (
+      list_id INT NOT NULL REFERENCES watch_lists(id) ON DELETE CASCADE,
+      coin ${t(64)} NOT NULL,
+      position INT NOT NULL DEFAULT 0,
+      added_at BIGINT NOT NULL,
+      PRIMARY KEY (list_id, coin)
+    );`,
+    `INSERT INTO watch_lists(user_id, name, position, created_at) SELECT DISTINCT user_id, N'Favorite', 0, ${NOW_MS} FROM watchlist;
+    INSERT INTO watch_list_items(list_id, coin, position, added_at) SELECT l.id, w.coin, w.position, w.added_at FROM watchlist w JOIN watch_lists l ON l.user_id = w.user_id;`,
+  ],
+  // 10 — FD-BOT: the trading bots (the user's settings, the engine's state), their closed trades and their journal. No
+  // key to the account: a deleted account is found by the engine (a second cascade path from users is refused).
+  [
+    `CREATE TABLE bots (
+      id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+      user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name ${t(60)} NOT NULL,
+      strategy ${t(16)} NOT NULL,
+      execution ${t(8)} NOT NULL,
+      account_id INT NULL,
+      market ${t(8)} NOT NULL,
+      area ${t(8)} NOT NULL,
+      symbols ${t('MAX')} NOT NULL,
+      tf ${t(8)} NOT NULL,
+      config ${t('MAX')} NOT NULL,
+      status ${t(12)} NOT NULL,
+      status_reason ${t(600)} NULL,
+      command ${t('MAX')} NULL,
+      state ${t('MAX')} NOT NULL,
+      starts_at BIGINT NOT NULL,
+      ends_at BIGINT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      ran_at BIGINT NULL
+    );
+    CREATE INDEX bots_user ON bots(user_id, created_at);
+    CREATE INDEX bots_status ON bots(status);
+    CREATE TABLE bot_trades (
+      id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+      bot_id INT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+      symbol ${t(40)} NOT NULL,
+      side ${t(8)} NOT NULL,
+      qty FLOAT NOT NULL,
+      entry FLOAT NOT NULL,
+      [exit] FLOAT NOT NULL,
+      pnl FLOAT NOT NULL,
+      fees FLOAT NOT NULL,
+      opened_at BIGINT NOT NULL,
+      closed_at BIGINT NOT NULL,
+      reason ${t(16)} NOT NULL
+    );
+    CREATE INDEX bot_trades_bot ON bot_trades(bot_id, closed_at);
+    CREATE TABLE bot_events (
+      id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+      bot_id INT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+      at BIGINT NOT NULL,
+      kind ${t(12)} NOT NULL,
+      symbol ${t(40)} NULL,
+      message ${t(600)} NOT NULL,
+      detail ${t('MAX')} NULL
+    );
+    CREATE INDEX bot_events_bot ON bot_events(bot_id, id);`,
   ],
 ];
 

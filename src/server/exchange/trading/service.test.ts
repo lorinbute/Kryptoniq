@@ -17,7 +17,7 @@ import type { ClientFactory } from '../accounts.ts';
 import { hashPassword } from '../../auth/passwords.ts';
 import { computeCode, decodeBase32, newSecret, stepFor } from '../../auth/totp.ts';
 import { softAuthenticator } from '../../test/soft-authenticator.ts';
-import type { OrderPreview, OrderTicket } from '../../../shared/trading.ts';
+import type { ModifyResult, ModifyTicket, OrderPreview, OrderTicket, ReverseTicket } from '../../../shared/trading.ts';
 import { TRADE_ACTIONS_PER_MINUTE, type TraderFactory } from './service.ts';
 import { TradingError, type Trader } from './types.ts';
 
@@ -37,6 +37,12 @@ const placed: OrderPreview[] = [];
 let normalizeErrors: string[] = [];
 let placeError: Error | null = null;
 let built = 0;
+/** FD-ORDEREDIT: the changes sent, and what the simulated platform answers. */
+const modified: ModifyTicket[] = [];
+let modifyErrors: string[] = [];
+let modifyResult: ModifyResult = { status: 'done', steps: [{ change: 0, what: 'modificat', ok: true, orderId: 'o9', message: null }] };
+/** FD-REVERSE: the reversals sent. */
+const reversed: ReverseTicket[] = [];
 
 const fakeClients: ClientFactory = () => ({ spot: { privateGetUserApiKey: async () => ({ data: { permission } }) } as never, futures: null });
 const fakeTrader: TraderFactory = () => {
@@ -52,6 +58,31 @@ const fakeTrader: TraderFactory = () => {
       return { status: 'open', orderId: `o${placed.length}`, message: null, followUps: [] };
     },
     cancel: async (c) => ({ status: 'cancelled', orderId: c.orderId, message: null, followUps: [] }),
+    normalizeModify: async (t: ModifyTicket) => ({
+      preview: {
+        ticket: t,
+        displaySymbol: t.symbol,
+        last: 100,
+        currency: 'USDT',
+        env: 'live',
+        steps: t.changes.map((_c, i) => ({ change: i, how: 'amend' as const, orderId: 'o1', side: 'sell' as const, kind: 'sl', before: { price: null, triggerPrice: 90, amount: 1, takeProfit: null, stopLoss: null }, after: { price: null, triggerPrice: 95, amount: 1, takeProfit: null, stopLoss: null }, removes: false })),
+        warnings: [],
+        errors: [...modifyErrors],
+      },
+      internal: { secret: 'kept on the server' },
+    }),
+    modify: async (plan) => {
+      modified.push(plan.preview.ticket);
+      return modifyResult;
+    },
+    normalizeReverse: async (t: ReverseTicket) => ({
+      preview: { ticket: t, displaySymbol: 'BTC/USDT perpetuu', base: 'BTC', from: { side: t.side, amount: 0.01 }, to: { side: t.side === 'long' ? 'short' : 'long', amount: 0.01 }, leverage: 5, marginMode: 'isolated', last: 100, cancels: 1, hedged: false, warnings: [], errors: [], env: '' },
+      internal: { secret: 'kept on the server' },
+    }),
+    reverse: async (plan) => {
+      reversed.push(plan.preview.ticket);
+      return { status: 'done', steps: [{ change: 0, what: 'poziția închisă', ok: true, orderId: 'c1', message: null }, { change: 0, what: 'poziția opusă deschisă', ok: true, orderId: 'c2', message: null }] };
+    },
   };
   return trader;
 };
@@ -72,6 +103,10 @@ beforeEach(async () => {
   normalizeErrors = [];
   placeError = null;
   built = 0;
+  modified.length = 0;
+  reversed.length = 0;
+  modifyErrors = [];
+  modifyResult = { status: 'done', steps: [{ change: 0, what: 'modificat', ok: true, orderId: 'o9', message: null }] };
 });
 
 afterEach(async () => {
@@ -331,5 +366,103 @@ describe('sending an order (FD-TRADING §3, §6)', () => {
     // Deleting the account keeps the journal (and forgets the trader).
     expect((await app.inject({ method: 'DELETE', url: `/api/accounts/${id}`, headers: H })).statusCode).toBe(200);
     expect((await get('/api/trading/log')).json().length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('changing an order or a stop loss (FD-ORDEREDIT)', () => {
+  const change = (id: number, n: number, extra: Partial<ModifyTicket> = {}) => ({
+    accountId: id,
+    idemKey: key(n),
+    market: 'futures',
+    symbol: 'BTC/USDT:USDT',
+    position: { side: 'long' },
+    changes: [{ what: 'sl', orderId: 'o1', level: 95 }],
+    ...extra,
+  });
+
+  it('checks without sending; the plan stays on the server', async () => {
+    const id = await kucoin();
+    await enable(id);
+    const r = await post(`/api/trading/${id}/modify/preview`, change(id, 1));
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ steps: [{ how: 'amend', after: { triggerPrice: 95 } }], errors: [], env: 'live' });
+    expect(r.json().internal).toBeUndefined();
+    expect(JSON.stringify(r.json())).not.toContain('kept on the server');
+    expect(modified).toHaveLength(0);
+  });
+
+  it('sends once per form, journals it, and answers a second send with the first result', async () => {
+    const id = await kucoin();
+    await enable(id);
+    const first = await post(`/api/trading/${id}/modify`, change(id, 2));
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toEqual(modifyResult);
+    const again = await post(`/api/trading/${id}/modify`, change(id, 2));
+    expect(again.json()).toEqual(modifyResult);
+    expect(modified).toHaveLength(1);
+    const log = (await get('/api/trading/log')).json();
+    expect(log[0]).toMatchObject({ action: 'modify', symbol: 'BTC/USDT:USDT', status: 'sent', orderId: 'o9', message: 'modificat' });
+  });
+
+  it('a refused check sends nothing and frees the form; a failure and a partial outcome are journaled', async () => {
+    const id = await kucoin();
+    await enable(id);
+    modifyErrors = ['Stop loss-ul unui long trebuie să fie sub prețul de acum (100): altfel s-ar executa imediat.'];
+    const bad = await post(`/api/trading/${id}/modify`, change(id, 3));
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toMatchObject({ code: 'INVALID', message: expect.stringMatching(/sub prețul de acum/) });
+    expect(modified).toHaveLength(0);
+    modifyErrors = [];
+    // The same form, corrected, goes out.
+    expect((await post(`/api/trading/${id}/modify`, change(id, 3))).statusCode).toBe(200);
+    modifyResult = { status: 'partial', steps: [{ change: 0, what: 'ordin nou plasat', ok: true, orderId: 'n2', message: null }, { change: 0, what: 'ordin vechi anulat', ok: false, orderId: 'o1', message: 'acum sunt amândouă' }] };
+    expect((await post(`/api/trading/${id}/modify`, change(id, 4))).json().status).toBe('partial');
+    expect((await get('/api/trading/log')).json()[0]).toMatchObject({ action: 'modify', status: 'sent', message: 'ordin nou plasat; ordin vechi anulat (acum sunt amândouă)' });
+  });
+
+  it('only on the own account, with trading on for the market, and a well formed form', async () => {
+    const id = await kucoin();
+    expect((await post(`/api/trading/${id}/modify`, change(id, 5))).json().error.code).toBe('DISABLED');
+    permission = 'General,Spot';
+    await enable(id);
+    // Spot only: a perpetual's change is futures.
+    expect((await post(`/api/trading/${id}/modify`, change(id, 6))).json().error.code).toBe('DISABLED');
+    await ctx.db.run("INSERT INTO users(email, name, password_hash, role, email_verified_at, totp_confirmed_at, created_at) VALUES (N'ana@example.com', N'Ana', N'x', N'user', 1, 1, 1)");
+    const anas = await account('kucoin', { apiKey: 'k7654321', secret: 's7654321', password: 'p7654321' }, 2);
+    expect((await post(`/api/trading/${anas}/modify`, change(anas, 7))).statusCode).toBe(404);
+    // The form names another account; a SL change without its position; nothing to change.
+    expect((await post(`/api/trading/${id}/modify`, change(id + 1, 8))).statusCode).toBe(400);
+    expect((await post(`/api/trading/${id}/modify`, { ...change(id, 9), position: undefined })).statusCode).toBe(400);
+    expect((await post(`/api/trading/${id}/modify`, { ...change(id, 10), changes: [] })).statusCode).toBe(400);
+    expect(modified).toHaveLength(0);
+  });
+});
+
+describe('a position turned the other way (FD-REVERSE)', () => {
+  const rev = (id: number, n: number, extra: object = {}) => ({ accountId: id, idemKey: key(n), symbol: 'BTC/USDT:USDT', side: 'long', ...extra });
+
+  it('checks without sending; sends once, journals it, a second send gets the first result', async () => {
+    const id = await kucoin();
+    await enable(id);
+    const p = await post(`/api/trading/${id}/reverse/preview`, rev(id, 31));
+    expect(p.json()).toMatchObject({ from: { side: 'long' }, to: { side: 'short' }, env: 'live' });
+    expect(JSON.stringify(p.json())).not.toContain('kept on the server');
+    expect(reversed).toHaveLength(0);
+    const first = await post(`/api/trading/${id}/reverse`, rev(id, 32));
+    expect(first.json().status).toBe('done');
+    expect((await post(`/api/trading/${id}/reverse`, rev(id, 32))).json().status).toBe('done');
+    expect(reversed).toHaveLength(1);
+    expect((await get('/api/trading/log')).json()[0]).toMatchObject({ action: 'reverse', symbol: 'BTC/USDT:USDT', status: 'sent', message: 'poziția închisă; poziția opusă deschisă' });
+  });
+
+  it('only with futures trading on, on the own account, for a well formed form', async () => {
+    const id = await kucoin();
+    expect((await post(`/api/trading/${id}/reverse`, rev(id, 33))).json().error.code).toBe('DISABLED');
+    permission = 'General,Spot';
+    await enable(id);
+    expect((await post(`/api/trading/${id}/reverse`, rev(id, 34))).json().error.code).toBe('DISABLED');
+    expect((await post(`/api/trading/${id}/reverse`, rev(id + 1, 35))).statusCode).toBe(400);
+    expect((await post(`/api/trading/${id}/reverse`, rev(id, 36, { side: 'flat' }))).statusCode).toBe(400);
+    expect(reversed).toHaveLength(0);
   });
 });

@@ -29,7 +29,7 @@ import {
   Globe,
   House,
   Landmark,
-  type LucideIcon,
+  Newspaper,
   OctagonX,
   Percent,
   ScrollText,
@@ -40,7 +40,9 @@ import {
   Star,
   Swords,
   Target,
+  TrendingDown,
   TrendingUp,
+  type LucideIcon,
   Vote,
 } from 'lucide-react';
 import { coinHue, eventKind, newsTopic, type EventKind, type NewsTopic } from '../icons.ts';
@@ -120,6 +122,7 @@ const TOPIC_ICON: Record<Exclude<NewsTopic, 'coin'>, [LucideIcon, string]> = {
   crypto: [Bitcoin, 'text-accent'],
   macro: [ChartNoAxesCombined, 'text-muted'],
   geopolitics: [Globe, 'text-muted'],
+  other: [Newspaper, 'text-muted'],
 };
 
 export const TOPIC_LABEL: Record<NewsTopic, string> = {
@@ -144,6 +147,7 @@ export const TOPIC_LABEL: Record<NewsTopic, string> = {
   crypto: 'crypto',
   macro: 'macro',
   geopolitics: 'geopolitică',
+  other: 'altele',
 };
 
 /**
@@ -242,6 +246,11 @@ const ALERT_ICON: Record<string, [LucideIcon, string]> = {
   atrStopLoss: [OctagonX, 'text-bear'],
   msBullish: [ArrowUpFromLine, 'text-bull'],
   msBearish: [ArrowDownToLine, 'text-bear'],
+  // FD-SLINGSHOT34: the SHORT side's; a short's take profit is a gain, so green like the long's.
+  shortSignal: [TrendingDown, 'text-bear'],
+  shortTakeProfitSignal: [Target, 'text-bull'],
+  shortAtrTakeProfit: [Crosshair, 'text-bull'],
+  shortAtrStopLoss: [OctagonX, 'text-bear'],
 };
 
 export function AlertIcon({ type, size = 15 }: { type: string; size?: number }) {

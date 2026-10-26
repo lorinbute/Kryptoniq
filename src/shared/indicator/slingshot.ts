@@ -1,6 +1,6 @@
-// Port of "[Dusty Investments] Slingshot System Long 3.3" (Pine v5) — line-by-line translation.
-// Source: Sling Shot System/sling-shot-system.pine. Keep the statement order identical to Pine:
-// the long state machine is path dependent. `var` variables are state; everything else is per-bar.
+// Port of "[Dusty Investments] Slingshot System 3.4" (Pine v5) — line-by-line translation.
+// Source: Sling Shot System/sling-shot-system-3.4.pine. Keep the statement order identical to Pine:
+// the long and short state machines are path dependent. `var` variables are state; everything else is per-bar.
 import { Ema, Extreme, isNa, pivotHighAt, pivotLowAt, Rsi, Rma, Sma, StochSelf, trueRange } from './pine.ts';
 import type { SlingshotParams } from './params.ts';
 
@@ -14,27 +14,47 @@ export interface Candle {
   v: number;
 }
 
-export type AlertType = 'longSignal' | 'takeProfitSignal' | 'atrTakeProfit' | 'atrStopLoss' | 'msBullish' | 'msBearish';
+export type AlertType =
+  | 'longSignal'
+  | 'takeProfitSignal'
+  | 'atrTakeProfit'
+  | 'atrStopLoss'
+  | 'msBullish'
+  | 'msBearish'
+  // v3.4: the SHORT side's
+  | 'shortSignal'
+  | 'shortTakeProfitSignal'
+  | 'shortAtrTakeProfit'
+  | 'shortAtrStopLoss';
+
+export type SignalSide = 'long' | 'short';
 
 export interface SlingshotMarker {
   id: number;
   bar: number;
   time: number;
-  kind: 'long' | 'longPreview' | 'takeProfit';
-  /** 'tp' = longTPColor (green), 'sl' = longSLColor (red). */
-  color: 'tp' | 'sl';
+  /** `stopLoss` / `shortStopLoss`: the bar where a signal failed (FD-SSSL). */
+  kind: 'long' | 'longPreview' | 'takeProfit' | 'stopLoss' | 'short' | 'shortPreview' | 'shortTakeProfit' | 'shortStopLoss';
+  /**
+   * How it looks (FD-SS34LIVE): 'signal' = valid, in its own colour (a LONG's, a SHORT's, a take profit's), 'failed' = a
+   * signal that hit its stop loss, 'invalid' = replaced by a newer signal or ended by a trend flip (an X), or shown so
+   * while a newer one of its side is forming.
+   */
+  color: LabelColor;
   /** True when the marker sits on the still-forming candle. */
   provisional: boolean;
 }
 
 export interface SlingshotSignal {
-  /** Bar of the V2 low (where the LONG label is drawn). */
+  side: SignalSide;
+  /** Bar of the V2 low (LONG) or high (SHORT), where the label is drawn. */
   bar: number;
   time: number;
-  /** Bar on which the signal was confirmed (exit from oversold). */
+  /** Bar on which the signal was confirmed (exit from oversold, or overbought for a SHORT). */
   confirmBar: number;
   confirmTime: number;
-  entryLow: number;
+  /** The V2 low of a LONG, the V2 high of a SHORT. */
+  entry: number;
   sl: number;
   tp: number;
   breakout: number;
@@ -53,6 +73,8 @@ export interface SlingshotAlert {
 }
 
 export interface AtrDisplay {
+  /** A SHORT's TP is below the price, its SL above. */
+  side: SignalSide;
   tp: number;
   sl: number;
   fromBar: number;
@@ -85,7 +107,10 @@ export interface SlingshotResult {
   markers: SlingshotMarker[];
   signals: SlingshotSignal[];
   alerts: SlingshotAlert[];
+  /** The LONG's TP/SL on display (as in 3.3): its tracked signal, else its setup still forming. */
   atr: AtrDisplay | null;
+  /** The SHORT's, independent of the LONG's (v3.4). */
+  atrShort: AtrDisplay | null;
   ms: MsDisplay | null;
   /** Last bar's state, convenient for scanners. */
   last: {
@@ -93,7 +118,11 @@ export interface SlingshotResult {
     uptrend: boolean;
     waitingLongTP: boolean;
     tpHit: boolean;
+    /** A LONG setup forming (V2 searched). */
     liveSignal: boolean;
+    waitingShortTP: boolean;
+    shortTpHit: boolean;
+    liveShortSignal: boolean;
     msUpper: number;
     msLower: number;
     kLine: number;
@@ -117,13 +146,14 @@ export interface SlingshotInput {
 
 const MAX_LABELS = 500;
 
-type LabelKind = 'long' | 'longPreview' | 'takeProfit' | 'atr' | 'ms';
+type LabelKind = 'long' | 'longPreview' | 'takeProfit' | 'stopLoss' | 'short' | 'shortPreview' | 'shortTakeProfit' | 'shortStopLoss' | 'atr' | 'ms';
+export type LabelColor = 'signal' | 'failed' | 'invalid';
 
 interface LabelRec {
   id: number;
   bar: number;
   kind: LabelKind;
-  color: 'tp' | 'sl';
+  color: LabelColor;
   alive: boolean;
 }
 
@@ -133,7 +163,7 @@ export class LabelRegistry {
   private aliveCount = 0;
   private gcCursor = 0;
 
-  create(bar: number, kind: LabelKind, color: 'tp' | 'sl'): number {
+  create(bar: number, kind: LabelKind, color: LabelColor): number {
     const rec: LabelRec = { id: this.all.length, bar, kind, color, alive: true };
     this.all.push(rec);
     this.aliveCount++;
@@ -156,7 +186,7 @@ export class LabelRegistry {
     }
   }
 
-  setColor(id: number, color: 'tp' | 'sl'): void {
+  setColor(id: number, color: LabelColor): void {
     const rec = this.all[id];
     if (rec && rec.alive) rec.color = color;
   }
@@ -278,6 +308,7 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
     signals: [],
     alerts: [],
     atr: null,
+    atrShort: null,
     ms: null,
     last: null,
     warnings,
@@ -326,6 +357,12 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
   let longTPHigh = NaN;
   const currentCycleLabel: number | null = null; // never assigned in the Pine script
 
+  // SHORT: the same, mirrored (v3.4)
+  let waitingShortTP = false;
+  let shortTpHit = false;
+  let shortTpLabel: number | null = null;
+  let shortTPLow = NaN;
+
   // ===================== ATR variables =====================
   let activeLongSignalBar = NaN;
   let activeLongSignalLow = NaN;
@@ -334,11 +371,23 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
   let storedTakeProfitAtr = NaN;
   let storedStopLossAtr = NaN;
 
+  // SHORT: the bar and high of the signal, the lowest low at signal time, the ATR values
+  let activeShortSignalBar = NaN;
+  let activeShortSignalHigh = NaN;
+  let storedLowestLow = NaN;
+  let storedLowestBar = NaN; // written like in Pine, never read
+  let storedShortTakeProfitAtr = NaN;
+  let storedShortStopLossAtr = NaN;
+
   // ===================== History tracking =====================
   const activeSignalLabels: number[] = [];
   const activeSignalSLs: number[] = [];
   const activeSignalTPs: number[] = [];
   const activeSignalBreakoutLevels: number[] = [];
+  const activeShortLabels: number[] = [];
+  const activeShortSLs: number[] = [];
+  const activeShortTPs: number[] = [];
+  const activeShortBreakoutLevels: number[] = [];
   const signalByLabel = new Map<number, SlingshotSignal>();
 
   // ===================== LONG state =====================
@@ -353,6 +402,19 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
   let bullV2BestLow = NaN;
   let bullV2Preview: number | null = null;
   let bullTrendIntegrity = false;
+
+  // ===================== SHORT state (the LONG's mirror) =====================
+  let bearCandidV1Idx = NaN;
+  let bearCandidV1High = NaN;
+  let bearV1Idx = NaN;
+  let bearV1High = NaN;
+  let bearDealIdx = NaN;
+  let bearNeedNewDeal = true;
+  let bearV2Search = false;
+  let bearV2BestIdx = NaN;
+  let bearV2BestHigh = NaN;
+  let bearV2Preview: number | null = null;
+  let bearTrendIntegrity = false;
 
   // ===================== Market structure state =====================
   let msSwingHigh = NaN;
@@ -375,11 +437,14 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
   // Per-bar drawings that Pine deletes and recreates each bar.
   let atrLabelTp: number | null = null;
   let atrLabelSl: number | null = null;
+  let atrShortLabelTp: number | null = null;
+  let atrShortLabelSl: number | null = null;
   let msHighLabel: number | null = null;
   let msLowLabel: number | null = null;
 
   let kLine = NaN;
   let isUptrend = false;
+  const lowAt = (bar: number) => (bar >= 0 && bar < n ? (low[bar] as number) : NaN);
 
   const closeSignal = (labelId: number, outcome: SlingshotSignal['outcome'], reason: SlingshotSignal['outcomeReason'], bar: number) => {
     const s = signalByLabel.get(labelId);
@@ -404,6 +469,20 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
     return [h, b];
   };
 
+  /** The lowest low of the `lb` bars before `i` (the SHORT breakout). */
+  const getLowestLow = (i: number, lb: number): [number, number] => {
+    let l = lowAt(i - 1);
+    let b = i - 1;
+    for (let k = 1; k <= lb; k++) {
+      const v = lowAt(i - k);
+      if (v < l) {
+        l = v;
+        b = i - k;
+      }
+    }
+    return [l, b];
+  };
+
   for (let i = 0; i < n; i++) {
     const bar = candles[i] as Candle;
     const hi = bar.h;
@@ -419,6 +498,7 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
     const stopLossAtrValue = currentAtr * p.stopLossMultiplier;
 
     isUptrend = emaFast > emaSlow;
+    const isDowntrend = emaFast < emaSlow;
 
     const emaUpper = Math.max(emaFast, emaSlow);
     const emaLower = Math.min(emaFast, emaSlow);
@@ -427,6 +507,7 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
     const lowerTol = emaLower * (1 - tol);
     const cloudOverlapTol = hi >= lowerTol && lo <= upperTol;
     const cloudTouchLongTol = isUptrend && cloudOverlapTol;
+    const cloudTouchShortTol = isDowntrend && cloudOverlapTol;
 
     const kGE80 = kLine >= p.stochOverbought - p.kTol;
     const kLE20 = kLine <= p.stochOversold + p.kTol;
@@ -437,15 +518,19 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
     let alertAtrSL = false;
     let alertMsBull = false;
     let alertMsBear = false;
+    let alertSellSignal = false;
+    let alertShortTPSignal = false;
+    let alertShortAtrTP = false;
+    let alertShortAtrSL = false;
 
     // V1 candidate: in uptrend, K ≤ oversold and price touches the cloud
-    if (isUptrend && kLine <= p.stochOversold && cloudTouchLongTol) {
+    if (p.showLong && isUptrend && kLine <= p.stochOversold && cloudTouchLongTol) {
       bullCandidV1Idx = i;
       bullCandidV1Low = lo;
     }
 
-    // Lock the deal when K reaches ≥ overbought in uptrend
-    if (isUptrend && kGE80) {
+    // Lock the deal when K reaches ≥ overbought in uptrend (no deal, no LONG cycle: Long Signals off stops here)
+    if (p.showLong && isUptrend && kGE80) {
       bullDealIdx = i;
       bullV1Idx = bullCandidV1Idx;
       bullV1Low = bullCandidV1Low;
@@ -500,7 +585,7 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
       bullV2BestIdx = i;
       bullV2BestLow = lo;
       if (bullV2Preview !== null) labels.delete(bullV2Preview);
-      bullV2Preview = labels.create(bullV2BestIdx, 'longPreview', 'tp');
+      bullV2Preview = labels.create(bullV2BestIdx, 'longPreview', 'signal');
       liveSignalActive = true;
       liveSignalLow = lo;
       liveSignalBar = i;
@@ -544,7 +629,7 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
             bullV2BestIdx = i;
             bullV2BestLow = lo;
             if (bullV2Preview !== null) labels.delete(bullV2Preview);
-            bullV2Preview = labels.create(bullV2BestIdx, 'longPreview', 'tp');
+            bullV2Preview = labels.create(bullV2BestIdx, 'longPreview', 'signal');
           }
           liveSignalActive = true;
           liveSignalLow = i === bullV2BestIdx ? lo : bullV2BestLow;
@@ -557,7 +642,7 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
           // NEW SIGNAL CONFIRMED — every still-tracked signal turns red
           for (let k = activeSignalLabels.length - 1; k >= 0; k--) {
             const oldLbl = activeSignalLabels[k] as number;
-            labels.setColor(oldLbl, 'sl');
+            labels.setColor(oldLbl, 'invalid');
             closeSignal(oldLbl, 'invalidated', 'superseded', i);
             activeSignalLabels.splice(k, 1);
             activeSignalSLs.splice(k, 1);
@@ -565,7 +650,7 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
             activeSignalBreakoutLevels.splice(k, 1);
           }
 
-          const l = labels.create(bullV2BestIdx, 'long', 'tp');
+          const l = labels.create(bullV2BestIdx, 'long', 'signal');
           waitingLongTP = true;
           tpHit = false;
           tpLabel = null;
@@ -590,11 +675,12 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
           activeSignalTPs.push(preciseTP);
           activeSignalBreakoutLevels.push(storedHighestHigh);
           const sig: SlingshotSignal = {
+            side: 'long',
             bar: bullV2BestIdx,
             time: timeOf(bullV2BestIdx),
             confirmBar: i,
             confirmTime: timeOf(i),
-            entryLow: bullV2BestLow,
+            entry: bullV2BestLow,
             sl: preciseSL,
             tp: preciseTP,
             breakout: storedHighestHigh,
@@ -628,7 +714,7 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
       bullV2Preview = null;
       for (let k = activeSignalLabels.length - 1; k >= 0; k--) {
         const oldLbl = activeSignalLabels[k] as number;
-        labels.setColor(oldLbl, 'sl');
+        labels.setColor(oldLbl, 'invalid');
         closeSignal(oldLbl, 'invalidated', 'trendFlip', i);
         activeSignalLabels.splice(k, 1);
         activeSignalSLs.splice(k, 1);
@@ -637,12 +723,217 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
       }
     }
 
+    // v3.4 (FD-SS34LIVE): while a new LONG is forming (its label is on the chart, not confirmed yet), the LONG still
+    // tracked shows as invalidated; if the new one goes away unconfirmed, the old one shows as valid again.
+    for (const lbl of activeSignalLabels) labels.setColor(lbl, bullV2Search ? 'invalid' : 'signal');
+
+    // ===================== SHORT (v3.4: the LONG mirrored) =====================
+    // V1 candidate: in downtrend, K ≥ overbought and price touches the cloud
+    if (p.showShort && isDowntrend && kLine >= p.stochOverbought && cloudTouchShortTol) {
+      bearCandidV1Idx = i;
+      bearCandidV1High = hi;
+    }
+
+    // Lock the deal when K reaches ≤ oversold in downtrend
+    if (p.showShort && isDowntrend && kLE20) {
+      bearDealIdx = i;
+      bearV1Idx = bearCandidV1Idx;
+      bearV1High = bearCandidV1High;
+      bearNeedNewDeal = false;
+      bearV2Search = false;
+      bearV2BestIdx = NaN;
+      bearV2BestHigh = NaN;
+      if (bearV2Preview !== null) labels.delete(bearV2Preview);
+      bearV2Preview = null;
+      bearTrendIntegrity = true;
+    }
+
+    // Invalidate current short cycle if trend flips
+    if (!isNa(bearV1Idx) && bearTrendIntegrity && !isDowntrend) {
+      bearTrendIntegrity = false;
+      bearNeedNewDeal = true;
+      bearV2Search = false;
+      bearV2BestIdx = NaN;
+      bearV2BestHigh = NaN;
+      if (bearV2Preview !== null) labels.delete(bearV2Preview);
+      bearV2Preview = null;
+      bearV1Idx = NaN;
+      bearV1High = NaN;
+      bearDealIdx = NaN;
+      if (!waitingShortTP) {
+        activeShortSignalBar = NaN;
+        activeShortSignalHigh = NaN;
+        storedLowestLow = NaN;
+        storedLowestBar = NaN;
+      }
+    }
+
+    let liveShortHigh = NaN;
+    let liveShortBar = NaN;
+    let liveShortActive = false;
+
+    // Start V2 search: new rally below the V1 high, still in downtrend and touching cloud
+    if (
+      bearTrendIntegrity &&
+      !bearNeedNewDeal &&
+      !bearV2Search &&
+      !isNa(bearDealIdx) &&
+      !isNa(bearV1Idx) &&
+      isDowntrend &&
+      kLine >= p.stochOverbought &&
+      cloudTouchShortTol &&
+      i > bearDealIdx &&
+      hi < bearV1High
+    ) {
+      bearV2Search = true;
+      bearV2BestIdx = i;
+      bearV2BestHigh = hi;
+      if (bearV2Preview !== null) labels.delete(bearV2Preview);
+      bearV2Preview = labels.create(bearV2BestIdx, 'shortPreview', 'signal');
+      liveShortActive = true;
+      liveShortHigh = hi;
+      liveShortBar = i;
+    }
+
+    // Track the best V2 high while conditions hold
+    if (bearV2Search) {
+      if (!isDowntrend) {
+        if (bearV2Preview !== null) labels.delete(bearV2Preview);
+        bearV2Search = false;
+        bearV2BestIdx = NaN;
+        bearV2BestHigh = NaN;
+        bearTrendIntegrity = false;
+        bearNeedNewDeal = true;
+        bearV1Idx = NaN;
+        bearV1High = NaN;
+        bearDealIdx = NaN;
+        if (!waitingShortTP) {
+          activeShortSignalBar = NaN;
+          activeShortSignalHigh = NaN;
+          storedLowestLow = NaN;
+          storedLowestBar = NaN;
+        }
+      } else if (kGE80) {
+        if (hi >= bearV1High) {
+          // The rally reaches the V1 high: cancel the V2 search
+          if (bearV2Preview !== null) labels.delete(bearV2Preview);
+          bearV2Search = false;
+          bearV2BestIdx = NaN;
+          bearV2BestHigh = NaN;
+          if (!waitingShortTP) {
+            activeShortSignalBar = NaN;
+            activeShortSignalHigh = NaN;
+            storedLowestLow = NaN;
+            storedLowestBar = NaN;
+          }
+        } else {
+          if (hi > bearV2BestHigh) {
+            bearV2BestIdx = i;
+            bearV2BestHigh = hi;
+            if (bearV2Preview !== null) labels.delete(bearV2Preview);
+            bearV2Preview = labels.create(bearV2BestIdx, 'shortPreview', 'signal');
+          }
+          liveShortActive = true;
+          liveShortHigh = i === bearV2BestIdx ? hi : bearV2BestHigh;
+          liveShortBar = bearV2BestIdx;
+        }
+      } else {
+        // Exit overbought: finalize SHORT if V2 is valid below the V1 high
+        if (bearV2Preview !== null) labels.delete(bearV2Preview);
+        if (!isNa(bearV2BestIdx) && bearV2BestHigh < bearV1High && isDowntrend) {
+          // NEW SHORT CONFIRMED — every still-tracked SHORT turns red
+          for (let k = activeShortLabels.length - 1; k >= 0; k--) {
+            const oldLbl = activeShortLabels[k] as number;
+            labels.setColor(oldLbl, 'invalid');
+            closeSignal(oldLbl, 'invalidated', 'superseded', i);
+            activeShortLabels.splice(k, 1);
+            activeShortSLs.splice(k, 1);
+            activeShortTPs.splice(k, 1);
+            activeShortBreakoutLevels.splice(k, 1);
+          }
+
+          const shortLbl = labels.create(bearV2BestIdx, 'short', 'signal');
+          waitingShortTP = true;
+          shortTpHit = false;
+          shortTpLabel = null;
+          shortTPLow = NaN;
+          bearNeedNewDeal = true;
+          bearTrendIntegrity = false;
+
+          activeShortSignalBar = bearV2BestIdx;
+          activeShortSignalHigh = bearV2BestHigh;
+          storedShortTakeProfitAtr = takeProfitAtrValue;
+          storedShortStopLossAtr = stopLossAtrValue;
+          const [lowest, lowestBar] = getLowestLow(i, p.lookback);
+          storedLowestLow = lowest;
+          storedLowestBar = lowestBar;
+
+          alertSellSignal = true;
+
+          const preciseShortSL = bearV2BestHigh + stopLossAtrValue;
+          const preciseShortTP = storedLowestLow - takeProfitAtrValue;
+          activeShortLabels.push(shortLbl);
+          activeShortSLs.push(preciseShortSL);
+          activeShortTPs.push(preciseShortTP);
+          activeShortBreakoutLevels.push(storedLowestLow);
+          const sig: SlingshotSignal = {
+            side: 'short',
+            bar: bearV2BestIdx,
+            time: timeOf(bearV2BestIdx),
+            confirmBar: i,
+            confirmTime: timeOf(i),
+            entry: bearV2BestHigh,
+            sl: preciseShortSL,
+            tp: preciseShortTP,
+            breakout: storedLowestLow,
+            outcome: 'active',
+            provisional: isProvisional(i),
+          };
+          signalByLabel.set(shortLbl, sig);
+          result.signals.push(sig);
+        } else if (!waitingShortTP) {
+          activeShortSignalBar = NaN;
+          activeShortSignalHigh = NaN;
+          storedLowestLow = NaN;
+          storedLowestBar = NaN;
+        }
+        bearV2Search = false;
+        bearV2BestIdx = NaN;
+        bearV2BestHigh = NaN;
+      }
+    }
+
+    // Full reset of SHORT state if trend flips and we are not searching V2
+    if (!isDowntrend && !bearV2Search && !isNa(bearDealIdx)) {
+      bearCandidV1Idx = NaN;
+      bearCandidV1High = NaN;
+      bearV1Idx = NaN;
+      bearV1High = NaN;
+      bearDealIdx = NaN;
+      bearNeedNewDeal = true;
+      bearTrendIntegrity = false;
+      if (bearV2Preview !== null) labels.delete(bearV2Preview);
+      bearV2Preview = null;
+      for (let k = activeShortLabels.length - 1; k >= 0; k--) {
+        const oldLbl = activeShortLabels[k] as number;
+        labels.setColor(oldLbl, 'invalid');
+        closeSignal(oldLbl, 'invalidated', 'trendFlip', i);
+        activeShortLabels.splice(k, 1);
+        activeShortSLs.splice(k, 1);
+        activeShortTPs.splice(k, 1);
+        activeShortBreakoutLevels.splice(k, 1);
+      }
+    }
+
+    // v3.4: the same for the SHORT.
+    for (const lbl of activeShortLabels) labels.setColor(lbl, bearV2Search ? 'invalid' : 'signal');
+
     // Take profit logic
     if (waitingLongTP && hi > storedHighestHigh) {
       if (tpLabel === null || hi > longTPHigh) {
         longTPHigh = hi;
         if (tpLabel !== null) labels.setBar(tpLabel, i);
-        else tpLabel = labels.create(i, 'takeProfit', 'tp');
+        else tpLabel = labels.create(i, 'takeProfit', 'signal');
       }
       if (!tpHit) alertTPSignal = true;
       tpHit = true;
@@ -674,13 +965,16 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
       const tpSignalAppeared = hi > breakoutPrice;
       const hitAtrTP = hi >= tpPrice;
       if (tpSignalAppeared || hitAtrTP) {
+        labels.setColor(lbl, 'signal');
         closeSignal(lbl, 'tp', tpSignalAppeared ? 'takeProfitSignal' : 'atrTakeProfit', i);
         activeSignalLabels.splice(k, 1);
         activeSignalSLs.splice(k, 1);
         activeSignalTPs.splice(k, 1);
         activeSignalBreakoutLevels.splice(k, 1);
       } else if (lo <= slPrice) {
-        labels.setColor(lbl, 'sl');
+        labels.setColor(lbl, 'failed');
+        // v3.4 (FD-SSSL): the bar where it failed, as the TAKE PROFIT label marks a success
+        labels.create(i, 'stopLoss', 'signal');
         closeSignal(lbl, 'sl', 'stopLoss', i);
         activeSignalLabels.splice(k, 1);
         activeSignalSLs.splice(k, 1);
@@ -689,48 +983,127 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
       }
     }
 
+    // ===================== SHORT: take profit, stop loss, history (v3.4) =====================
+    if (waitingShortTP && lo < storedLowestLow) {
+      if (shortTpLabel === null || lo < shortTPLow) {
+        shortTPLow = lo;
+        if (shortTpLabel !== null) labels.setBar(shortTpLabel, i);
+        else shortTpLabel = labels.create(i, 'shortTakeProfit', 'signal');
+      }
+      if (!shortTpHit) alertShortTPSignal = true;
+      shortTpHit = true;
+    }
+
+    // SHORT ATR take profit hit
+    if (waitingShortTP && lo <= storedLowestLow - storedShortTakeProfitAtr) alertShortAtrTP = true;
+
+    // Stop loss (current SHORT)
+    if (waitingShortTP && hi > activeShortSignalHigh + storedShortStopLossAtr) {
+      alertShortAtrSL = true;
+      waitingShortTP = false;
+    }
+
+    // History: success first (a low below the breakout or the ATR target), then the stop loss
+    for (let k = activeShortLabels.length - 1; k >= 0; k--) {
+      const slPrice = activeShortSLs[k] as number;
+      const tpPrice = activeShortTPs[k] as number;
+      const breakoutPrice = activeShortBreakoutLevels[k] as number;
+      const lbl = activeShortLabels[k] as number;
+      const tpSignalAppeared = lo < breakoutPrice;
+      const hitAtrTP = lo <= tpPrice;
+      if (tpSignalAppeared || hitAtrTP) {
+        labels.setColor(lbl, 'signal');
+        closeSignal(lbl, 'tp', tpSignalAppeared ? 'takeProfitSignal' : 'atrTakeProfit', i);
+        activeShortLabels.splice(k, 1);
+        activeShortSLs.splice(k, 1);
+        activeShortTPs.splice(k, 1);
+        activeShortBreakoutLevels.splice(k, 1);
+      } else if (hi >= slPrice) {
+        labels.setColor(lbl, 'failed');
+        labels.create(i, 'shortStopLoss', 'signal');
+        closeSignal(lbl, 'sl', 'stopLoss', i);
+        activeShortLabels.splice(k, 1);
+        activeShortSLs.splice(k, 1);
+        activeShortTPs.splice(k, 1);
+        activeShortBreakoutLevels.splice(k, 1);
+      }
+    }
+
     // ========== ATR display logic ==========
     let displayTP = NaN;
     let displaySL = NaN;
     let displayBar = NaN;
     let shouldShow = false;
-    if (waitingLongTP) {
+    // v3.4 (FD-SSLIVEBOX): a LONG forming shows its own levels first, then the one tracked (whose tracking and alerts go
+    // on unchanged).
+    if (liveSignalActive) {
+      const [h] = getHighestHigh(i, p.lookback);
+      displayTP = h + takeProfitAtrValue;
+      displaySL = liveSignalLow - stopLossAtrValue;
+      displayBar = liveSignalBar;
+      shouldShow = true;
+    } else if (waitingLongTP) {
       if (!p.hideAtrOnTP || !tpHit) {
         displayTP = storedHighestHigh + storedTakeProfitAtr;
         displaySL = activeLongSignalLow - storedStopLossAtr;
         displayBar = activeLongSignalBar;
         shouldShow = true;
       }
-    } else if (liveSignalActive) {
-      const [h] = getHighestHigh(i, p.lookback);
-      displayTP = h + takeProfitAtrValue;
-      displaySL = liveSignalLow - stopLossAtrValue;
-      displayBar = liveSignalBar;
-      shouldShow = true;
     }
     if (waitingLongTP && lo < activeLongSignalLow - storedStopLossAtr && p.hideAtrOnStop) shouldShow = false;
 
+    // SHORT (v3.4): the same, reversed - each side shows its own tracked signal, else its own setup still forming
+    let shortDisplayTP = NaN;
+    let shortDisplaySL = NaN;
+    let shortDisplayBar = NaN;
+    let shouldShowShort = false;
+    if (liveShortActive) {
+      const [lowest] = getLowestLow(i, p.lookback);
+      shortDisplayTP = lowest - takeProfitAtrValue;
+      shortDisplaySL = liveShortHigh + stopLossAtrValue;
+      shortDisplayBar = liveShortBar;
+      shouldShowShort = true;
+    } else if (waitingShortTP) {
+      if (!p.hideAtrOnTP || !shortTpHit) {
+        shortDisplayTP = storedLowestLow - storedShortTakeProfitAtr;
+        shortDisplaySL = activeShortSignalHigh + storedShortStopLossAtr;
+        shortDisplayBar = activeShortSignalBar;
+        shouldShowShort = true;
+      }
+    }
+    if (waitingShortTP && hi > activeShortSignalHigh + storedShortStopLossAtr && p.hideAtrOnStop) shouldShowShort = false;
+
+    // Pine deletes every drawing of the previous bar, then creates the LONG's labels and the SHORT's, in that order.
     labels.delete(atrLabelTp);
     labels.delete(atrLabelSl);
+    labels.delete(atrShortLabelTp);
+    labels.delete(atrShortLabelSl);
     atrLabelTp = null;
     atrLabelSl = null;
+    atrShortLabelTp = null;
+    atrShortLabelSl = null;
     if (shouldShow && p.showLabels) {
-      atrLabelTp = labels.create(i + 5, 'atr', 'tp');
-      atrLabelSl = labels.create(i + 5, 'atr', 'sl');
+      atrLabelTp = labels.create(i + 5, 'atr', 'signal');
+      atrLabelSl = labels.create(i + 5, 'atr', 'signal');
+    }
+    if (shouldShowShort && p.showLabels) {
+      atrShortLabelTp = labels.create(i + 5, 'atr', 'signal');
+      atrShortLabelSl = labels.create(i + 5, 'atr', 'signal');
     }
     if (i === n - 1) {
-      result.atr = shouldShow
-        ? {
-            tp: displayTP,
-            sl: displaySL,
-            fromBar: displayBar,
-            toBarTp: i + p.atrLineLengthTP,
-            toBarSl: i + p.atrLineLengthSL,
-            labelBar: i + 5,
-            showLines: p.showLines,
-            showLabels: p.showLabels,
-          }
-        : null;
+      const display = (side: SignalSide, tp: number, sl: number, fromBar: number): AtrDisplay => ({
+        side,
+        tp,
+        sl,
+        fromBar,
+        toBarTp: i + p.atrLineLengthTP,
+        toBarSl: i + p.atrLineLengthSL,
+        labelBar: i + 5,
+        showLines: p.showLines,
+        showLabels: p.showLabels,
+      });
+      result.atr = shouldShow ? display('long', displayTP, displaySL, displayBar) : null;
+      result.atrShort = shouldShowShort ? display('short', shortDisplayTP, shortDisplaySL, shortDisplayBar) : null;
     }
 
     // ========== Market structure logic ==========
@@ -854,8 +1227,8 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
     const msRightEdge = Math.trunc(Math.min(Math.max(Math.max(msMinEndUp, msMinEndDn), i + p.msRightExtend), i + 490));
     const showUpper = p.showMS && msEnabled && !isNa(msStructUpper);
     const showLower = p.showMS && msEnabled && !isNa(msStructLower);
-    if (showUpper) msHighLabel = labels.create(msRightEdge, 'ms', 'tp');
-    if (showLower) msLowLabel = labels.create(msRightEdge, 'ms', 'sl');
+    if (showUpper) msHighLabel = labels.create(msRightEdge, 'ms', 'signal');
+    if (showLower) msLowLabel = labels.create(msRightEdge, 'ms', 'signal');
     if (i === n - 1) {
       result.ms =
         showUpper || showLower
@@ -877,6 +1250,10 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
     if (alertTPSignal) pushAlert('takeProfitSignal');
     if (alertAtrTP) pushAlert('atrTakeProfit');
     if (alertAtrSL) pushAlert('atrStopLoss');
+    if (alertSellSignal) pushAlert('shortSignal');
+    if (alertShortTPSignal) pushAlert('shortTakeProfitSignal');
+    if (alertShortAtrTP) pushAlert('shortAtrTakeProfit');
+    if (alertShortAtrSL) pushAlert('shortAtrStopLoss');
     if (msEnabled) {
       if (alertMsBull) pushAlert('msBullish');
       if (alertMsBear) pushAlert('msBearish');
@@ -889,6 +1266,9 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
         waitingLongTP,
         tpHit,
         liveSignal: liveSignalActive,
+        waitingShortTP,
+        shortTpHit,
+        liveShortSignal: liveShortActive,
         msUpper: msEnabled ? msStructUpper : NaN,
         msLower: msEnabled ? msStructLower : NaN,
         kLine,
@@ -896,7 +1276,7 @@ export function runSlingshot(input: SlingshotInput): SlingshotResult {
     }
   }
 
-  for (const rec of labels.aliveOf(['long', 'longPreview', 'takeProfit'])) {
+  for (const rec of labels.aliveOf(['long', 'longPreview', 'takeProfit', 'stopLoss', 'short', 'shortPreview', 'shortTakeProfit', 'shortStopLoss'])) {
     result.markers.push({
       id: rec.id,
       bar: rec.bar,

@@ -1,5 +1,6 @@
 // Outbound HTTP with timeouts, a response-size cap and conditional requests.
 import { USER_AGENT } from '../config.ts';
+import { BrotliRefused, plainFetch } from './plain-fetch.ts';
 
 export class HttpError extends Error {
   readonly status: number;
@@ -30,11 +31,17 @@ export interface FetchTextResult {
 
 export type FetchFn = typeof fetch;
 
-let fetchImpl: FetchFn = (...args) => fetch(...args);
+let hook: FetchFn | null = null;
+/**
+ * FIX-BROTLI: outside content (feeds, pages, calendars) comes through `plainFetch`, which never decodes Brotli; the APIs
+ * of known services (brokers, e-mail, market data) keep Node's fetch.
+ */
+const contentFetch = (url: string, init: { headers: Record<string, string>; signal: AbortSignal }): Promise<Response> => (hook ? hook(url, { ...init, redirect: 'follow' }) : plainFetch(url, init));
+const apiFetch: FetchFn = (...args) => (hook ?? fetch)(...args);
 
-/** Test hook: replace the network layer. */
+/** Test hook: replace the network layer (both ways out). */
 export function setFetchImpl(fn: FetchFn | null): void {
-  fetchImpl = fn ?? ((...args) => fetch(...args));
+  hook = fn;
 }
 
 export async function fetchText(url: string, opts: FetchTextOptions = {}): Promise<FetchTextResult> {
@@ -44,8 +51,9 @@ export async function fetchText(url: string, opts: FetchTextOptions = {}): Promi
   if (opts.lastModified) headers['If-Modified-Since'] = opts.lastModified;
   let res: Response;
   try {
-    res = await fetchImpl(url, { headers, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
+    res = await contentFetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
   } catch (err) {
+    if (err instanceof BrotliRefused) throw new HttpError('BROTLI', err.message);
     const e = err as Error & { cause?: { code?: string } };
     if (e.name === 'TimeoutError' || e.name === 'AbortError') throw new HttpError('TIMEOUT', `Niciun răspuns în ${Math.round(timeoutMs / 1000)} s`);
     throw new HttpError('NETWORK', e.cause?.code ? `${e.message} (${e.cause.code})` : e.message);
@@ -147,7 +155,7 @@ export async function httpRequest(url: string, opts: { method?: string; headers?
   const { timeoutMs = 20_000, maxBytes = 10 * 1024 * 1024 } = opts;
   let res: Response;
   try {
-    res = await fetchImpl(url, { method: opts.method ?? 'GET', headers: { 'User-Agent': USER_AGENT, ...opts.headers }, body: opts.body, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
+    res = await apiFetch(url, { method: opts.method ?? 'GET', headers: { 'User-Agent': USER_AGENT, ...opts.headers }, body: opts.body, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
   } catch (err) {
     const e = err as Error & { cause?: { code?: string } };
     if (e.name === 'TimeoutError' || e.name === 'AbortError') throw new HttpError('TIMEOUT', `Niciun răspuns în ${Math.round(timeoutMs / 1000)} s`);

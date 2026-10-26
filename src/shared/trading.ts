@@ -131,7 +131,7 @@ export const TRADING: Record<ProviderId, PlatformTrading> = {
       'Pe Bybit: Profil → API → editează cheia (sau Create New Key) → „Read-Write”.',
       'Bifează „Spot → Trade” și / sau „Contracts → Orders, Positions”.',
       NO_WITHDRAW,
-      'Modul de marjă (cross / isolated) și modul one-way se aleg din Bybit: Sentiq nu le schimbă.',
+      'Modul de marjă (cross / isolated) se alege din Bybit: Sentiq nu-l schimbă. Modul pozițiilor (one-way / hedge) îl citește Sentiq.',
     ],
   },
   okx: {
@@ -141,7 +141,7 @@ export const TRADING: Record<ProviderId, PlatformTrading> = {
     amountIn: ['base', 'quote'],
     tif: ['gtc'],
     futures: { marginModes: ['cross', 'isolated'], tpsl: 'attached', maxLeverage: 100 },
-    tradeSteps: ['Pe OKX: Profil → API → editează cheia (sau Create API key).', 'Bifează „Trade”, pe lângă „Read”.', NO_WITHDRAW, 'Pentru futures, contul trebuie să fie în modul „net” (one-way).'],
+    tradeSteps: ['Pe OKX: Profil → API → editează cheia (sau Create API key).', 'Bifează „Trade”, pe lângă „Read”.', NO_WITHDRAW],
   },
   kraken: {
     supported: true,
@@ -256,6 +256,231 @@ export const orderTicketSchema = z
   });
 export type OrderTicket = z.infer<typeof orderTicketSchema>;
 
+// ---------------- FD-ORDEREDIT: changing an open order, or a position's stop loss / take profit ----------------
+
+/**
+ * One change. `sl` / `tp`: a position's protection, an existing order (`orderId`) or a new one (`orderId` null); a null
+ * `level` removes it. `order`: an open order's price, trigger, amount or attached TP / SL (null removes an attached one).
+ */
+export const modifyChangeSchema = z.discriminatedUnion('what', [
+  z
+    .object({
+      what: z.enum(['sl', 'tp']),
+      orderId: z.string().trim().min(1).max(120).nullable(),
+      level: positive('Nivelul').nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      what: z.literal('order'),
+      orderId: z.string().trim().min(1).max(120),
+      /** A stop / trigger order (several platforms keep them apart). */
+      trigger: z.boolean(),
+      price: positive('Prețul').optional(),
+      triggerPrice: positive('Prețul de declanșare').optional(),
+      amount: positive('Cantitatea').optional(),
+      takeProfit: positive('Take profit').nullable().optional(),
+      stopLoss: positive('Stop loss').nullable().optional(),
+    })
+    .strict(),
+]);
+export type ModifyChange = z.infer<typeof modifyChangeSchema>;
+
+export const modifyTicketSchema = z
+  .object({
+    accountId: z.number().int().positive(),
+    /** One per form: the same changes sent twice go out once. */
+    idemKey: z.string().uuid('Identificatorul formularului lipsește'),
+    market: z.enum(['spot', 'futures', 'stock']),
+    symbol: z.string().trim().min(1, 'Simbolul lipsește').max(60),
+    /** The position whose stop loss / take profit change (`ref`: eToro's position id). */
+    position: z.object({ side: z.enum(['long', 'short']), ref: z.string().trim().min(1).max(40).optional() }).strict().optional(),
+    changes: z.array(modifyChangeSchema).min(1, 'Nicio schimbare').max(4, 'Cel mult 4 schimbări odată'),
+  })
+  .strict()
+  .superRefine((t, ctx) => {
+    const protection = t.changes.filter((c) => c.what !== 'order');
+    if (protection.length && !t.position) ctx.addIssue({ code: 'custom', path: ['position'], message: 'Poziția lipsește' });
+    // An addition (no order yet) needs a level; a removal needs the order (or the eToro position) it removes.
+    for (const [i, c] of t.changes.entries()) {
+      if (c.what === 'order') continue;
+      if (c.orderId === null && c.level === null) ctx.addIssue({ code: 'custom', path: ['changes', i, 'level'], message: 'Nivelul lipsește' });
+    }
+    // One change per order and value: an order with both levels (OKX's oco) may have its stop loss and take profit changed.
+    const keys = t.changes.flatMap((c) => (c.orderId ? [`${c.what}:${c.orderId}`] : []));
+    const whole = new Set(t.changes.flatMap((c) => (c.what === 'order' ? [c.orderId] : [])));
+    if (new Set(keys).size !== keys.length || t.changes.some((c) => c.what !== 'order' && c.orderId !== null && whole.has(c.orderId))) {
+      ctx.addIssue({ code: 'custom', path: ['changes'], message: 'Același ordin de două ori' });
+    }
+    if (protection.filter((c) => c.what === 'sl' && c.orderId === null).length > 1 || protection.filter((c) => c.what === 'tp' && c.orderId === null).length > 1) {
+      ctx.addIssue({ code: 'custom', path: ['changes'], message: 'Un singur SL și un singur TP nou' });
+    }
+  });
+export type ModifyTicket = z.infer<typeof modifyTicketSchema>;
+
+/**
+ * How a change goes out (FD-ORDEREDIT): `amend` the order in place, `position` (a position-level TP / SL: Bybit
+ * trading-stop, eToro), `place` a new order, `cancel` one, or a replacement: the new order first (an order that only
+ * closes: never unprotected) or the old one cancelled first (one that holds funds or could double an entry).
+ */
+export type ModifyHow = 'amend' | 'position' | 'place' | 'cancel' | 'place-then-cancel' | 'cancel-then-place';
+
+export interface ModifyValues {
+  price: number | null;
+  triggerPrice: number | null;
+  amount: number | null;
+  takeProfit: number | null;
+  stopLoss: number | null;
+}
+
+export interface ModifyStepPlan {
+  /** Index in the ticket's changes. */
+  change: number;
+  how: ModifyHow;
+  /** The order changed (null: a new one). */
+  orderId: string | null;
+  /** The order's or the position's side and kind, for the confirmation. */
+  side: OrderSide | null;
+  kind: string | null;
+  before: ModifyValues;
+  /** Rounded as it will be sent; null where the change removes. */
+  after: ModifyValues;
+  /** The level removed (`sl` / `tp` null) or the amount the new protective order takes. */
+  removes: boolean;
+}
+
+/** The changes as they would go out (POST /api/trading/:id/modify/preview). */
+export interface ModifyPreview {
+  ticket: ModifyTicket;
+  displaySymbol: string;
+  last: number | null;
+  currency: string;
+  env: string;
+  steps: ModifyStepPlan[];
+  warnings: string[];
+  errors: string[];
+}
+
+export interface ModifyStepResult {
+  change: number;
+  /** What this request did: "modificat", "ordin nou plasat", "ordin vechi anulat"... */
+  what: string;
+  ok: boolean;
+  orderId: string | null;
+  message: string | null;
+  /** The order this step took off the platform (cancelled, or replaced under a new id): no longer shown (FIX-SLTPDUP). */
+  cancelled?: string;
+}
+
+/** What happened (POST /api/trading/:id/modify). */
+export interface ModifyResult {
+  status: 'done' | 'partial' | 'failed' | 'unknown';
+  steps: ModifyStepResult[];
+}
+
+// ---------------- FD-REVERSE: a futures position turned the other way (TradingView's ⇅) ----------------
+
+/** The position to turn: its symbol and side (hedge mode keeps a long and a short apart). */
+export const reverseTicketSchema = z
+  .object({
+    accountId: z.number().int().positive(),
+    /** One per confirmation: the same reversal sent twice goes out once. */
+    idemKey: z.string().uuid('Identificatorul formularului lipsește'),
+    symbol: z.string().trim().min(1, 'Simbolul lipsește').max(60),
+    side: z.enum(['long', 'short']),
+  })
+  .strict();
+export type ReverseTicket = z.infer<typeof reverseTicketSchema>;
+
+/** What a reversal does, checked (POST /api/trading/:id/reverse/preview): nothing is sent. */
+export interface ReversePreview {
+  ticket: ReverseTicket;
+  displaySymbol: string;
+  base: string;
+  /** The position now, and the one it becomes (the same size, the other way). */
+  from: { side: 'long' | 'short'; amount: number };
+  to: { side: 'long' | 'short'; amount: number };
+  leverage: number | null;
+  marginMode: string | null;
+  last: number | null;
+  /** The position's stop loss / take profit orders, cancelled once it is turned. */
+  cancels: number;
+  hedged: boolean;
+  warnings: string[];
+  errors: string[];
+  env: string;
+}
+
+/**
+ * A derived form key for the n-th order of one action (each order its own client id, the whole still sent once): the
+ * key with its last byte changed.
+ */
+export function subKey(idemKey: string, n: number): string {
+  const last = parseInt(idemKey.slice(-2), 16);
+  return `${idemKey.slice(0, -2)}${((last + n) % 256).toString(16).padStart(2, '0')}`;
+}
+
+/** An open order, as much as deciding how it can change needs. */
+export interface EditableOrderLike {
+  id: string;
+  market: 'spot' | 'futures';
+  type: string;
+  price: number | null;
+  triggerPrice: number | null;
+  reduceOnly: boolean;
+  cancellable?: boolean;
+}
+
+/**
+ * How an open order can change on its platform (FD-ORDEREDIT's table): in place (`amend`), only by a replacement, or not
+ * at all. eToro's rows `sl-<id>` / `tp-<id>` are a position's stop loss / take profit (changed in place).
+ */
+export function orderEditMode(exchange: string, o: EditableOrderLike): 'amend' | 'replace' | null {
+  const limit = o.type === 'limit' && o.triggerPrice === null;
+  switch (exchange) {
+    case 'bybit':
+    case 'okx':
+    case 'kraken':
+    case 'alpaca':
+      return 'amend';
+    case 'binance':
+      // Futures: only a limit order is modified in place; spot: cancel-replace in one request.
+      return o.market === 'spot' || limit ? 'amend' : 'replace';
+    case 'coinbase':
+      return limit ? 'amend' : 'replace';
+    case 'etoro':
+      // A position's stop loss / take profit changes in place; a pending order is cancelled and placed again by hand.
+      return o.cancellable === false && /^(sl|tp)-/.test(o.id) ? 'amend' : null;
+    case 'kucoin':
+    case 'bitget':
+    case 'trading212':
+      return 'replace';
+    default:
+      return null;
+  }
+}
+
+/**
+ * The fields an order's form offers (FD-ORDEREDIT): only what its kind has, and TP / SL on an entry where the platform
+ * attaches them. (eToro's `sl-` / `tp-` rows are changed through their position's form.)
+ */
+export function orderEditFields(exchange: string, o: EditableOrderLike & { stopLoss?: number | null; takeProfit?: number | null }): { price: boolean; triggerPrice: boolean; amount: boolean; tpsl: boolean } {
+  const tpslAttached = o.market === 'futures' && !o.reduceOnly && TRADING[exchange as ProviderId]?.futures?.tpsl === 'attached';
+  return {
+    price: o.price !== null,
+    triggerPrice: o.triggerPrice !== null,
+    amount: true,
+    // An order that only closes is itself a stop loss / take profit (some platforms repeat its level as one).
+    tpsl: !o.reduceOnly && (tpslAttached || o.stopLoss != null || o.takeProfit != null),
+  };
+}
+
+/** eToro's rows standing for a position's stop loss / take profit (`sl-<positionId>` / `tp-<positionId>`). */
+export const etoroProtectionOf = (o: Pick<EditableOrderLike, 'id' | 'cancellable'>): { what: 'sl' | 'tp'; positionId: string } | null => {
+  const m = o.cancellable === false ? /^(sl|tp)-(.+)$/.exec(o.id) : null;
+  return m ? { what: m[1] as 'sl' | 'tp', positionId: m[2] as string } : null;
+};
+
 /** What an account can trade now (GET /api/trading). */
 export interface TradingCaps {
   accountId: number;
@@ -298,10 +523,24 @@ export interface InstrumentInfo {
   /** Free quote (cash / USDT) and free asset (spot). */
   availableQuote: number | null;
   availableBase: number | null;
-  /** Futures / leveraged: the open position on this symbol. */
-  position: { side: 'long' | 'short'; amount: number; entryPrice: number | null } | null;
+  /** Futures / leveraged: the open position on this symbol (null in hedge mode: see `hedgePositions`). */
+  position: HeldPosition | null;
   /** eToro: each open position on the instrument, to pick the ones to close (FD-ETOROPICK). */
   positions?: ClosablePosition[];
+  /** Futures: the account's position mode (Bybit: the pair's), when it could be read; eToro: `hedge` with both sides held (FD-KUCOINHEDGE, FD-HEDGEALL). */
+  positionMode?: PositionMode;
+  /** Hedge mode: the long and the short kept apart on this instrument (either may be missing). */
+  hedgePositions?: { long: HeldPosition | null; short: HeldPosition | null };
+}
+
+/** One way: one position per symbol; hedge: a long and a short side by side (FD-KUCOINHEDGE, FD-HEDGEALL). */
+export type PositionMode = 'one-way' | 'hedge';
+
+/** An open futures / leveraged position, in the asset. */
+export interface HeldPosition {
+  side: 'long' | 'short';
+  amount: number;
+  entryPrice: number | null;
 }
 
 /** One eToro position: its units, entry, when it opened, its unrealized P/L and what was put in (USD). */
@@ -335,6 +574,8 @@ export interface OrderPreview {
   available: number | null;
   currency: string;
   env: string;
+  /** Futures: the position mode the order goes out in (FD-KUCOINHEDGE, FD-HEDGEALL). */
+  positionMode?: PositionMode;
   warnings: string[];
   /** Blocking problems: the order cannot be confirmed. */
   errors: string[];
@@ -362,7 +603,7 @@ export interface TradeLogRow {
   exchange: string;
   env: string;
   accountLabel: string;
-  action: 'order' | 'cancel' | 'enable' | 'disable';
+  action: 'order' | 'cancel' | 'modify' | 'reverse' | 'enable' | 'disable';
   market: string | null;
   symbol: string | null;
   side: string | null;

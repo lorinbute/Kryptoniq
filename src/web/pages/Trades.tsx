@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { ArrowRightLeft, ChartCandlestick, Coins, History, ListChecks, Plus, Power, RefreshCw, Wallet } from 'lucide-react';
-import type { AccountView, BalanceRow, OrderRow, PositionRow, Portfolio, StatsPeriod, TradeStats } from '../../shared/api-types.ts';
+import type { AccountView, BalanceRow, OrderRow, Portfolio, StatsPeriod, TradeStats } from '../../shared/api-types.ts';
 import { api, errorMessage, qs } from '../api.ts';
 import { autoDigits, fmtAgo, fmtDateTime, fmtMoney, fmtNum, fmtPct, fmtPrice, fmtUsd, fmtWeekday } from '../format.ts';
 import { useTz } from '../hooks.ts';
@@ -14,6 +14,11 @@ import { ProviderLogo } from '../components/ProviderLogo.tsx';
 import { providerById } from '../../shared/providers.ts';
 import { OrderTicket, type TicketSeed } from '../components/OrderTicket.tsx';
 import { CancelOrderButton, EnableTradingDialog, FundsRiskNote, TradeJournal, useDisableTrading } from '../components/TradingControls.tsx';
+import { ModifyTicket } from '../components/ModifyTicket.tsx';
+import { holdingSeed, orderSeed, positionSeed, type ModifySeed } from '../components/modify-seeds.ts';
+import { closeSeed, sellSeed } from '../components/trade-seeds.ts';
+import { canReverse, ReverseDialog } from '../components/ReverseDialog.tsx';
+import { portfolioInterval } from '../portfolio-settle.ts';
 
 const SECTION_RO: Record<string, string> = { balances: 'Solduri', positions: 'Poziții', orders: 'Ordine', fills: 'Tranzacții', prices: 'Prețuri', mode: 'Tip cont', futures: 'Cont futures' };
 /** `who`: „exchange-ul” or „brokerul”. */
@@ -304,17 +309,6 @@ function BrokerCards({
   );
 }
 
-/** FD-TRADING §4: what "Închide" opens for a position (a market order that only reduces it; eToro: the positions). */
-function closeSeed(account: AccountView, pos: PositionRow): TicketSeed | null {
-  const base = pos.symbol.split('/')[0] ?? pos.symbol;
-  if (account.exchange === 'etoro') return pos.ref?.positionIds ? { kind: 'stocks', accountId: account.id, symbol: base, side: 'sell', close: { positionIds: pos.ref.positionIds }, amount: pos.size ?? pos.contracts, title: `Închide poziția ${base}` } : null;
-  if (account.kind === 'stocks') return { kind: 'stocks', accountId: account.id, symbol: base, side: pos.side === 'short' ? 'buy' : 'sell', amount: pos.size ?? pos.contracts, title: `Închide poziția ${base}` };
-  // Only where trading was switched on for futures (a spot-only key shows its positions without the button).
-  if (!account.trading.markets.includes('futures')) return null;
-  const mode = pos.marginMode === 'cross' || pos.marginMode === 'isolated' ? pos.marginMode : undefined;
-  return { kind: 'crypto', accountId: account.id, market: 'futures', symbol: pos.symbol, side: pos.side === 'short' ? 'buy' : 'sell', amount: pos.size ?? pos.contracts, reduceOnly: true, marginMode: mode, title: `Închide ${pos.symbol}` };
-}
-
 /** Whether "Anulează" can go out: the order's market (as the server reads it) is one trading was switched on for. */
 function cancellable(account: AccountView, o: OrderRow): boolean {
   if (o.cancellable === false) return false;
@@ -323,19 +317,22 @@ function cancellable(account: AccountView, o: OrderRow): boolean {
   return account.trading.markets.includes(market);
 }
 
-/** What "Vinde" opens for a holding (eToro: closing its positions; IBKR: nothing). */
-function sellSeed(account: AccountView, b: BalanceRow): TicketSeed | null {
-  if (account.exchange === 'ibkr') return null;
-  if (account.exchange === 'etoro') return b.ref?.positionIds ? { kind: 'stocks', accountId: account.id, symbol: b.asset, side: 'sell', close: { positionIds: b.ref.positionIds }, amount: b.total, title: `Vinde ${b.asset} (închide pozițiile)` } : null;
-  if (account.kind === 'stocks') return { kind: 'stocks', accountId: account.id, symbol: b.ref?.ticker ?? b.asset, side: 'sell', amount: b.free, title: `Vinde ${b.asset}` };
-  if (!account.trading.markets.includes('spot')) return null;
-  return { kind: 'crypto', accountId: account.id, market: 'spot', symbol: `${b.asset}/USDT`, side: 'sell', amount: b.free, title: `Vinde ${b.asset}` };
-}
-
-function PortfolioView({ account, period, onTicket }: { account: AccountView; period: StatsPeriod; onTicket: (seed: TicketSeed) => void }) {
+function PortfolioView({
+  account,
+  period,
+  onTicket,
+  onModify,
+  onReverse,
+}: {
+  account: AccountView;
+  period: StatsPeriod;
+  onTicket: (seed: TicketSeed) => void;
+  onModify: (seed: ModifySeed) => void;
+  onReverse: (r: { symbol: string; side: 'long' | 'short' }) => void;
+}) {
   const trades = account.trading.enabled;
   const tz = useTz();
-  const q = useQuery({ queryKey: ['portfolio', account.id], queryFn: () => api.get<Portfolio>(`/api/portfolio/${account.id}`), refetchInterval: 30_000 });
+  const q = useQuery({ queryKey: ['portfolio', account.id], queryFn: () => api.get<Portfolio>(`/api/portfolio/${account.id}`), refetchInterval: () => portfolioInterval(account.id, 30_000) });
   const statsQ = useQuery({
     queryKey: statsKey(account.id, period),
     queryFn: () => api.get<TradeStats>(statsUrl(account.id, period)),
@@ -388,7 +385,8 @@ function PortfolioView({ account, period, onTicket }: { account: AccountView; pe
             <Empty>{stocks ? 'Nicio poziție cu levier sau short.' : 'Nicio poziție futures deschisă.'}</Empty>
           </div>
         ) : (
-          <table className="table">
+          // Rows with buttons: every cell on the row's middle, as the buttons (the text never sits above them).
+          <table className={clsx('table', trades && '[&_td]:align-middle')}>
             <thead>
               <tr>
                 <th>Simbol</th>
@@ -407,17 +405,22 @@ function PortfolioView({ account, period, onTicket }: { account: AccountView; pe
               </tr>
             </thead>
             <tbody>
-              {p.positions.map((pos) => {
+              {p.positions.map((pos, i) => {
                 const d = digits(pos.entryPrice ?? pos.markPrice);
                 const [base, quoteFull] = pos.symbol.split('/');
                 return (
-                  <tr key={`${pos.symbol}-${pos.side}`}>
+                  // eToro keeps every position apart (FD-HEDGEALL): two shorts on one instrument are two rows.
+                  <tr key={`${pos.symbol}-${pos.side}-${pos.ref?.positionIds?.join(',') ?? i}`}>
                     <td>
-                      <Link to={stocks ? chartOf(base ?? '') : `/charts/${base}/${(quoteFull ?? 'USDT').split(':')[0]}`} className="inline-flex items-center gap-2 font-semibold text-text">
-                        {base && <CoinLogo coin={base} size={18} badge={stocks} square={stocks} />}
-                        {stocks ? base : pos.symbol}
-                      </Link>
-                      {pos.marginMode && <span className="ml-1 text-[12px] text-faint">{pos.marginMode}</span>}
+                      {/* The margin mode centred on the symbol's row, as the logo and the name (FD-ORDEREDIT); a block flex, so
+                          the cell's middle is the text's (an inline one sits on the logo's baseline). */}
+                      <span className="flex items-center gap-x-1.5">
+                        <Link to={stocks ? chartOf(base ?? '') : `/charts/${base}/${(quoteFull ?? 'USDT').split(':')[0]}`} className="inline-flex items-center gap-2 font-semibold text-text">
+                          {base && <CoinLogo coin={base} size={18} badge={stocks} square={stocks} />}
+                          {stocks ? base : pos.symbol}
+                        </Link>
+                        {pos.marginMode && <span className="text-[12px] leading-none text-faint">{pos.marginMode}</span>}
+                      </span>
                     </td>
                     <td className={pos.side === 'long' ? 'text-bull' : 'text-bear'}>{pos.side === 'long' ? 'Long' : pos.side === 'short' ? 'Short' : pos.side}</td>
                     <td className="num text-right">{fmtNum(pos.size ?? pos.contracts, 6)}</td>
@@ -432,11 +435,27 @@ function PortfolioView({ account, period, onTicket }: { account: AccountView; pe
                       <td className="text-right">
                         {(() => {
                           const seed = closeSeed(account, pos);
-                          return seed ? (
-                            <button className="btn h-8 px-2 text-[12px]" onClick={() => onTicket(seed)}>
-                              Închide
-                            </button>
-                          ) : null;
+                          const protect = positionSeed(account, p, pos);
+                          return (
+                            <span className="inline-flex items-center justify-end gap-1.5">
+                              {protect && (
+                                <button className="btn h-8 px-2 text-[12px] whitespace-nowrap" onClick={() => onModify(protect)} aria-label={protect.title}>
+                                  SL / TP
+                                </button>
+                              )}
+                              {/* FD-REVERSE: closed, then opened the other way (TradingView's ⇅). */}
+                              {(pos.side === 'long' || pos.side === 'short') && canReverse(account, pos.symbol) && (
+                                <button className="btn h-8 px-2 text-[12px]" onClick={() => onReverse({ symbol: pos.symbol, side: pos.side as 'long' | 'short' })} aria-label={`Întoarce poziția ${pos.side} ${pos.symbol}`}>
+                                  Întoarce
+                                </button>
+                              )}
+                              {seed && (
+                                <button className="btn h-8 px-2 text-[12px]" onClick={() => onTicket(seed)}>
+                                  Închide
+                                </button>
+                              )}
+                            </span>
+                          );
                         })()}
                       </td>
                     )}
@@ -454,7 +473,7 @@ function PortfolioView({ account, period, onTicket }: { account: AccountView; pe
             <Empty>Niciun sold.</Empty>
           </div>
         ) : (
-          <table className="table">
+          <table className={clsx('table', trades && '[&_td]:align-middle')}>
             <thead>
               <tr>
                 <th>Activ</th>
@@ -477,13 +496,14 @@ function PortfolioView({ account, period, onTicket }: { account: AccountView; pe
                 return (
                   <tr key={`${b.account}-${b.asset}`}>
                     <td className="font-semibold">
+                      {/* Block flex: the logo and the name on one middle (an inline one sits on the logo's baseline). */}
                       {STABLE_ASSETS.has(b.asset) || b.asset.startsWith('#') ? (
-                        <span className="inline-flex items-center gap-2">
+                        <span className="flex items-center gap-2">
                           <CoinLogo coin={b.asset} size={18} badge={stocks} square={stocks} />
                           {b.asset}
                         </span>
                       ) : (
-                        <Link to={chartOf(b.asset, b.crypto)} className="inline-flex items-center gap-2 text-text">
+                        <Link to={chartOf(b.asset, b.crypto)} className="flex w-fit items-center gap-2 text-text">
                           <CoinLogo coin={b.asset} size={18} badge={stocks && !b.crypto} square={stocks && !b.crypto} />
                           {b.asset}
                         </Link>
@@ -529,11 +549,22 @@ function PortfolioView({ account, period, onTicket }: { account: AccountView; pe
                           // Stablecoins and instruments without a symbol are not sold from here; nor a KuCoin "main" balance
                           // (it trades only once moved to the trading account, and Sentiq never moves funds).
                           const seed = STABLE_ASSETS.has(b.asset) || b.asset.startsWith('#') || b.free <= 0 || b.account === 'main' ? null : sellSeed(account, b);
-                          return seed ? (
-                            <button className="btn h-8 px-2 text-[12px]" onClick={() => onTicket(seed)}>
-                              Vinde
-                            </button>
-                          ) : null;
+                          // A holding's SL / TP once per asset (KuCoin's "main" row is the same holding).
+                          const protect = STABLE_ASSETS.has(b.asset) || b.asset.startsWith('#') || b.account === 'main' ? null : holdingSeed(account, p, b);
+                          return (
+                            <span className="inline-flex items-center justify-end gap-1.5">
+                              {protect && (
+                                <button className="btn h-8 px-2 text-[12px] whitespace-nowrap" onClick={() => onModify(protect)} aria-label={protect.title}>
+                                  SL / TP
+                                </button>
+                              )}
+                              {seed && (
+                                <button className="btn h-8 px-2 text-[12px]" onClick={() => onTicket(seed)}>
+                                  Vinde
+                                </button>
+                              )}
+                            </span>
+                          );
                         })()}
                       </td>
                     )}
@@ -551,7 +582,7 @@ function PortfolioView({ account, period, onTicket }: { account: AccountView; pe
             <Empty>Niciun ordin deschis.</Empty>
           </div>
         ) : (
-          <table className="table">
+          <table className={clsx('table', trades && '[&_td]:align-middle')}>
             <thead>
               <tr>
                 <th>Simbol</th>
@@ -573,7 +604,7 @@ function PortfolioView({ account, period, onTicket }: { account: AccountView; pe
               {p.orders.map((o) => (
                 <tr key={`${o.market}-${o.id}`}>
                   <td className="font-semibold">
-                    <span className="inline-flex items-center gap-2">
+                    <span className="flex items-center gap-2">
                       <CoinLogo coin={o.symbol.split('/')[0] ?? o.symbol} size={18} badge={stocks} square={stocks} />
                       {stocks ? o.symbol.split('/')[0] : o.symbol}
                     </span>
@@ -583,7 +614,11 @@ function PortfolioView({ account, period, onTicket }: { account: AccountView; pe
                     {o.type}
                     {o.reduceOnly && <span className="ml-1 text-[12px] text-faint">reduce-only</span>}
                   </td>
-                  <td className={o.side === 'buy' ? 'text-bull' : 'text-bear'}>{o.side === 'buy' ? 'Cumpărare' : 'Vânzare'}</td>
+                  <td className={o.side === 'buy' ? 'text-bull' : 'text-bear'}>
+                    {o.side === 'buy' ? 'Cumpărare' : 'Vânzare'}
+                    {/* FD-KUCOINHEDGE: in hedge mode, the position the order opens or closes. */}
+                    {o.positionSide && <span className="ml-1 text-[12px] text-faint">{o.positionSide}</span>}
+                  </td>
                   <td className="num text-right">{fmtPrice(o.price, digits(o.price))}</td>
                   <td className="num text-right">{o.triggerPrice ? fmtPrice(o.triggerPrice, digits(o.triggerPrice)) : '—'}</td>
                   <td className="num text-right">
@@ -591,7 +626,24 @@ function PortfolioView({ account, period, onTicket }: { account: AccountView; pe
                     {o.filled ? <div className="text-[11.5px] text-faint">{fmtNum(o.filled, 8)} executat</div> : null}
                   </td>
                   <td className="num text-[12px] text-muted">{o.timestamp ? fmtDateTime(o.timestamp, tz) : '—'}</td>
-                  {trades && <td className="text-right">{cancellable(account, o) && <CancelOrderButton account={account} order={o} />}</td>}
+                  {trades && (
+                    <td className="text-right">
+                      {(() => {
+                        const edit = orderSeed(account, p, o);
+                        const cancel = cancellable(account, o);
+                        return (
+                          <span className="inline-flex items-start justify-end gap-1.5">
+                            {edit && (
+                              <button className="btn h-8 px-2 text-[12px]" onClick={() => onModify(edit)} aria-label={`Modifică ordinul ${o.symbol}`}>
+                                Modifică
+                              </button>
+                            )}
+                            {cancel && <CancelOrderButton account={account} order={o} />}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -656,7 +708,7 @@ export default function TradesPage() {
   const wizardEl = wizard && <AccountWizard onClose={closeWizard} onDone={(a) => setSelected(a.id)} />;
   if (list.length === 0) {
     return (
-      <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-3.5">
+      <div className="flex w-full flex-col gap-3.5">
         <h1 className="page-title">Tranzacții</h1>
         <Panel title="Tranzacțiile tale" icon={Wallet}>
           <div className="max-w-[70ch] space-y-3 text-[14px]">
@@ -698,9 +750,15 @@ function AccountsView({ list, current, onSelect, onAdd, wizardEl }: { list: Acco
   const [enabling, setEnabling] = useState(false);
   const disable = useDisableTrading(current);
   const closeTicket = useCallback(() => setTicket(null), []);
+  // FD-ORDEREDIT: a position's SL / TP, or an open order, being changed.
+  const [modify, setModify] = useState<ModifySeed | null>(null);
+  const closeModify = useCallback(() => setModify(null), []);
+  // FD-REVERSE: a position being turned the other way.
+  const [reverse, setReverse] = useState<{ accountId: number; symbol: string; side: 'long' | 'short' } | null>(null);
+  const closeReverse = useCallback(() => setReverse(null), []);
   const closeEnabling = useCallback(() => setEnabling(false), []);
   return (
-    <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-3.5">
+    <div className="flex w-full flex-col gap-3.5">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="page-title">Tranzacții</h1>
         <div className="seg" role="group" aria-label="Cont">
@@ -771,10 +829,12 @@ function AccountsView({ list, current, onSelect, onAdd, wizardEl }: { list: Acco
       )}
       {current.trading.reason && <p className="text-[12.5px] text-faint">{current.trading.reason} Contul rămâne doar pentru citire.</p>}
       {current.lastError && <Warning>Ultima eroare: {current.lastError}</Warning>}
-      <PortfolioView key={current.id} account={current} period={period} onTicket={setTicket} />
+      <PortfolioView key={current.id} account={current} period={period} onTicket={setTicket} onModify={setModify} onReverse={(r) => setReverse({ ...r, accountId: current.id })} />
       <TradeJournal account={current} />
       {wizardEl}
       {ticket && <OrderTicket seed={ticket} onClose={closeTicket} />}
+      {modify && modify.account.id === current.id && <ModifyTicket seed={modify} onClose={closeModify} />}
+      {reverse && reverse.accountId === current.id && <ReverseDialog account={current} symbol={reverse.symbol} side={reverse.side} onClose={closeReverse} />}
       {enabling && <EnableTradingDialog account={current} onClose={closeEnabling} />}
     </div>
   );

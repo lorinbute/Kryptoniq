@@ -122,6 +122,16 @@ export interface OrderRow {
   stop: 'down' | 'up' | null;
   /** FD-TRADING: false for rows that are not orders on the platform (an eToro position's SL / TP). */
   cancellable?: boolean;
+  /** FD-KUCOINHEDGE, FD-HEDGEALL: the position a hedge-mode futures order belongs to; null in one-way. */
+  positionSide?: 'long' | 'short' | null;
+  /**
+   * FD-ORDEREDIT: the stop loss / take profit the order carries: an entry's attached ones, or the levels of a TP / SL order
+   * that has no trigger of its own (OKX's conditional / oco: both legs in one order). Where the platform gives them.
+   */
+  stopLoss?: number | null;
+  takeProfit?: number | null;
+  /** Futures: coins per contract (the amount is in contracts), for the PnL of an order with no position yet. */
+  contractSize?: number | null;
 }
 
 /** KuCoin's stop direction from the raw order (futures: down / up; spot: loss / entry). */
@@ -130,6 +140,29 @@ export function stopDirection(info: unknown): OrderRow['stop'] {
   const v = typeof raw === 'string' ? raw.toLowerCase() : '';
   return v === 'down' || v === 'loss' ? 'down' : v === 'up' || v === 'entry' ? 'up' : null;
 }
+
+/**
+ * The hedge-mode side of a position or an order, as each exchange names it (FD-HEDGEALL): `positionSide` LONG / SHORT
+ * (KuCoin, Binance; BOTH in one-way), `posSide` long / short (OKX, Bitget; net in one-way), `positionIdx` 1 / 2 (Bybit;
+ * 0 in one-way). null for one-way or none.
+ */
+function hedgeSide(info: unknown): 'long' | 'short' | null {
+  if (typeof info !== 'object' || info === null) return null;
+  const i = info as { positionSide?: unknown; posSide?: unknown; positionIdx?: unknown };
+  const named = (typeof i.positionSide === 'string' ? i.positionSide : typeof i.posSide === 'string' ? i.posSide : '').toUpperCase();
+  if (named === 'LONG') return 'long';
+  if (named === 'SHORT') return 'short';
+  const idx = Number(i.positionIdx);
+  return idx === 1 ? 'long' : idx === 2 ? 'short' : null;
+}
+
+/** A position's side (FD-KUCOINHEDGE): the one the exchange names in hedge mode, otherwise ccxt's (the sign of the size). */
+export function positionSideOf(p: { side?: unknown; info?: unknown }): 'long' | 'short' | null {
+  return hedgeSide(p.info) ?? (p.side === 'long' || p.side === 'short' ? p.side : null);
+}
+
+/** The position a hedge-mode order opens or closes; null in one-way mode. */
+export const orderPositionSide = (info: unknown): 'long' | 'short' | null => hedgeSide(info);
 
 export interface FillRow {
   id: string;
@@ -200,9 +233,17 @@ const EXTRA_ORDER_READS: Record<string, { params: Record<string, unknown>; limit
   binance: [{ params: { type: 'swap', subType: 'linear' } }, { params: { type: 'swap', subType: 'linear', trigger: true } }],
   // A unified account lists every kind of order (stops included) per category.
   bybit: [{ params: { type: 'swap', subType: 'linear', settleCoin: 'USDT' }, limit: 50 }],
-  // The plain listing already has every product's normal orders.
-  okx: [{ params: { trigger: true } }],
-  bitget: [{ params: { type: 'spot', trigger: true } }, { params: { type: 'swap', productType: 'USDT-FUTURES' } }, { params: { type: 'swap', productType: 'USDT-FUTURES', trigger: true } }],
+  // The plain listing already has every product's normal orders. FD-ORDEREDIT: a position's TP / SL are algo orders of
+  // their own kinds (conditional, oco), not "trigger" ones; both in one read, which ccxt sends to the algo listing only
+  // when told (it routes a single kind there by itself, not the pair).
+  okx: [{ params: { trigger: true } }, { params: { method: 'privateGetTradeOrdersAlgoPending', ordType: 'conditional,oco' } }],
+  bitget: [
+    { params: { type: 'spot', trigger: true } },
+    { params: { type: 'swap', productType: 'USDT-FUTURES' } },
+    { params: { type: 'swap', productType: 'USDT-FUTURES', trigger: true } },
+    // FD-ORDEREDIT: the TP / SL orders (a trigger listing reads only "normal_plan" ones).
+    { params: { type: 'swap', productType: 'USDT-FUTURES', planType: 'profit_loss' } },
+  ],
 };
 
 /**
@@ -262,6 +303,13 @@ const BROKER_HISTORY_MS = 90 * 86_400_000;
 // KuCoin accepts at most 7 days per fills query; stay a minute inside the limit.
 const FILLS_WINDOW_MS = 7 * 86_400_000 - 60_000;
 const PORTFOLIO_TTL_MS = 20_000;
+/**
+ * FIX-SLTPDUP: after an order, a cancellation or a change, the platform lists the new state a few seconds late; for this
+ * long the portfolio is read again at most every SETTLE_TTL_MS, and the orders taken off stay hidden for GONE_MS.
+ */
+const SETTLE_MS = 30_000;
+const SETTLE_TTL_MS = 3_000;
+const GONE_MS = 120_000;
 const CLIENT_TTL_MS = 10 * 60_000;
 /** Connected accounts per user (each one is read over the network). */
 export const MAX_ACCOUNTS_PER_USER = 20;
@@ -435,6 +483,12 @@ export class AccountsService {
   private readonly brokers = new Map<number, { adapter: BrokerAdapter; at: number }>();
   private readonly portfolios = new Map<number, { data: Portfolio; at: number }>();
   private readonly inflight = new Map<number, Promise<Portfolio>>();
+  /** FIX-SLTPDUP: bumped by `invalidate`, so a read started before a trading action never fills the cache after it. */
+  private readonly generation = new Map<number, number>();
+  /** Until when an account's portfolio is read again every few seconds (its platform catching up with an action). */
+  private readonly settling = new Map<number, number>();
+  /** Orders taken off the platform (by id, until when they stay hidden), which it may still list for a moment. */
+  private readonly gone = new Map<number, Map<string, number>>();
   private readonly stats = new Map<string, { data: TradeStats; at: number }>();
   private readonly statsInflight = new Map<string, Promise<TradeStats>>();
   private readonly brokerHistory = new Map<number, { data: ClosedTrades; at: number }>();
@@ -563,10 +617,39 @@ export class AccountsService {
     return this.toView((await this.row(id)) as AccountRow);
   }
 
-  /** After an order, a cancellation or a close: the next read of the portfolio (and of its closed trades) goes to the platform. */
+  /**
+   * After an order, a cancellation or a close: the next read of the portfolio (and of its closed trades) goes to the
+   * platform, a read already on its way does not count, and for the next 30 s it is read again every 3 s (FIX-SLTPDUP).
+   */
   invalidate(id: number): void {
     this.portfolios.delete(id);
+    this.inflight.delete(id);
+    this.generation.set(id, (this.generation.get(id) ?? 0) + 1);
+    this.settling.set(id, Date.now() + SETTLE_MS);
     this.forgetStats(id);
+  }
+
+  /** Orders the platform confirmed it took off (cancelled, replaced): hidden for 2 minutes even when it still lists them. */
+  forgetOrders(id: number, orderIds: readonly string[]): void {
+    if (!orderIds.length) return;
+    const list = this.gone.get(id) ?? new Map<string, number>();
+    for (const o of orderIds) list.set(o, Date.now() + GONE_MS);
+    this.gone.set(id, list);
+  }
+
+  /** The portfolio without the orders known to be gone. */
+  private shown(id: number, p: Portfolio): Portfolio {
+    const list = this.gone.get(id);
+    if (!list?.size) return p;
+    const now = Date.now();
+    for (const [o, until] of list) if (until <= now) list.delete(o);
+    if (!list.size || !p.orders.some((o) => list.has(o.id))) return p;
+    return { ...p, orders: p.orders.filter((o) => !list.has(o.id)) };
+  }
+
+  /** Caches a portfolio read, unless a trading action came after the read started. */
+  private keep(id: number, gen: number, data: Portfolio): void {
+    if ((this.generation.get(id) ?? 0) === gen) this.portfolios.set(id, { data, at: Date.now() });
   }
 
   private forgetStats(id: number): void {
@@ -731,13 +814,17 @@ export class AccountsService {
   }
 
   async portfolio(id: number, force = false): Promise<Portfolio> {
+    const now = Date.now();
+    const ttl = (this.settling.get(id) ?? 0) > now ? SETTLE_TTL_MS : PORTFOLIO_TTL_MS;
     const cached = this.portfolios.get(id);
-    if (!force && cached && Date.now() - cached.at < PORTFOLIO_TTL_MS) return cached.data;
+    if (!force && cached && now - cached.at < ttl) return this.shown(id, cached.data);
     const pending = this.inflight.get(id);
-    if (pending) return pending;
-    const p = this.loadPortfolio(id).finally(() => this.inflight.delete(id));
+    if (pending) return this.shown(id, await pending);
+    const p = this.loadPortfolio(id).finally(() => {
+      if (this.inflight.get(id) === p) this.inflight.delete(id);
+    });
     this.inflight.set(id, p);
-    return p;
+    return this.shown(id, await p);
   }
 
   /** FD-TRADESTATS, FD-BROKERSTATS: closed trades of one period, kept 5 minutes per account and period. */
@@ -823,9 +910,10 @@ export class AccountsService {
   }
 
   private async loadPortfolio(id: number): Promise<Portfolio> {
+    const gen = this.generation.get(id) ?? 0;
     const row = await this.row(id);
     if (!row) throw new ValidationError(`Contul ${id} nu există`);
-    if (isBroker(row.exchange)) return this.loadBroker(id, row as AccountRow & { exchange: BrokerId });
+    if (isBroker(row.exchange)) return this.loadBroker(id, row as AccountRow & { exchange: BrokerId }, gen);
     const isKucoin = row.exchange === 'kucoin';
     const { spot, futures } = this.clientsFor(id, row);
     const errors: Portfolio['errors'] = {};
@@ -1102,7 +1190,7 @@ export class AccountsService {
       .filter((p) => (num(p.contracts) ?? 0) !== 0)
       .map((p) => ({
         symbol: String(p.symbol),
-        side: String(p.side ?? ''),
+        side: positionSideOf(p) ?? String(p.side ?? ''),
         contracts: num(p.contracts) ?? 0,
         size: num(p.contracts) !== null && num(p.contractSize) !== null ? (num(p.contracts) as number) * (num(p.contractSize) as number) : null,
         entryPrice: num(p.entryPrice),
@@ -1130,6 +1218,10 @@ export class AccountsService {
       timestamp: num(o.timestamp),
       reduceOnly: Boolean(o.reduceOnly),
       stop: stopDirection(o.info),
+      positionSide: orderPositionSide(o.info),
+      stopLoss: num((o as { stopLossPrice?: unknown }).stopLossPrice),
+      takeProfit: num((o as { takeProfitPrice?: unknown }).takeProfitPrice),
+      contractSize: num(spot.markets?.[String(o.symbol)]?.contractSize ?? futures?.markets?.[String(o.symbol)]?.contractSize),
     }));
     // The same order can come back from the normal and the trigger listing.
     const seenOrders = new Set<string>();
@@ -1186,13 +1278,13 @@ export class AccountsService {
       id,
     ]);
     if (hardFailure) this.clients.delete(id);
-    else this.portfolios.set(id, { data: portfolio, at: Date.now() });
+    else this.keep(id, gen, portfolio);
     if (Object.keys(errors).length) this.log.warn(`portfolio ${id}: ${Object.entries(errors).map(([k, v]) => `${k}=${v?.code}`).join(', ')}`);
     return portfolio;
   }
 
   /** A stock broker's account (brokers.ts), with the same last-good, cost-basis and status rules as the exchanges. */
-  private async loadBroker(id: number, row: AccountRow & { exchange: BrokerId }): Promise<Portfolio> {
+  private async loadBroker(id: number, row: AccountRow & { exchange: BrokerId }, gen: number): Promise<Portfolio> {
     const adapter = this.brokerFor(id, row);
     let snap: Awaited<ReturnType<BrokerAdapter['load']>>;
     try {
@@ -1264,7 +1356,7 @@ export class AccountsService {
       id,
     ]);
     if (hardFailure) this.brokers.delete(id);
-    else this.portfolios.set(id, { data: portfolio, at: Date.now() });
+    else this.keep(id, gen, portfolio);
     if (Object.keys(errors).length) this.log.warn(`portfolio ${id} (${row.exchange}): ${Object.entries(errors).map(([k, v]) => `${k}=${v?.code}`).join(', ')}`);
     return portfolio;
   }

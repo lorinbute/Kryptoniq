@@ -9,7 +9,7 @@ import { formatIssues, ValidationError } from '../settings.ts';
 import { addDays, dayBounds, dayKey, zonedTimeToUtc } from '../../shared/time.ts';
 import { explain } from './glossary.ts';
 import { ffWeekRange, mergeCalendar, type CalendarEvent } from './merge.ts';
-import { fetchForexFactory, fetchTradingView, RateLimitedError, type CalImpact, type RawEvent } from './sources.ts';
+import { fetchForexFactory, fetchTradingView, RateLimitedError, type CalImpact, type RawEvent, type TvEarnings } from './sources.ts';
 
 export const FF_JOB = 'calendar.ff';
 export const TV_JOB = 'calendar.tv';
@@ -94,8 +94,16 @@ export function earningsDays(now: number, n = EARN_DAYS): string[] {
   return out;
 }
 
+/** Where an earnings event's date and numbers come from (FD-EARNTV): Nasdaq unless TradingView is named. */
+export interface EarningsFrom {
+  /** The date is the one TradingView says the company confirmed. */
+  date?: 'tv';
+  /** The EPS expected is TradingView's (Nasdaq has not got the results that day). */
+  numbers?: 'tv';
+}
+
 /** Nasdaq's earnings row → calendar event: before the open at 08:00 ET, after the close at 16:30 ET, else all day. */
-export function earningsEvent(day: string, r: EarningsRow): RawEvent {
+export function earningsEvent(day: string, r: EarningsRow, from: EarningsFrom = {}): RawEvent {
   const allDay = r.time === 'unknown';
   return {
     source: 'earn',
@@ -111,9 +119,60 @@ export function earningsEvent(day: string, r: EarningsRow): RawEvent {
     actual: null,
     unit: null,
     scale: null,
-    // pre / after / unknown, for the note; the quarter after the bar ("Sep/2026").
-    period: `${r.time}|${r.quarter ?? ''}`,
+    // pre / after / unknown, for the note; the quarter after the bar ("Sep/2026"); where the date and the numbers come
+    // from (FD-EARNTV; events stored before it have only the first two).
+    period: `${r.time}|${r.quarter ?? ''}|${from.date ?? ''}|${from.numbers ?? ''}`,
   };
+}
+
+/** A Nasdaq report no closer than this after the last one TradingView knows of can be the next quarter's. */
+export const EARN_STALE_DAYS = 45;
+const daysBetween = (a: string, b: string) => (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / DAY;
+
+/** TradingView's EPS: „$0.13”, „-$0.09”, as Nasdaq writes it (rounded first: never „-$0.00”). */
+export function formatEps(eps: number | null): string | null {
+  if (eps === null) return null;
+  const cents = Math.round(eps * 100);
+  return `${cents < 0 ? '-' : ''}$${(Math.abs(cents) / 100).toFixed(2)}`;
+}
+
+/**
+ * One day's earnings events of the watchlist stocks (FD-EARNTV §1), from Nasdaq's rows of that day and what TradingView
+ * says of each stock: a date the company confirmed wins over Nasdaq's (an estimate that did not follow), and a Nasdaq
+ * date shortly after a publication is a stale estimate; with no confirmed date, or no word from TradingView, Nasdaq's.
+ */
+export function planEarnings(day: string, rows: EarningsRow[], wanted: ReadonlySet<string>, tv: ReadonlyMap<string, TvEarnings>): RawEvent[] {
+  const out: RawEvent[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (!wanted.has(r.symbol) || seen.has(r.symbol)) continue;
+    seen.add(r.symbol);
+    const t = tv.get(r.symbol);
+    const confirmedHere = t?.next?.confirmed === true && t.next.day === day;
+    if (t && !confirmedHere) {
+      if (t.next?.confirmed && day !== t.lastDay) continue;
+      if (t.lastDay && day > t.lastDay && daysBetween(t.lastDay, day) < EARN_STALE_DAYS) continue;
+    }
+    if (!confirmedHere || !t?.next) {
+      out.push(earningsEvent(day, r));
+      continue;
+    }
+    const time = t.next.time !== 'unknown' ? t.next.time : r.time;
+    out.push(earningsEvent(day, { ...r, time }, { date: 'tv' }));
+  }
+  // Confirmed for this day by TradingView alone (Nasdaq still has an older estimate, or none).
+  for (const symbol of wanted) {
+    const next = tv.get(symbol)?.next;
+    if (seen.has(symbol) || !next?.confirmed || next.day !== day) continue;
+    out.push(
+      earningsEvent(
+        day,
+        { symbol, name: symbol, time: next.time, quarter: next.quarter, epsForecast: formatEps(next.eps), lastYearEps: null },
+        { date: 'tv', numbers: 'tv' },
+      ),
+    );
+  }
+  return out;
 }
 
 const MONTH_RO: Record<string, string> = {
@@ -236,12 +295,26 @@ export class CalendarService {
    * Earnings of the watchlist stocks for the next weekdays, from Nasdaq. Each day is replaced only when its
    * request succeeded; a stock that left the watchlist loses its future events. Returns the stored events.
    */
-  async refreshEarnings(symbols: string[], fetchDay: (day: string) => Promise<EarningsRow[]>, now = Date.now()): Promise<number> {
+  async refreshEarnings(
+    symbols: string[],
+    fetchDay: (day: string) => Promise<EarningsRow[]>,
+    now = Date.now(),
+    fetchTv?: (symbols: string[]) => Promise<Map<string, TvEarnings>>,
+  ): Promise<number> {
     const wanted = new Set(symbols);
     const today = dayBounds(dayKey(now, NY), NY).start;
     if (wanted.size === 0) {
       await this.db.run("DELETE FROM calendar_raw WHERE source = N'earn' AND ts >= ?", [today]);
       return 0;
+    }
+    // FD-EARNTV: the dates the companies confirmed; without them, Nasdaq's alone, as before.
+    let tv = new Map<string, TvEarnings>();
+    if (fetchTv) {
+      try {
+        tv = await fetchTv([...wanted]);
+      } catch (err) {
+        this.log.warn(`earnings: TradingView unavailable, Nasdaq's dates only (${(err as Error).message})`);
+      }
     }
     let stored = 0;
     const errors: string[] = [];
@@ -253,7 +326,7 @@ export class CalendarService {
         errors.push(`${day}: ${(err as Error).message}`);
         continue;
       }
-      const events = rows.filter((r) => wanted.has(r.symbol)).map((r) => earningsEvent(day, r));
+      const events = planEarnings(day, rows, wanted, tv);
       await this.replace('earn', dayBounds(day, NY), events, now);
       stored += events.length;
     }
@@ -298,7 +371,7 @@ export class CalendarService {
             .filter((r) => r.source === 'earn' && stocks.has(r.extId.slice(0, r.extId.indexOf(':'))))
             .map((r): CalendarEvent => {
               const sym = r.extId.slice(0, r.extId.indexOf(':'));
-              const [when = 'unknown', quarter = ''] = (r.period ?? '').split('|');
+              const [when = 'unknown', quarter = '', dateFrom = '', numbersFrom = ''] = (r.period ?? '').split('|');
               const name = stocks.get(sym);
               const who = name ? cleanCompanyName(name) || sym : sym;
               return {
@@ -314,7 +387,11 @@ export class CalendarService {
                 previous: r.previous,
                 deviation: null,
                 matched: false,
-                note: `${who} își publică rezultatele ${quarter ? `trimestrului încheiat în ${quarterRo(quarter)} ` : ''}${EARN_WHEN[when] ?? EARN_WHEN.unknown}. Prognoza este EPS-ul estimat de analiști, iar Anterior este EPS-ul din același trimestru de anul trecut (Nasdaq).`,
+                note: `${who} își publică rezultatele ${quarter ? `trimestrului încheiat în ${quarterRo(quarter)} ` : ''}${EARN_WHEN[when] ?? EARN_WHEN.unknown}.${dateFrom === 'tv' ? ' Data e confirmată (TradingView).' : ''} ${
+                  numbersFrom === 'tv'
+                    ? 'Prognoza este EPS-ul estimat de analiști (TradingView); Nasdaq nu are încă rezultatele în calendar.'
+                    : 'Prognoza este EPS-ul estimat de analiști, iar Anterior este EPS-ul din același trimestru de anul trecut (Nasdaq).'
+                }`,
               };
             });
     const custom = (

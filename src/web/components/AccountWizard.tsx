@@ -13,6 +13,7 @@ import { api, errorMessage } from '../api.ts';
 import { ProviderLogo } from './ProviderLogo.tsx';
 import { invalidatePriceSource } from '../hooks.ts';
 import { useScrollLock } from '../scroll-lock.ts';
+import { useVisibleArea } from '../visible-area.ts';
 
 /**
  * FD-KEYIPS: the addresses Sentiq calls the platform from, to restrict the key to (a key that leaks is then useless to
@@ -248,6 +249,7 @@ function KeyForm({ p, onBack, onConnected }: { p: ProviderDef; onBack: () => voi
 export function AccountWizard({ onClose, onDone }: { onClose: () => void; onDone?: (a: AccountView) => void }) {
   // FD-SCROLLLOCK: only the wizard scrolls while it is open.
   useScrollLock();
+  const area = useVisibleArea();
   const [filter, setFilter] = useState<Filter>('all');
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState<ProviderDef | null>(null);
@@ -298,11 +300,12 @@ export function AccountWizard({ onClose, onDone }: { onClose: () => void; onDone
   }, [picked, done]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-scrim px-3 pt-[6vh] pb-6 backdrop-blur-sm sm:px-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className="flex max-h-[88vh] w-full max-w-[860px] flex-col overflow-hidden rounded-2xl border border-line-strong bg-panel shadow-modal">
+    // FD-MODALFIT: as tall as the part of the window seen at most, above the keyboard.
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-scrim px-3 pt-[6vh] pb-6 backdrop-blur-sm sm:px-4" style={area} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className="flex max-h-full w-full max-w-[860px] flex-col overflow-hidden rounded-2xl border border-line-strong bg-panel shadow-modal">
         <header className="flex items-center gap-3 border-b border-line px-5 py-4">
           {picked && !done && <ProviderLogo id={picked.id} size={28} />}
-          <h2 id={titleId} className="flex-1 text-[16px] font-semibold">
+          <h2 id={titleId} className="flex min-w-0 flex-1 items-center text-[16px] font-semibold">
             {done ? 'Cont conectat' : picked ? `Conectează ${picked.name}` : 'Adaugă un cont'}
           </h2>
           <span className="hidden text-[12px] text-faint sm:inline">{done ? '' : picked ? 'Pasul 2 din 2' : 'Pasul 1 din 2'}</span>

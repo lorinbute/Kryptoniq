@@ -4,6 +4,7 @@ import type { Bar, FillConfig, HLineConfig, IndicatorResult, InputConfig, PlotCo
 import type { StudyId } from '../../shared/studies.ts';
 import type { ChartContext, SymbolRequest } from './vendor/chart-context';
 import { VolumeStudy } from './volume.ts';
+import { PLOT_PALETTES } from './color-links.ts';
 import * as n24HourVolumeStd from './vendor/standard/24-hour-volume';
 import * as accumulationDistributionStd from './vendor/standard/accumulation-distribution';
 import * as adrIndicator from './vendor/standard/adr';
@@ -257,5 +258,11 @@ const MODULES = {
   'visible-average-price': { overlay: true, metadata: visibleAveragePriceStd.metadata, defaultInputs: visibleAveragePriceStd.defaultInputs, inputConfig: visibleAveragePriceStd.inputConfig, plotConfig: visibleAveragePriceStd.plotConfig, usesVisibleRange: true, calculate: visibleAveragePriceStd.calculate },
   'volume': VolumeStudy,
 };
+
+// FD-COLORUNIFY: a line drawn in several fixed colours declares them (a box each in Stil, each one applied).
+for (const [id, plots] of Object.entries(PLOT_PALETTES)) {
+  const mod = MODULES[id as keyof typeof MODULES] as { plotConfig: PlotConfig[] };
+  mod.plotConfig = mod.plotConfig.map((p) => (plots[p.id] ? { ...p, palette: [...(plots[p.id] as readonly string[])] } : p));
+}
 
 export const STUDY_MODULES = MODULES as unknown as Record<StudyId, StudyModule>;

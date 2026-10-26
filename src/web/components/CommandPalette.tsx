@@ -12,6 +12,7 @@ import { api, qs } from '../api.ts';
 import { useMarketSource, useWatchlist } from '../hooks.ts';
 import { CoinLogo } from './icons.tsx';
 import { useScrollLock } from '../scroll-lock.ts';
+import { useVisibleArea } from '../visible-area.ts';
 
 export interface PaletteLink {
   to: string;
@@ -21,7 +22,7 @@ export interface PaletteLink {
 
 interface Item {
   id: string;
-  group: 'Pagini' | 'Favorite' | 'Perechi' | 'Acțiuni' | 'Indici' | 'Știri';
+  group: 'Pagini' | 'Urmărite' | 'Perechi' | 'Acțiuni' | 'Indici' | 'Știri';
   label: string;
   hint?: string;
   to: string;
@@ -83,7 +84,7 @@ export function CommandPalette({ open, onClose, pages }: { open: boolean; onClos
       const sym = w.kind === 'crypto' ? `${w.coin}/${w.quote}` : plainSymbol(w.coin);
       favs.add(w.kind === 'crypto' ? sym : `${w.kind}:${w.coin}`);
       if (!f || fold(sym).includes(f) || w.aliases.some((a) => fold(a).includes(f)) || (w.name !== null && fold(w.name).includes(f)))
-        out.push({ id: `w:${w.kind}:${sym}`, group: 'Favorite', label: sym, hint: w.kind === 'crypto' ? 'grafic' : (w.name ?? (stock ? 'acțiune' : 'indice')), to: chartPathOf(w), coin: w.coin, stock });
+        out.push({ id: `w:${w.kind}:${sym}`, group: 'Urmărite', label: sym, hint: w.kind === 'crypto' ? 'grafic' : (w.name ?? (stock ? 'acțiune' : 'indice')), to: chartPathOf(w), coin: w.coin, stock });
     }
     if (q.length >= 2)
       for (const s of (symbols.data ?? []).filter((s) => !favs.has(s.symbol)).slice(0, 6))
@@ -130,6 +131,7 @@ export function CommandPalette({ open, onClose, pages }: { open: boolean; onClos
   }, [open, onClose]);
   // FD-SCROLLLOCK: the page behind the search stays still.
   useScrollLock(open);
+  const area = useVisibleArea();
 
   if (!open) return null;
 
@@ -159,8 +161,9 @@ export function CommandPalette({ open, onClose, pages }: { open: boolean; onClos
 
   let lastGroup = '';
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-scrim px-4 pt-[12vh] backdrop-blur-sm" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-label="Caută în Sentiq" className="w-full max-w-[620px] overflow-hidden rounded-2xl border border-line-strong bg-panel shadow-modal">
+    // FD-MODALFIT: never taller than the part of the window seen (the list gives way), above the keyboard.
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-scrim px-4 pt-[12vh] pb-4 backdrop-blur-sm" style={area} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div role="dialog" aria-modal="true" aria-label="Caută în Sentiq" className="flex max-h-full w-full max-w-[620px] flex-col overflow-hidden rounded-2xl border border-line-strong bg-panel shadow-modal">
         <div className="flex items-center gap-3 border-b border-line px-4">
           <Search size={18} className="shrink-0 text-faint" aria-hidden />
           <input
@@ -179,7 +182,7 @@ export function CommandPalette({ open, onClose, pages }: { open: boolean; onClos
           />
           <kbd className="num shrink-0 rounded-md border border-line-strong px-1.5 py-0.5 text-[11px] text-faint">Esc</kbd>
         </div>
-        <ul id={listId} role="listbox" aria-label="Rezultate" className="max-h-[50vh] overflow-y-auto overscroll-contain p-2">
+        <ul id={listId} role="listbox" aria-label="Rezultate" className="max-h-[50vh] min-h-0 overflow-y-auto overscroll-contain p-2">
           {items.length === 0 && <li className="px-3 py-6 text-center text-[13.5px] text-faint">Niciun rezultat</li>}
           {items.map((it, i) => {
             const header = it.group !== lastGroup;

@@ -165,7 +165,8 @@ function IndicatorRow({ i, tz, now }: { i: EconIndicator; tz: string; now: numbe
               setOpen((o) => !o);
             }}
           >
-            {open ? <ChevronDown size={14} className="mt-0.5 shrink-0 text-faint" aria-hidden /> : <ChevronRight size={14} className="mt-0.5 shrink-0 text-faint" aria-hidden />}
+            {/* On the name's first line, however it wraps. */}
+            <span className="flex h-[1lh] shrink-0 items-center">{open ? <ChevronDown size={14} className="text-faint" aria-hidden /> : <ChevronRight size={14} className="text-faint" aria-hidden />}</span>
             <Name i={i} />
           </button>
         </td>
@@ -309,7 +310,7 @@ export default function EconomyPage() {
   const stale = q.data.updatedAt !== null && now - q.data.updatedAt > 6 * 3_600_000;
 
   return (
-    <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-4">
+    <div className="flex w-full flex-col gap-4">
       <div className="flex flex-col gap-1">
         <h1 className="page-title">Economie</h1>
         <p className="text-[13.5px] text-muted">

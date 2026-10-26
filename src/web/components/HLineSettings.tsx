@@ -4,10 +4,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { clsx } from 'clsx';
 import { Bold, Italic } from 'lucide-react';
-import { HLINE_DEFAULT_STYLE, HLINE_H_ALIGNS, HLINE_STYLES, HLINE_TEXT_SIZES, HLINE_UNIT_IDS, HLINE_UNITS, HLINE_V_ALIGNS, hlineSchema, styleOf, type HLine, type HLineStyle, type HLineUnit } from '../../shared/hlines.ts';
+import { HLINE_DEFAULT_STYLE, HLINE_H_ALIGNS, HLINE_TEXT_SIZES, HLINE_UNIT_IDS, HLINE_UNITS, HLINE_V_ALIGNS, hlineSchema, styleOf, type HLine, type HLineStyle, type HLineUnit } from '../../shared/hlines.ts';
 import { errorMessage } from '../api.ts';
+import { ColorPicker } from './ColorPicker.tsx';
 
-const STYLE_RO: Record<HLine['style'], string> = { solid: 'Continuă', dashed: 'Liniuțe', dotted: 'Puncte' };
 const V_RO: Record<HLine['vAlign'], string> = { top: 'Sus', middle: 'Mijloc', bottom: 'Jos' };
 const H_RO: Record<HLine['hAlign'], string> = { left: 'Stânga', center: 'Centru', right: 'Dreapta' };
 const UNIT_RO: Record<HLineUnit, { label: string; tfs: string }> = {
@@ -17,12 +17,9 @@ const UNIT_RO: Record<HLineUnit, { label: string; tfs: string }> = {
   weeks: { label: 'Săptămâni', tfs: '1w' },
 };
 
-/** #RRGGBB of a colour (the picker has no alpha) and its "AA" suffix, kept on a change. */
-const splitAlpha = (c: string) => ({ hex: c.slice(0, 7), alpha: c.slice(7) });
-
+/** FD-OPACITY: the line's colour with its opacity. */
 function Color({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  const { hex, alpha } = splitAlpha(value);
-  return <input type="color" aria-label={label} value={hex.toLowerCase()} onChange={(e) => onChange(`${e.target.value.toUpperCase()}${alpha.toUpperCase()}`)} className="h-8 w-12 shrink-0 p-1" />;
+  return <ColorPicker label={label} value={value} onChange={onChange} />;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -114,22 +111,17 @@ export function HLineSettings({
       }}
     >
       <Section title="Linie">
+        {/* FD-STYLEUNIFY: colour, opacity, width and style in one box, as everywhere. */}
         <div className="flex flex-wrap items-center gap-2">
-          <Color label="Culoarea liniei" value={draft.color} onChange={(color) => set({ color })} />
-          <select aria-label="Grosimea liniei" value={draft.width} onChange={(e) => set({ width: Number(e.target.value) })} className="w-[84px]">
-            {[1, 2, 3, 4].map((w) => (
-              <option key={w} value={w}>
-                {w} px
-              </option>
-            ))}
-          </select>
-          <select aria-label="Tipul liniei" value={draft.style} onChange={(e) => set({ style: e.target.value as HLine['style'] })} className="w-[110px]">
-            {HLINE_STYLES.map((s) => (
-              <option key={s} value={s}>
-                {STYLE_RO[s]}
-              </option>
-            ))}
-          </select>
+          <ColorPicker
+            label="Linia"
+            value={draft.color}
+            onChange={(color) => set({ color })}
+            lineWidth={draft.width}
+            onLineWidth={(width) => set({ width })}
+            lineStyle={draft.style}
+            onLineStyle={(style) => set({ style })}
+          />
         </div>
         <label className="inline-flex items-center gap-2.5 text-[13.5px]">
           <input type="checkbox" checked={draft.priceLabel} onChange={(e) => set({ priceLabel: e.target.checked })} /> Eticheta prețului

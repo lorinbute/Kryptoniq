@@ -1,8 +1,8 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { Activity, CalendarDays, ChartCandlestick, Gauge, Landmark, LogOut, Moon, Newspaper, Search, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Users, Wallet } from 'lucide-react';
+import { Activity, CalendarDays, ChartCandlestick, Gauge, Landmark, ListChecks, LogOut, Moon, Newspaper, Search, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Users, Wallet } from 'lucide-react';
 import type { AccountRequest, PublicUser } from '../shared/api-types.ts';
 import { api, errorMessage } from './api.ts';
 import { AUTH_KEY, AUTH_PATHS, clearAfterSignIn, landAfterSignOut, REQUESTS_KEY, SIGNED_OUT_EVENT, TWO_FACTOR_EVENT, useAuthChange, useAuthState, useEnrolment } from './auth.ts';
@@ -14,6 +14,8 @@ import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { CommandPalette, isMac } from './components/CommandPalette.tsx';
 import { MarketStrip } from './components/MarketStrip.tsx';
 import { ThemeToggle } from './components/ThemeToggle.tsx';
+import { PriorityNav } from './components/PriorityNav.tsx';
+import { OfflineBanner, usePing } from './components/OfflineBanner.tsx';
 import { setTheme, useTheme } from './theme.ts';
 import { EXIT_FULLSCREEN_EVENT } from './chart/fullscreen.ts';
 import { isImportFailure } from './stale.ts';
@@ -25,6 +27,7 @@ const CalendarPage = lazy(() => import('./pages/Calendar.tsx'));
 const EconomyPage = lazy(() => import('./pages/Economy.tsx'));
 const ChartsPage = lazy(() => import('./pages/Charts.tsx'));
 const TradesPage = lazy(() => import('./pages/Trades.tsx'));
+const WatchlistsPage = lazy(() => import('./pages/Watchlists.tsx'));
 const SettingsPage = lazy(() => import('./pages/Settings.tsx'));
 const AdminSettingsPage = lazy(() => import('./pages/SettingsAdmin.tsx'));
 const HealthPage = lazy(() => import('./pages/Health.tsx'));
@@ -40,6 +43,7 @@ const NAV = [
   { to: '/economy', label: 'Economie', icon: Landmark },
   { to: '/charts', label: 'Grafice', icon: ChartCandlestick },
   { to: '/trades', label: 'Tranzacții', icon: Wallet },
+  { to: '/watchlists', label: 'Liste de urmărire', icon: ListChecks },
   { to: '/settings', label: 'Setări', icon: SettingsIcon },
   { to: '/health', label: 'Stare sistem', icon: Activity, admin: true },
 ];
@@ -51,11 +55,6 @@ const ACCOUNT_PAGES = [
 /** Only in the search (⌘K): the admin's tab of Settings (FD-ADMINSET). */
 const SEARCH_PAGES = [{ to: '/settings/admin', label: 'Setări admin', icon: SlidersHorizontal, admin: true }];
 const forRole = <T extends { admin?: boolean }>(items: T[], user: PublicUser) => items.filter((i) => !i.admin || user.role === 'admin');
-
-/** Polled by the top bar status dot and the offline banner (one shared query). */
-function usePing() {
-  return useQuery({ queryKey: ['ping'], queryFn: () => api.get<{ ok: boolean }>('/api/ping'), refetchInterval: 15_000, retry: 0 });
-}
 
 /** The Sentiq icon (the name follows it in the menu, so the image itself is decorative). */
 function Monogram({ size = 28 }: { size?: number }) {
@@ -185,44 +184,28 @@ function UserMenu({ user }: { user: PublicUser }) {
 /** `onSummary`: the "Rezumat" button, on the Today page only (FD-SUMMARY §1). */
 function TopNav({ onSearch, onSummary, user }: { onSearch: () => void; onSummary?: () => void; user: PublicUser }) {
   const shortcut = isMac() ? '⌘K' : 'Ctrl K';
+  const pages = useMemo(() => forRole(NAV, user), [user]);
   return (
     <header className="theme-bar sticky top-0 z-30 border-b border-line-soft bg-bar/90 backdrop-blur">
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2.5 sm:px-6">
-        <NavLink to="/" className="inline-flex items-center gap-2.5 text-[16px] font-[650] tracking-[-0.02em] text-text no-underline hover:no-underline" title="Sentiq">
+      {/* FD-NAVOVERFLOW: one row at every width; the pages that do not fit go behind "»". */}
+      <div className="flex items-center gap-x-2 px-4 py-2.5 sm:gap-x-6 sm:px-6">
+        <NavLink to="/" className="inline-flex shrink-0 items-center gap-2.5 text-[16px] font-[650] tracking-[-0.02em] text-text no-underline hover:no-underline" title="Sentiq">
           <Monogram />
           Sentiq
         </NavLink>
-        <nav
-          aria-label="Navigare"
-          className="order-last -mx-4 flex w-[calc(100%+2rem)] gap-1 overflow-x-auto px-4 [mask-image:linear-gradient(to_right,black_calc(100%-40px),transparent)] lg:order-none lg:mx-0 lg:w-auto lg:px-0 lg:[mask-image:none]"
-        >
-          {forRole(NAV, user).map(({ to, label, icon: Icon, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                clsx(
-                  'inline-flex h-[34px] shrink-0 items-center gap-2 rounded-lg px-3 text-[14px] whitespace-nowrap no-underline transition-colors hover:no-underline',
-                  isActive ? 'bg-nav-active font-semibold text-on-nav-active [&>svg]:text-nav-active-icon' : 'text-muted hover:bg-nav-hover hover:text-text',
-                )
-              }
-            >
-              <Icon size={15} strokeWidth={1.9} aria-hidden className="shrink-0" />
-              {label}
-            </NavLink>
-          ))}
-        </nav>
-        <div className="ml-auto flex items-center gap-5">
+        <PriorityNav items={pages} />
+        <div className="ml-auto flex shrink-0 items-center gap-3 sm:gap-5">
           {onSummary && (
             <button
               type="button"
               onClick={onSummary}
-              className="-mr-2 inline-flex h-9 items-center gap-2 rounded-[10px] border border-accent-dim bg-accent/[0.08] px-3 text-[13px] font-semibold text-accent transition-colors hover:border-accent hover:bg-accent hover:text-on-accent"
+              className="inline-flex h-9 items-center gap-2 rounded-[10px] border border-accent-dim bg-accent/[0.08] px-2.5 text-[13px] font-semibold text-accent transition-colors hover:border-accent hover:bg-accent hover:text-on-accent md:-mr-2 md:px-3"
               aria-haspopup="dialog"
+              title="Rezumat"
             >
               <Sparkles size={15} aria-hidden className="shrink-0" />
-              Rezumat
+              {/* FD-NAVOVERFLOW: under 768 px the sparkle alone, so the bar keeps one row (the name is still read). */}
+              <span className="max-md:sr-only">Rezumat</span>
             </button>
           )}
           <button
@@ -232,9 +215,10 @@ function TopNav({ onSearch, onSummary, user }: { onSearch: () => void; onSummary
             aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}
           >
             <Search size={15} aria-hidden className="shrink-0" />
-            <span className="hidden flex-1 truncate whitespace-nowrap sm:inline">Caută monede, acțiuni, știri</span>
-            <span className="sr-only sm:hidden">Caută</span>
-            <kbd className="num hidden rounded-[5px] border border-line-strong px-1.5 py-px text-[11px] sm:inline">{shortcut}</kbd>
+            {/* FD-NAVOVERFLOW: the words from 768 px (under it, the magnifier alone keeps the bar on one row). */}
+            <span className="hidden flex-1 truncate whitespace-nowrap md:inline">Caută monede, acțiuni, știri</span>
+            <span className="sr-only md:hidden">Caută</span>
+            <kbd className="num hidden rounded-[5px] border border-line-strong px-1.5 py-px text-[11px] md:inline">{shortcut}</kbd>
           </button>
           <Clocks />
           {/* On a phone the switch lives in the account menu: the bar keeps one row (FD-THEME §2). */}
@@ -243,27 +227,6 @@ function TopNav({ onSearch, onSummary, user }: { onSearch: () => void; onSummary
         </div>
       </div>
     </header>
-  );
-}
-
-/** Sentiq opened on the computer that runs it (http://localhost), not on its public or network address. */
-const isThisComputer = () => ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
-
-/** Shown when the server stops answering: pages keep their last data, this says it may be stale. */
-function OfflineBanner() {
-  const ping = usePing();
-  if (!ping.isError) return null;
-  return (
-    <div role="alert" className="border-b border-bear/40 bg-bear/10 px-4 py-2.5 text-[13.5px] sm:px-6">
-      {/* FD-ONLINE §3: what to do depends on where Sentiq is opened (this Mac, or the public address). */}
-      {isThisComputer() ? (
-        <>
-          Serverul Sentiq nu răspunde. Datele afișate pot fi vechi; deschide <strong>Sentiq.app</strong> sau rulează <code>scripts/sentiq.sh start</code>.
-        </>
-      ) : (
-        'Serverul Sentiq nu răspunde. Datele afișate pot fi vechi; pagina revine singură când serverul răspunde.'
-      )}
-    </div>
   );
 }
 
@@ -380,7 +343,8 @@ function SignedInApp({ user }: { user: PublicUser }) {
       <TopNav onSearch={() => setSearch(true)} onSummary={location.pathname === '/' ? () => setSummary(true) : undefined} user={user} />
       <MarketStrip />
       <OfflineBanner />
-      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-5 sm:px-6">
+      {/* FD-FULLWIDTH: every page as wide as the window (the same side margins everywhere). */}
+      <main className="w-full flex-1 px-4 py-5 sm:px-6">
         <ErrorBoundary resetKey={location.pathname}>
           <Suspense fallback={<Loading />}>
             <Routes>
@@ -394,6 +358,7 @@ function SignedInApp({ user }: { user: PublicUser }) {
               <Route path="/charts/i/:index" caseSensitive element={<ChartsPage />} />
               <Route path="/charts/:base/:quote" element={<ChartsPage />} />
               <Route path="/trades" element={<TradesPage />} />
+              <Route path="/watchlists" element={<WatchlistsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               {user.role === 'admin' && <Route path="/settings/admin" element={<AdminSettingsPage />} />}
               {user.role === 'admin' && <Route path="/health" element={<HealthPage />} />}

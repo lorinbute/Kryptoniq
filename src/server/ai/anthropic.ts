@@ -4,7 +4,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import type { z } from 'zod';
-import { AiError, type AiAnswer, type AiClient, type AiErrorKind, type AiRequest } from './types.ts';
+import { AiError, withinRo, type AiAnswer, type AiClient, type AiErrorKind, type AiRequest } from './types.ts';
 
 export type AnthropicSdk = Pick<Anthropic, 'messages' | 'beta'>;
 
@@ -43,9 +43,13 @@ export class AnthropicClient implements AiClient {
   }
 
   async generate<T>(req: AiRequest<T>): Promise<AiAnswer<T>> {
+    // FD-AISLOW §1: the time is the whole call's, the SDK's retries within it.
+    const deadline = AbortSignal.timeout(req.timeoutMs);
+    const signal = req.signal ? AbortSignal.any([req.signal, deadline]) : deadline;
     try {
-      return req.long ? await this.streamed(req) : await this.parsed(req);
+      return req.long ? await this.streamed({ ...req, signal }) : await this.parsed({ ...req, signal });
     } catch (err) {
+      if (deadline.aborted && !req.signal?.aborted) throw new AiError('anthropic', 'timeout', 0, '', this.model, { said: `Anthropic nu a răspuns ${withinRo(req.timeoutMs)}` });
       throw fromAnthropic(err, this.model);
     }
   }

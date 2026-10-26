@@ -38,10 +38,21 @@ describe('the saved indicators', () => {
       study({ hlines: { hline0: { price: '80' } } }),
       study({ plots: { plot0: { color: 'red' } } }),
       study({ plots: { plot0: { other: 1 } } }),
+      // FD-FILLS
+      study({ fills: { f_Background: { color: 'blue' } } }),
+      study({ fills: { f_Background: { visible: 'no' } } }),
+      study({ fills: { f_Background: { width: 2 } } }),
+      study({ fills: { 'bad key': { visible: false } } }),
       study({ height: 4 }),
       study({ extra: true }),
     ];
     for (const b of bad) expect(studySchema.safeParse(b).success, JSON.stringify(b).slice(0, 80)).toBe(false);
+  });
+
+  it('keeps the fills chosen in the Style tab (FD-FILLS)', () => {
+    const s = studySchema.parse(study({ fills: { f_Background: { visible: false }, fill_band: { color: '#7E57C240' } } }));
+    expect(s.fills).toEqual({ f_Background: { visible: false }, fill_band: { color: '#7E57C240' } });
+    expect(studyMemorySchema.parse([{ id: 'bb', inputs: {}, fills: { f_Background: { color: '#2196F31A' } } }])[0]?.fills).toEqual({ f_Background: { color: '#2196F31A' } });
   });
 
   it('a list: at most STUDY_MAX, each uid once', () => {

@@ -62,6 +62,7 @@ import type {
   MarkerData,
 } from '../types';
 import { isTransparent, withOpacity } from './color';
+import { colorKey } from '../../color-links';
 import {
   BarGrid,
   anchorData,
@@ -110,7 +111,7 @@ export interface PlotOverride {
   lineWidth?: number;
   /** Plot type (PineScript plot style name) */
   style?: NonNullable<PlotConfig['style']>;
-  /** Replacement of per-point colours: original colour string -> colour drawn */
+  /** Replacement of per-point colours: original colour (by colorKey) -> colour drawn */
   palette?: Record<string, string>;
 }
 
@@ -384,7 +385,8 @@ export class IndicatorRenderer {
       const raw = r.plots?.[def.id] as PlotPoint[] | undefined;
       if (!raw?.length || !this.plotVisible(def, override, r)) continue;
       const palette = override.palette;
-      const data = palette ? raw.map((p) => (p.color && palette[p.color] ? { ...p, color: palette[p.color] } : p)) : raw;
+      // Sentiq (FD-COLORUNIFY): the host keys its palette by colorKey, so #f23645 and #F23645 are one colour.
+      const data = palette ? raw.map((p) => (p.color && palette[colorKey(p.color)] ? { ...p, color: palette[colorKey(p.color)] } : p)) : raw;
       const color = override.color ?? def.color ?? '#2962FF';
       const lineWidth = override.lineWidth ?? def.lineWidth;
       const plotPane = def.forceOverlay ? 0 : pane;

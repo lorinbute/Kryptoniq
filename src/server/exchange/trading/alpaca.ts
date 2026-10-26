@@ -2,9 +2,9 @@
 // good-till-cancelled; fractional or by dollar amount (any of the four, day only); TP / SL as a bracket (whole shares,
 // not outside the session); extended hours (limit); crypto market / limit / stop-limit, good-till-cancelled. Cancelling,
 // closing a position.
-import type { InstrumentInfo, OrderPreview, OrderResult, OrderTicket, TradeMarket, TradeSymbol } from '../../../shared/trading.ts';
+import { type InstrumentInfo, type OrderPreview, type OrderResult, type OrderTicket, type TradeMarket, type TradeSymbol, type ModifyPreview, type ModifyResult, type ModifyStepPlan, type ModifyTicket } from '../../../shared/trading.ts';
 import { brokerCall } from './http.ts';
-import { commonChecks, fmtPlain, TradingError, type CancelInput, type Trader } from './types.ts';
+import { commonChecks, fmtPlain, TradingError, type CancelInput, type Trader, modifyStatus, protectionChecks, type ModifyPlan } from './types.ts';
 
 const FORBIDDEN = 'cheia nu are acces la tranzacționare pe acest cont';
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
@@ -23,7 +23,7 @@ export class AlpacaTrader implements Trader {
     this.headers = { 'APCA-API-KEY-ID': creds.keyId ?? '', 'APCA-API-SECRET-KEY': creds.secret ?? '' };
   }
 
-  private call(method: 'GET' | 'POST' | 'DELETE', url: string, body?: unknown): Promise<unknown> {
+  private call(method: 'GET' | 'POST' | 'DELETE' | 'PATCH', url: string, body?: unknown): Promise<unknown> {
     return brokerCall('Alpaca', url.startsWith('http') ? url : `${this.base}${url}`, { method, headers: this.headers, body, write: method !== 'GET', forbidden: FORBIDDEN });
   }
 
@@ -130,9 +130,23 @@ export class AlpacaTrader implements Trader {
       if (value > acct.buyingPower) warnings.push(`Putere de cumpărare: ${fmtPlain(acct.buyingPower)} USD; ordinul cere ${fmtPlain(value)}.`);
       else if (value > acct.buyingPower * 0.5) warnings.push(`Ordinul folosește peste jumătate din puterea de cumpărare (${fmtPlain(acct.buyingPower)} USD).`);
     }
+    // FD-HEDGEALL: Alpaca keeps one position per symbol (long or short, net): no long and short side by side.
     if (t.side === 'sell' && (!pos || pos.side === 'long')) {
       const free = pos?.free ?? 0;
-      if (amount > free + 1e-9) warnings.push(free > 0 ? `Ai disponibil ${fmtPlain(free)} ${a.symbol}; peste atât, vânzarea deschide o poziție short (dacă contul permite).` : `Nu deții ${a.symbol}: vânzarea deschide o poziție short (dacă contul permite).`);
+      if (amount > free + 1e-9) {
+        warnings.push(
+          free > 0
+            ? `Alpaca ține o singură poziție pe simbol: vânzarea închide întâi long-ul de ${fmtPlain(free)} ${a.symbol}, iar peste el deschide un short (dacă contul permite short). Nu există long și short în același timp.`
+            : `Nu deții ${a.symbol}: vânzarea deschide o poziție short (dacă contul permite).`,
+        );
+      }
+    }
+    if (t.side === 'buy' && pos?.side === 'short') {
+      warnings.push(
+        amount > pos.qty + 1e-9
+          ? `Alpaca ține o singură poziție pe simbol: cumpărarea acoperă întâi short-ul de ${fmtPlain(pos.qty)} ${a.symbol}, iar peste el deschide un long.`
+          : `Alpaca ține o singură poziție pe simbol: cumpărarea micșorează short-ul de ${fmtPlain(pos.qty)} ${a.symbol} (nu deschide un long separat).`,
+      );
     }
     if (!a.crypto && t.kind === 'market') warnings.push('Dacă piața e închisă, Alpaca execută ordinul la deschidere (valabil o zi).');
     commonChecks(t, { last, entry: t.price ?? last }, { warnings, errors }, fmtPlain);
@@ -188,5 +202,100 @@ export class AlpacaTrader implements Trader {
       throw err;
     }
     return { status: 'cancelled', orderId: input.orderId, message: null, followUps: [] };
+  }
+
+  // ---------------- FD-ORDEREDIT: an open order's price, trigger or quantity (PATCH /v2/orders/{id}) ----------------
+
+  async normalizeModify(t: ModifyTicket): Promise<ModifyPlan> {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const steps: ModifyStepPlan[] = [];
+    let last: number | null = null;
+    for (const [i, c] of t.changes.entries()) {
+      if (c.orderId === null) {
+        errors.push('La Alpaca, un SL / TP nou se pune cu un ordin nou (stop sau limită de vânzare).');
+        continue;
+      }
+      let o: Record<string, unknown>;
+      try {
+        o = obj(await this.call('GET', `/v2/orders/${encodeURIComponent(c.orderId)}`));
+      } catch (err) {
+        if (err instanceof TradingError && err.code === 'NOT_FOUND') {
+          errors.push('Ordinul nu mai e deschis (poate s-a executat sau a fost anulat).');
+          continue;
+        }
+        throw err;
+      }
+      const status = str(o.status) ?? '';
+      if (!['new', 'partially_filled', 'held', 'accepted', 'pending_new'].includes(status)) {
+        errors.push('Ordinul nu mai e deschis (poate s-a executat sau a fost anulat).');
+        continue;
+      }
+      if (['accepted', 'pending_new', 'pending_replace', 'pending_cancel'].includes(status)) errors.push('Alpaca încă procesează ordinul: mai încearcă peste câteva secunde.');
+      const symbol = str(o.symbol) ?? t.symbol;
+      last = last ?? (await this.last(symbol, str(o.asset_class) === 'crypto'));
+      const before = { price: num(o.limit_price), triggerPrice: num(o.stop_price), amount: num(o.qty), takeProfit: null, stopLoss: null };
+      const after = { ...before };
+      const side = str(o.side) === 'sell' ? 'sell' : 'buy';
+      if (c.what === 'order') {
+        if (c.takeProfit !== undefined || c.stopLoss !== undefined) errors.push('La Alpaca, TP / SL-ul unui bracket sunt ordine separate: modifică-le pe ele.');
+        if (c.price !== undefined) after.price = Number(c.price.toFixed(c.price >= 1 ? 2 : 4));
+        if (c.triggerPrice !== undefined) after.triggerPrice = Number(c.triggerPrice.toFixed(c.triggerPrice >= 1 ? 2 : 4));
+        if (c.amount !== undefined) {
+          if (!Number.isInteger(c.amount) || o.notional !== null && o.notional !== undefined) errors.push('Alpaca schimbă doar cantitatea întreagă a unui ordin în acțiuni (nu una fracționară sau în valoare).');
+          after.amount = c.amount;
+        }
+        // A sell stop falls to its price, a buy stop rises to it: moved across the price now, it would fire at once.
+        if (after.triggerPrice !== null && after.triggerPrice !== before.triggerPrice && last !== null && (side === 'sell' ? after.triggerPrice >= last : after.triggerPrice <= last)) {
+          errors.push(`Declanșarea nouă e ${side === 'sell' ? 'peste' : 'sub'} prețul de acum (${fmtPlain(last)}): un stop de ${side === 'sell' ? 'vânzare' : 'cumpărare'} s-ar executa imediat.`);
+        }
+      } else {
+        // A stop loss / take profit order of a position: its stop (or limit) price is the level.
+        if (t.position && side !== (t.position.side === 'long' ? 'sell' : 'buy')) {
+          errors.push('Ordinul nu închide această poziție.');
+          continue;
+        }
+        if (c.level === null) {
+          steps.push({ change: i, how: 'cancel', orderId: c.orderId, side, kind: c.what, before, after: before, removes: true });
+          if (c.what === 'sl') warnings.push('Fără stop loss, pierderea poziției nu mai e limitată de un ordin.');
+          continue;
+        }
+        const level = Number(c.level.toFixed(c.level >= 1 ? 2 : 4));
+        if (before.triggerPrice !== null) after.triggerPrice = level;
+        else after.price = level;
+        if (t.position) protectionChecks(c.what, t.position.side === 'long', level, last, { errors }, fmtPlain);
+      }
+      if (JSON.stringify(before) === JSON.stringify(after)) continue;
+      steps.push({ change: i, how: 'amend', orderId: c.orderId, side, kind: str(o.type), before, after, removes: false });
+    }
+    if (!steps.length && !errors.length) errors.push('Nimic nu se schimbă: valorile sunt cele de acum.');
+    const preview: ModifyPreview = { ticket: t, displaySymbol: t.symbol, last, currency: 'USD', env: '', steps, warnings: [...new Set(warnings)], errors };
+    return { preview, internal: null };
+  }
+
+  async modify(plan: ModifyPlan): Promise<ModifyResult> {
+    const results: (ModifyResult['steps'][number] & { unknown?: boolean })[] = [];
+    for (const s of plan.preview.steps) {
+      try {
+        if (s.how === 'cancel') {
+          await this.cancel({ orderId: s.orderId as string, symbol: plan.preview.ticket.symbol, market: 'stock', trigger: false });
+          results.push({ change: s.change, what: 'anulat', ok: true, orderId: s.orderId, message: null, ...(s.orderId ? { cancelled: s.orderId } : {}) });
+          continue;
+        }
+        const body: Record<string, unknown> = {};
+        if (s.after.price !== s.before.price && s.after.price !== null) body.limit_price = String(s.after.price);
+        if (s.after.triggerPrice !== s.before.triggerPrice && s.after.triggerPrice !== null) body.stop_price = String(s.after.triggerPrice);
+        if (s.after.amount !== s.before.amount && s.after.amount !== null) body.qty = String(s.after.amount);
+        // A replacement: a new order (another id) takes the old one's place.
+        const r = obj(await this.call('PATCH', `/v2/orders/${encodeURIComponent(s.orderId as string)}`, body));
+        // Alpaca replaces the order under a new id: the old one is gone.
+        results.push({ change: s.change, what: 'modificat (ordin nou)', ok: true, orderId: str(r.id), message: null, ...(s.orderId && str(r.id) !== s.orderId ? { cancelled: s.orderId } : {}) });
+      } catch (err) {
+        const unknown = err instanceof TradingError && err.code === 'UNKNOWN_OUTCOME';
+        results.push({ change: s.change, what: 'eroare', ok: false, orderId: s.orderId, message: (err as Error).message, ...(unknown ? { unknown } : {}) });
+        if (unknown) break;
+      }
+    }
+    return { status: modifyStatus(results), steps: results.map(({ unknown: _u, ...r }) => r) };
   }
 }

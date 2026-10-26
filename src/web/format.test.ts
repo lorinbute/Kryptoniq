@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fmtBytes, fmtCountdown } from './format.ts';
+import { countRo, fmtBytes, fmtCountdown } from './format.ts';
 
 describe('fmtCountdown', () => {
   const now = Date.parse('2026-10-12T18:46:00Z');
@@ -22,5 +22,17 @@ describe('fmtBytes', () => {
     expect(fmtBytes(2 * 1024 ** 3)).toBe('2 GB');
     expect(fmtBytes(10 * 1024 ** 3)).toBe('10 GB');
     expect(fmtBytes(1.5 * 1024 ** 3)).toBe('1.5 GB');
+  });
+});
+
+describe('countRo', () => {
+  it('says the count as Romanian does', () => {
+    expect(countRo(1, 'desen', 'desene')).toBe('1 desen');
+    expect(countRo(3, 'desen', 'desene')).toBe('3 desene');
+    expect(countRo(19, 'indicator', 'indicatori')).toBe('19 indicatori');
+    expect(countRo(20, 'indicator', 'indicatori')).toBe('20 de indicatori');
+    expect(countRo(101, 'desen', 'desene')).toBe('101 desene');
+    expect(countRo(120, 'desen', 'desene')).toBe('120 de desene');
+    expect(countRo(200, 'desen', 'desene')).toBe('200 de desene');
   });
 });

@@ -158,7 +158,7 @@ Se mai văd: **încrederea** (scăzută / medie / ridicată), sub-indicii **Cryp
 - **[DI] Logarithmic Moving Average (LMA)** în panoul de jos (linia de semnal, pragurile, starea BULLISH / BEARISH / NEUTRAL); „Color Price Bars” colorează lumânările după LMA.
 - **Indicatori** (FD-INDICATORS): lista cu cei 117 indicatori standard TradingView plus Volume, pe categorii și cu căutare; Slingshot și LMA sus, la „Premium”, cu eticheta PREMIUM. Fiecare indicator adăugat are legenda lui (valori, ochi, setări, ×), panoul lui dacă nu e „pe grafic” și setările Intrări / Stil cu numele și valorile implicite din TradingView. Bifa „Pozițiile mele” arată / ascunde pozițiile.
 - **Pozițiile și ordinele** tale pe moneda afișată apar ca linii, cu PnL la SL, TP și la prețul curent.
-- Favoritele de deasupra graficului se reordonează prin tragere (sau Alt + ← / →); ordinea e aceeași peste tot.
+- Simbolurile din panoul graficului sunt ale listei de urmărire alese în capul lui (FD-WATCHLISTS §4) și se reordonează prin tragere (sau Alt + ↑ / ↓), în lista aceea.
 - Se țin minte: perechea, timeframe-ul, „Pozițiile mele”, indicatorii de pe grafic (aceiași pe toate graficele), înălțimea fiecărui panou, setările indicatorilor; zoom-ul pe fiecare pereche și timeframe, în browser. **Ecran complet**, cu ieșire prin buton sau Esc.
 
 ### 5.2 Diferențe intenționate față de TradingView
@@ -211,7 +211,7 @@ Pentru fiecare favorit, pe timeframe-ul ales pe Azi, deasupra favoritelor („Se
 
 ## 7. Setări (FD-SET, FD-ADMINSET)
 **Ale mele** (`/settings`, oricine, doar pentru contul lui):
-- **Favorite**: monede (căutare pe exchange-ul utilizatorului și pe cel implicit), acțiuni (căutare după simbol sau nume) și indici (din lista de 7: SPX, NDX, COMP, DJI, RUT, VIX, SOX); reordonare prin tragere, săgeți sau Alt + ↑ / ↓; aliasuri pentru știri.
+- **Simbolurile urmărite (din 20 oct 2026, în Liste de urmărire, FD-WATCHLISTS; în restul documentului, „favoritele” sunt simbolurile din toate listele împreună)**: monede (căutare pe exchange-ul utilizatorului și pe cel implicit), acțiuni (căutare după simbol sau nume) și indici (din lista de 7: SPX, NDX, COMP, DJI, RUT, VIX, SOX); reordonare prin tragere, săgeți sau Alt + ↑ / ↓; aliasuri pentru știri.
 - **Conturi** (exchange-uri și brokeri), prin asistent. Cu două sau mai multe exchange-uri dintre KuCoin, Binance, Bybit, OKX, Bitget: „Prețurile crypto vin de la:” (FD-MARKETSRC).
 - **General**: fusul orar.
 
@@ -577,7 +577,7 @@ Port 1:1 din `logarithmic-moving-average.pine` (Pine v6, © Dusty Investments), 
 - Butonul **„Ecran complet”** din bara graficului afișează graficul pe tot ecranul (modul ecran complet al sistemului). Rămân vizibile bara graficului (pereche, preț, timeframe, comutatoare, indicatori) și graficul cu panoul LMA, întins pe tot spațiul.
 - În ecran complet, același loc are butonul **„Ieși din ecran complet”**, cu indicația `Esc`.
 - **Esc** iese din ecran complet. Dacă e deschis sertarul de setări, primul Esc închide sertarul, al doilea iese din ecran complet. În modul ecran complet al sistemului, browserul poate ieși direct, la primul Esc.
-- Dacă browserul nu permite ecranul complet al sistemului (de exemplu iPhone), graficul acoperă toată fereastra aplicației, cu același buton de ieșire și același Esc.
+- Dacă browserul nu permite ecranul complet al sistemului, și întotdeauna pe iPhone și iPad (FD-IPADFS2), graficul acoperă toată fereastra aplicației, cu același buton de ieșire și același Esc.
 - **⌘K** iese întâi din ecran complet, apoi deschide căutarea (altfel căutarea ar rămâne ascunsă sub grafic).
 - Zoom-ul și poziția pe grafic se păstrează la intrare și la ieșire. Ecranul complet nu e o setare și nu se ține minte.
 
@@ -794,7 +794,7 @@ Alegerile utilizatorului (după cercetarea din research.md §8):
 - **Sentimentul zilei** include și știrile despre acțiuni, cu defalcarea „Acțiuni” lângă Crypto / Macro / Geopolitică.
 
 #### 4.5 Calendar
-- **Rezultatele trimestriale** ale acțiunilor favorite (de la Nasdaq) apar ca evenimente:
+- **Rezultatele trimestriale** ale acțiunilor favorite (de la Nasdaq; data confirmată de companie, de la TradingView, are întâietate: FD-EARNTV) apar ca evenimente:
   - impact „High”, ora: înainte de deschidere / după închidere / în timpul zilei;
   - estimarea EPS și EPS-ul de anul trecut în câmpurile Forecast / Previous.
 - Titlul: „Rezultate trimestriale Bank of America”, cu simbolul în colț și o notă (ora, trimestrul, ce înseamnă Prognoză / Anterior).
@@ -2455,7 +2455,7 @@ Surse: documentațiile oficiale (Trading 212 Public API, eToro Public API, Alpac
 | **Binance** | spot: la piață, limită, stop-limită (Binance spot nu are stop la piață); futures USDⓈ-M: la piață, limită, stop, levier, cross / isolated, reduce-only, închidere; anulare | „Enable Spot & Margin Trading” și / sau „Enable Futures”; fără „Enable Withdrawals” | TP / SL nu se atașează la intrare: Sentiq le trimite separat, ca ordine reduce-only, imediat după o intrare la piață |
 | **Bybit** | spot și futures liniare USDT: la piață, limită, stop, levier, TP / SL atașate, reduce-only, închidere; anulare | „Read-Write”: Spot (SpotTrade) și / sau Contract (Orders, Positions); fără Withdraw | modul de marjă (cross / isolated) e al întregului cont unificat: Sentiq nu-l schimbă, îl folosește pe cel ales pe Bybit |
 | **OKX** | spot și swap USDT: la piață, limită, stop, levier, cross / isolated, TP / SL atașate, reduce-only, închidere; anulare | „Trade”; fără „Withdraw” | cantitatea la swap e în contracte (ex. 0,01 BTC); Sentiq o convertește |
-| **Bitget** | spot și futures USDT-M: la piață, limită, stop, levier, cross / isolated, TP / SL atașate, reduce-only, închidere; anulare | „Trade”; fără „Withdraw” | modul de poziție (one-way / hedge) trebuie trimis cu fiecare ordin: Sentiq îl citește din cont. Pe un cont unificat (UTA): futures doar cu marjă cross, iar ordinele stop se pun din aplicația Bitget (ccxt nu le are încă pentru acest cont) |
+| **Bitget** | spot și futures USDT-M: la piață, limită, stop, levier, cross / isolated, TP / SL atașate, reduce-only, închidere; anulare | „Trade”; fără „Withdraw” | modul de poziție (one-way / hedge) trebuie trimis cu fiecare ordin: Sentiq îl citește din cont (și hedge-ul merge, FD-HEDGEALL). Pe un cont unificat (UTA): futures doar cu marjă cross, iar ordinele stop se pun din aplicația Bitget (ccxt nu le are încă pentru acest cont) |
 | **Kraken** | spot: la piață, limită, stop-loss (piață / limită); anulare | „Create & Modify Orders” și „Cancel & Close Orders”; fără „Withdraw Funds” | Kraken Futures e un API separat (neconectat în Sentiq): fără futures; Kraken nu spune permisiunile cheii |
 | **Coinbase** | spot (Advanced Trade): la piață (cumpărarea pe sumă în USD / USDC), limită, stop-limită; anulare | cheie CDP cu „Trade”; fără „Transfer” | fără stop la piață; fără futures (derivatele Coinbase au alt cont) |
 | **Trading 212** | la piață (și în afara orelor, opțional), limită, stop, stop-limită; anulare; vânzarea unei dețineri | permisiunea „Orders: Execute” | doar conturi Invest / ISA, doar în moneda contului; API-ul e în beta și nu e idempotent (o cerere repetată poate dubla ordinul); o documentație mai veche spunea că pe Live merg doar ordinele la piață (dacă Trading 212 refuză, Sentiq arată mesajul lor) |
@@ -2590,8 +2590,7 @@ Surse: documentațiile oficiale (Trading 212 Public API, eToro Public API, Alpac
 | Cheie cu permisiune de retragere | tranzacționarea nu pornește; contul rămâne doar citire |
 | Permisiunile nu se pot citi chiar acum (o eroare de moment) | se păstrează cele știute: o cheie știută cu retrageri rămâne refuzată |
 | Cheie care poate doar spot (fără futures) | „Futures” nu apare în formular pentru acel cont |
-| Cont futures în modul hedge (Binance, OKX, KuCoin, Bitget) | „Contul e în modul hedge (poziții long și short separate). Sentiq trimite ordine futures doar în modul one-way: îl schimbi din setările exchange-ului.” Spot-ul merge |
-| Bybit în modul hedge | eroarea Bybit, cu aceeași explicație |
+| Cont futures în modul hedge | ordinele merg, cu poziția numită (FD-KUCOINHEDGE, FD-HEDGEALL), pe KuCoin clasic, Binance, Bybit, OKX și Bitget. Refuzat doar pe contul unificat KuCoin, cu explicația |
 | Levier peste maximul pieței | refuzat la verificare, cu maximul pieței (formularul arată maximul lângă câmp) |
 | Schimbarea levierului / marjei cu o poziție deschisă | platforma poate refuza (ex. Binance nu schimbă marja cu poziție deschisă): mesajul ei; ordinul nu pleacă |
 | Cantitate sub minim (sau 0 după rotunjire) | refuzată la verificare: „Minimul pe … e …” |
@@ -3549,8 +3548,3318 @@ Panoul lateral din dreapta, ca la indicatori, cu titlul „Linie orizontală” 
 
 ### 2. Ce nu se schimbă
 - Titlul panoului „Semnale Slingshot 3.3 pe 1h” și subtitlurile din lista Indicatori („Slingshot · pe grafic”, „LMA · panou separat”).
-- Scripturile Pine originale și comentariile din cod care le citează numele.
+- Scripturile Pine originale și comentariile din cod care le citează numele. (Din 26 oct 2026, fișierul 3.4 are și el numele „[DE]”: FIX-PINESYNC.)
 
 ### 3. Conflicte cu ce exista
 - **FD-PICKERSORT §1** („[DI] Logarithmic Moving Average e la D, după Detrended”): cu „[DE]”, ambii indicatori Premium sunt tot la D, dar înainte de „Detrended Price Oscillator” („DE L…” și „DE S…” vin înainte de „Det…”).
 - **FD-CHARTUX §3 și FD-INDICATORS §1** („[DI] Logarithmic Moving Average”, „Slingshot System 3.3”): numele de mai sus le înlocuiesc.
+
+## FD-CHARTTV — Graficul ca în TradingView: lista de simboluri în dreapta, tragere liberă, A / L, etichetele prețului; ecranul complet pe iPad (20 oct 2026)
+
+Cererea utilizatorului (cu capturi de pe iPad și din TradingView):
+- „în full screen mode butonul X de ieșire din full screen acoperă numele simbolului. Asta ține de Safari pe iPad.”
+- „Pozițiile mele nu are aceeași înălțime ca elementele din jurul lui.”
+- „Butonul de ieși din ecran se află pe al doilea rând și ar trebui să fie pe rând cu indicatorii.”
+- „Lista de simboluri ar trebui să fie o listă verticală la fel ca la TradingView, în dreapta. În stânga se afișează chartul. Trebuie să pot să modific mărimea panoului cu lista de simboluri sau să o ascund complet.”
+- „Ce aplici acum aplici generic, nu doar pe iPad. Singura chestie specifică iPadului e butonul X.”
+- „Să nu mai blochezi lumânările pe chart. Vreau să trag de oriunde, oricând, fără să deblochez manual.”
+- „Buton de încadrare automată a lumânărilor, așa cum are TradingView: A și L (Automat și Logaritmic). Automat așază lumânările să încapă în spațiul disponibil.”
+- „Marchează prețul cu diverse culori pe bara verticală de preț, la fel ca în poză: aceleași culori pentru prețul unde am cursorul și pentru prețul actual.”
+- „Cursorul se transformă în + când intru pe chart și se afișează dungile punctate.”
+- „Butonul >> să fie câțiva pixeli la stânga, pentru că butonul + pentru adăugarea unei linii se așază pe el.”
+- „Lista verticală de simboluri ca pe TradingView, adică ca în poza atașată” (coloanele Symbol, Last, Chg, Chg%).
+
+### 1. Ecranul complet pe iPad (doar aici e ceva specific iPad-ului)
+- În ecranul complet al sistemului, Safari (și orice browser) pe iPad pune propriul buton ✕ în colțul din stânga sus, peste pagină.
+- Pe iPad, în ecranul complet al sistemului, numele simbolului se mută spre dreapta cât e lat butonul (80 px, din FD-IPADFS §2; 56 px nu ajungeau), ca să nu mai fie acoperit. **Retras de FD-IPADFS2:** pe iPad nu se mai folosește ecranul complet al sistemului, deci nici ✕-ul Safari nu mai apare.
+- Pe alte dispozitive, sau în ecranul complet „din pagină” (când browserul nu-l are pe al sistemului), nu se schimbă nimic.
+
+### 2. Bara graficului (peste tot)
+- **Aceeași înălțime:** intervalele, „Pozițiile mele” și butoanele au aceeași înălțime, pe mouse și pe ecran tactil (unde totul e mai mare).
+- **Butoanele stau împreună:** „Pozițiile mele”, „Tranzacționează”, „Indicatori”, butonul listei și cel de ecran complet sunt un grup care nu se rupe. Dacă nu încape lângă intervale, trece tot grupul pe rândul următor; ieșirea din ecranul complet rămâne lângă „Indicatori”.
+- **Ieșirea din ecranul complet:** doar iconița, în culoarea de accent, cu explicația la cursor („Ieși din ecran complet (Esc)”). Intrarea rămâne ca acum.
+
+### 3. Lista de simboluri, în dreapta graficului (ca în TradingView)
+- **Locul:** favoritele nu mai sunt pastile deasupra graficului, ci o listă verticală într-un panou în dreapta lui. Graficul ocupă restul lățimii.
+- **Coloanele:**
+
+  | Coloană | Monede | Acțiuni și indici |
+  |---|---|---|
+  | Simbol | logo + monedă, cu cotația mai mică („BTC /USDT”) | logo + simbol |
+  | Ultimul | prețul de acum | ultimul preț |
+  | Var | variația pe 24 h, în preț | variația zilei, în preț |
+  | Var% | variația pe 24 h, în procente | variația zilei, în procente |
+
+  Valorile vin din aceleași date ca banda de sus (fără cereri în plus), verzi în creștere, roșii în scădere, și se actualizează la minut.
+- **Rândul simbolului deschis** e încadrat. Un click pe un rând deschide graficul lui.
+- **Ordinea:** se schimbă trăgând de un rând (pe ecran tactil, după o apăsare scurtă) sau cu Alt + ↑ / ↓. E aceeași ordine ca în Setări și în banda de sus.
+- **Căutarea** (pereche, acțiune sau indice) e în capul listei.
+- **Mărimea:** panoul se lărgește sau se îngustează trăgând de marginea lui din stânga, între 200 px și jumătate din lățime. Cu tastatura: marginea primește focus, iar ← / → o mută cu 16 px. Dublu-click pe margine revine la 300 px.
+- **Coloanele care nu încap:** când panoul e îngust, dispare întâi „Var” (sub 280 px), apoi „Ultimul” (sub 220 px). Cotația monedei („/USDT”) apare doar de la 340 px; la lățimea implicită (300 px) rândul arată doar moneda.
+- **Ascunderea:**
+  - butonul din capul listei (sau butonul listei din bara graficului) o ascunde, iar graficul ia toată lățimea;
+  - același buton din bară o readuce.
+- **Ce se ține minte:** lățimea și dacă lista e ascunsă, pe fiecare dispozitiv (în browser).
+- **Pe ecran îngust** (sub 768 px, telefon): lista stă sub grafic, pe toată lățimea, cu cel mult 360 px înălțime (derulează în ea), fără margine de tras. *Înlocuit de FD-WATCHDRAWER: pe telefon, panou care glisează din dreapta.*
+- **În ecranul complet:** lista e în dreapta, pe toată înălțimea graficului.
+
+### 4. Tragerea graficului și butoanele A / L
+- **Tragere liberă:** pe panoul prețului, graficul se trage în orice direcție, de oriunde și oricând. Când tragerea are și o componentă verticală, scala prețului trece singură pe manual (ca în TradingView). Cu tragere doar orizontală, rămâne pe automat.
+- **A (Automat)**, în colțul din dreapta jos, sub scala prețului: aprins = lumânările vizibile încap pe înălțime (scala urmărește singură prețurile). Un click îl aprinde și reîncadrează lumânările. Se stinge singur când tragi graficul pe verticală sau tragi de scala prețului.
+- **L (Logaritmic)**, lângă A: scala prețului logaritmică sau normală. Se ține minte în cont.
+- **Ce se întâmplă singur:** la schimbarea simbolului sau a intervalului, A se aprinde din nou.
+- **Panourile indicatorilor:** se încadrează singure, ca până acum; tragerea orizontală merge ca înainte.
+
+### 5. Etichetele prețului și cursorul
+- **Prețul curent:**
+  - pe scala prețului, o etichetă galben-pal cu text închis la culoare;
+  - sub preț, cât mai e până se închide lumânarea („50:31”, „12:34:56”, „3z 04:10”);
+  - linia lui orizontală e galbenă, punctată.
+- **Numărătoarea la acțiuni și indici:**
+  - apare doar cu bursa deschisă, iar lumânarea se închide cel târziu la închiderea bursei: ultima lumânare de 1h a zilei, sau cea de o zi, numără până la 16:00 la New York;
+  - pe 1w nu apare (lumânarea nu se închide azi);
+  - cu bursa închisă, eticheta are doar prețul.
+- **Prețul și ora de sub cursor:** etichete gri închis cu text alb.
+- **Cursorul:**
+  - pe grafic, cursorul e o cruce („+”), iar liniile lui sunt punctate;
+  - pe o linie orizontală devine săgeata sus-jos;
+  - pe scale rămâne cum e acum.
+- **Butonul „+”** (linie orizontală, FD-HLINE): un pătrățel gri, lipit de eticheta prețului de sub cursor, ca în TradingView.
+- **Butonul »** (la ultima lumânare) se mută cu 34 px spre stânga, ca „+” să nu mai stea peste el.
+
+### 6. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Lista ascunsă | graficul ia toată lățimea. Simbolurile se pot schimba din bara graficului (butonul listei) sau din căutarea ⌘K |
+| Niciun favorit | lista spune unde se adaugă (Setări → Favorite) și că din căutarea din capul ei se deschide orice grafic |
+| Mulți favoriți | lista derulează în ea, fără să miște pagina (și pe telefon, în cei 360 px) |
+| Cauți cu lista îngustă | rezultatele au cel puțin 260 px și ies peste grafic, întregi |
+| Prețul unui favorit nu se poate citi | „—” în coloane, cu motivul la cursor |
+| Fereastra se îngustează sub lățimea panoului | panoul se strânge la jumătate din lățime |
+| Tragi A de pe un interval cu lumânări puține | se încadrează ce se vede |
+| L cu prețuri foarte mici (monede de 0,0001) | merge; tragerea pe verticală se face pe scara logaritmică |
+| Tragi graficul și eliberezi fără mișcare | e un click, nu schimbă scala |
+| Tragi o linie orizontală (FD-HLINE) | linia se mută, nu graficul |
+| Ecran tactil | tragerea cu un deget mută graficul la fel; A și L se ating |
+| Ciupești graficul cu două degete (zoom) | e zoom, nu tragere: prețurile nu se mută, A rămâne cum era |
+| Tema luminoasă | etichetele au aceleași culori (galbenul și griul se citesc pe ambele) |
+
+### 7. Conflicte cu ce exista
+- **FD-CHARTFAV §2** (pastilele favoritelor deasupra graficului): înlocuite de lista din dreapta. Reordonarea rămâne (pe verticală).
+- **FD-CHARTSTEADY:** bara graficului păstrează partea din stânga cu bază fixă.
+- **FD-GOLATESTMAIN:** butonul » e cu 34 px mai la stânga.
+- **FD-HLINE §1–2:** liniile cursorului rămân punctate. Etichetele lor și butonul „+” capătă culorile de aici.
+
+## FD-KUCOINHEDGE — Ordine futures pe KuCoin și în modul hedge (20 oct 2026)
+Cererea:
+- „Am ratat un trade bun pentru că Sentiq nu m-a lăsat să fac trade-ul. Face trade cu KuCoin de futures doar în one-way mode și eu vreau să facă și în hedge mode.”
+
+Ce spune KuCoin (documentația API, oct 2026):
+- Modul pozițiilor e al contului, pentru toate perechile futures: one-way (o singură poziție pe pereche) sau hedge (un long și un short separate pe aceeași pereche).
+- Se schimbă din KuCoin (Futures → Setări → Preferințe → Mod poziție), doar fără poziții deschise și fără ordine active.
+- În hedge, fiecare ordin spune poziția lui (`positionSide` LONG / SHORT); fără ea, KuCoin îl refuză („Your order is in One-Way Mode, while your account is set to Hedge Mode”, cod 330012).
+- Pe contul unificat (UTA), ordinul nu primește `positionSide` („Not supported”), deci acolo nu există ordine hedge prin API.
+
+### 1. Ce se schimbă
+- **KuCoin, contul clasic:** Sentiq trimite ordine futures și când contul e în modul hedge, nu doar în one-way. Modul se citește din cont, ca acum (ținut 10 minute); Sentiq nu-l schimbă.
+- **One-way:** totul rămâne ca acum.
+- **Contul unificat KuCoin (UTA) în hedge:** rămâne refuzat, cu explicația nouă: „Pe contul unificat KuCoin (UTA), API-ul KuCoin primește ordine futures doar în modul one-way. Schimbă modul pozițiilor în KuCoin (Futures → Preferințe → Mod poziție, fără poziții deschise), sau tranzacționează din aplicația KuCoin.” Refuzul apare deja la verificare, înainte de confirmare.
+- **Celelalte exchange-uri (Binance, Bybit, OKX, Bitget):** rămân doar one-way, ca acum (cererea e pentru KuCoin). *Înlocuit de FD-HEDGEALL: hedge pe toate.*
+
+### 2. Ce face fiecare ordin în modul hedge
+| În formular | One-way (ca acum) | Hedge |
+|---|---|---|
+| **Long**, fără reduce-only | cumpără: mărește long-ul, sau micșorează / întoarce short-ul | deschide sau mărește long-ul; short-ul rămâne |
+| **Short**, fără reduce-only | vinde: mărește short-ul, sau micșorează / întoarce long-ul | deschide sau mărește short-ul; long-ul rămâne |
+| reduce-only, vânzare | micșorează poziția (long) | **Închide long**: micșorează sau închide long-ul |
+| reduce-only, cumpărare | micșorează poziția (short) | **Închide short**: micșorează sau închide short-ul |
+
+- **Butoanele de direcție:** în hedge, cu reduce-only bifat, se numesc „Închide long” și „Închide short” (în loc de „Short” și „Long”).
+- **TP / SL atașate și ordinele stop de intrare:** se pun pe poziția pe care o deschide ordinul (long-ul sau short-ul).
+- **„Închide” din Tranzacții → Poziții:** închide exact poziția de pe rândul ei (long-ul sau short-ul), cu un ordin la piață reduce-only.
+- **Levierul cross:** pe KuCoin e al perechii, comun pentru long și short; Sentiq îl setează ca acum. Levierul izolat merge cu ordinul, ca acum.
+
+### 3. Ce arată formularul
+- **Sub pereche:** „Mod hedge”, apoi pozițiile deschise: „long 0,01”, „short 0,02” (fiecare doar dacă e deschisă).
+- **Avertismente** (nu blochează):
+  - Short fără reduce-only, cu un long deschis: „Contul e în modul hedge: «Short» deschide un short separat, iar long-ul de 0,01 BTC rămâne deschis. Ca să-l închizi, bifează reduce-only («Închide long»).” La fel, invers, pentru Long cu un short deschis;
+  - „Închide long” fără long deschis: „Nu e niciun long deschis pe BTC/USDT:USDT: «Închide long» nu are ce închide.” La fel pentru short;
+  - un reduce-only mai mare decât poziția (în ambele moduri, pe KuCoin): „Închizi 0,05 BTC, iar poziția are 0,02 BTC: KuCoin anulează un ordin reduce-only mai mare decât poziția.”
+- **Confirmarea:** Direcție „Long”, „Short”, „Închide long” sau „Închide short”, plus rândul „Mod poziții: hedge (long și short separate)”.
+
+### 4. Unde se mai vede
+- **Tranzacții → Poziții:** un long și un short pe aceeași pereche sunt rânduri separate (ca acum, cheia e perechea + direcția), fiecare cu „Închide”. Direcția vine din poziția numită de KuCoin (LONG / SHORT), nu doar din semnul cantității.
+- **Tranzacții → Ordine:** un ordin hedge arată, lângă direcție, poziția lui („long” / „short”). La fel la un cont Binance în hedge, care se poate doar citi (Binance dă același câmp).
+- **Graficul („Pozițiile mele”):**
+  - cu long și short deschise pe aceeași pereche, titlurile liniilor (lichidare, SL, TP, PnL) spun LONG sau SHORT, nu doar „futures”;
+  - un ordin hedge se leagă doar de poziția lui. Un short deschis cu o vânzare limită nu mai apare ca TP al long-ului, iar SL-ul short-ului nu apare la long.
+
+### 5. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Modul schimbat pe KuCoin între timp (Sentiq îl ține 10 min) | KuCoin refuză ordinul și nu se execută nimic. Mesaj: „Modul pozițiilor (one-way / hedge) s-a schimbat pe KuCoin: ordinul n-a fost primit. Trimite-l din nou.” Sentiq uită modul ținut minte și îl citește din nou la următoarea verificare. Pe contul unificat (care nu primește deloc ordine hedge): explicația din §1, nu „trimite-l din nou” |
+| Modul nu se poate citi (rețea, cheie) | la verificare: eroarea, înainte de trimitere, ca acum; nimic nu e ghicit. În formular (înainte de verificare), modul pur și simplu nu apare |
+| Contul unificat (UTA) în hedge | refuzat la verificare (§1) |
+| Long izolat deschis, apoi un short cross pe aceeași pereche | KuCoin decide (marja e a perechii); dacă refuză, apare mesajul lui |
+| Hedge, Short fără reduce-only când vrei să închizi long-ul | avertismentul din §3; dacă confirmi, se deschide un short și long-ul rămâne |
+| Hedge, reduce-only cu TP / SL | refuzat la verificare, ca acum (un ordin care închide nu primește TP / SL) |
+| Hedge, ambele poziții, „Închide” pe una | doar ea se închide |
+| Ordine trimise înainte, încă deschise | rămân pe KuCoin; anularea merge la fel |
+| Trecerea one-way ↔ hedge | KuCoin cere înainte închiderea pozițiilor și anularea ordinelor, deci nu există poziții amestecate |
+| Spot | neschimbat |
+| Alt exchange în hedge | refuzat, ca acum |
+| Statisticile tranzacțiilor închise (FD-TRADESTATS) | neschimbate: fiecare poziție închisă (long sau short) e un rând în istoricul KuCoin |
+
+### 6. Conflicte cu ce exista
+- **FD-TRADING §7** (cazul „Cont futures în modul hedge (Binance, OKX, KuCoin, Bitget)”, refuzat): KuCoin clasic iese de acolo. Refuzul rămâne pentru celelalte exchange-uri și pentru contul unificat KuCoin.
+- **Ghidul** („Futures doar în modul one-way”, „Contul e în modul hedge”): primesc excepția KuCoin.
+- **Liniile pozițiilor pe grafic** (`pnlLines`): rolul unui ordin ține cont de poziția lui în hedge (§4).
+
+## FD-HEDGEALL — Modul hedge pe toate platformele (20 oct 2026)
+Cererea:
+- „Trebuie să verifici documentația pentru toate exchange-urile și să aplici la fel pentru toate. Inclusiv brokeri.” (după FD-KUCOINHEDGE, făcut doar pentru KuCoin)
+
+### Cercetare (documentațiile platformelor și ccxt 4.5.85)
+| Platformă | Poziții long și short separate pe același instrument? | Cum se citește modul | Ce cere fiecare ordin în hedge |
+|---|---|---|---|
+| **KuCoin** (clasic) | da, modul hedge al contului | `getPositionMode` | `positionSide` LONG / SHORT (FD-KUCOINHEDGE) |
+| **KuCoin** (unificat) | nu prin API („positionSide: Not supported”) | — | refuzat, cu explicația |
+| **Binance** USDⓈ-M | da, „Hedge Mode” (`dualSidePosition`) al contului, pentru toate perechile USDⓈ-M | `GET /fapi/v1/positionSide/dual` | `positionSide` LONG / SHORT; `reduceOnly` nu se trimite în hedge (închiderea e o vânzare pe LONG sau o cumpărare pe SHORT) |
+| **Bybit** (cont unificat) | da, „Both Sides” (mode 3), **pe pereche** (perechea > moneda > implicit one-way) | lista pozițiilor perechii (`/v5/position/list` cu `symbol` răspunde și fără poziție): `positionIdx` 0 = one-way, 1 / 2 = hedge | `positionIdx` 1 (long) / 2 (short) |
+| **OKX** | da, „long/short mode” al contului (`posMode` `long_short_mode`) | `GET /api/v5/account/config` | `posSide` long / short; reduce-only e închiderea pe partea poziției; levierul izolat se pune pe partea ei (`posSide`) |
+| **Bitget** clasic | da, `hedge_mode` al contului | contul futures (`posMode`) | `tradeSide` open / close; levierul izolat pe partea poziției (`holdSide`) |
+| **Bitget** unificat | da, `holdMode` al contului | setările v3 | `posSide` long / short |
+| **eToro** | da, întotdeauna: fiecare ordin e o poziție a lui („You cannot simply «sell» the instrument; you must close the specific line item”) | — (nu are moduri) | un short e o poziție nouă; închiderea e pe poziție (ca acum) |
+| **Alpaca** | **nu**: o singură poziție pe simbol (long sau short, netă) | — | — |
+| **Trading 212** | **nu**: prin API doar conturile Invest / ISA, fără short | — | — |
+| **Kraken, Coinbase** | **nu**: Sentiq tranzacționează doar spot acolo | — | — |
+| **Interactive Brokers** | nu se tranzacționează din Sentiq (doar citire) | — | — |
+
+### 1. Ce se schimbă
+- **Binance, Bybit, OKX, Bitget (clasic și unificat):** ordinele futures merg și în modul hedge, exact ca pe KuCoin (FD-KUCOINHEDGE §2–§4): „Long” deschide sau mărește long-ul, „Short” short-ul, reduce-only închide partea ei („Închide long / short”), TP / SL și stop-urile pe poziția ordinului, „Închide” din Poziții închide poziția de pe rând.
+- **Modul se citește** înainte de verificare (ținut 10 minute; pe Bybit, pe pereche). Formularul arată „Mod hedge” și pozițiile long / short ale perechii, avertismentele și confirmarea ca pe KuCoin.
+- **Levierul cu marjă izolată în hedge** (OKX, Bitget clasic): se pune pe partea pe care o deschide ordinul (long sau short), cum cer cele două exchange-uri. Cu marjă cross, ca acum.
+- **Binance, TP / SL** (trimise după o intrare la piață): în hedge, pe partea poziției deschise, fără reduce-only (Binance nu-l primește în hedge).
+- **Tranzacții → Ordine și graficul:** eticheta „long” / „short” a unui ordin hedge și legarea lui de poziția lui merg pe toate exchange-urile. Fiecare își numește partea altfel: `positionSide` la KuCoin și Binance, `posSide` la OKX și Bitget, `positionIdx` la Bybit.
+- **Modul schimbat între timp** (pe orice exchange): exchange-ul refuză ordinul, nimic nu se execută. Mesajul e „Modul pozițiilor (one-way / hedge) s-a schimbat pe <exchange>: ordinul n-a fost primit. Trimite-l din nou.”, iar Sentiq citește modul din nou.
+- **KuCoin unificat:** rămâne refuzat (API-ul nu primește ordine hedge acolo).
+- **eToro:**
+  - pozițiile sunt deja separate (un „Short” deschide un short lângă cumpărările ținute; o deținere se vinde cu „Închide”), deci nu e nimic de deblocat;
+  - formularul arăta doar partea long când erau amândouă. Acum arată „long x · short y” (sumele pe fiecare parte);
+  - Tranzacții: două poziții pe aceeași parte a aceluiași instrument (ex. două short-uri) nu se mai încurcă pe pagină (fiecare rând își are cheia lui);
+  - închiderea unui short: butonul rândului spune „Închide” (nu „Vinde”), coloana „De închis”, iar nota „Fiecare închidere are o confirmare” (un short se răscumpără, nu se vinde).
+- **Alpaca:** hedge-ul nu există (o poziție netă pe simbol). Formularul spune ce se întâmplă de fapt:
+  - vânzare peste long: „Alpaca ține o singură poziție pe simbol: vânzarea închide întâi long-ul de x, iar peste el deschide un short (dacă contul permite short). Nu există long și short în același timp.”;
+  - cumpărare cu un short deschis, mai mult decât short-ul: „Alpaca ține o singură poziție pe simbol: cumpărarea acoperă întâi short-ul de x, iar peste el deschide un long.”; cel mult cât short-ul: „…cumpărarea micșorează short-ul de x (nu deschide un long separat).”
+- **Trading 212, Kraken, Coinbase, IBKR:** nicio schimbare (fără short, doar spot, sau fără tranzacționare); ghidul spune de ce.
+- **Pașii de configurare** (cheile): OKX nu mai cere modul „net”; la Bybit, modul pozițiilor nu mai trebuie să fie one-way.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Bybit: o pereche în hedge, alta în one-way (modul e pe pereche) | fiecare ordin în modul perechii lui |
+| Bybit: lista pozițiilor nu spune modul (răspuns gol) | ordinul pleacă one-way; dacă Bybit refuză pentru mod, mesajul de mai sus, iar modul se citește din nou |
+| OKX cu mai multe conturi (subconturi) pe aceeași cheie | ca acum: eroarea OKX la citirea modului, înainte de trimitere |
+| Hedge + marjă izolată pe OKX / Bitget, iar long-ul și short-ul au levier diferit | fiecare parte cu levierul ei; Sentiq îl schimbă doar pe partea ordinului |
+| Binance hedge: TP / SL după intrare | pe partea poziției deschise; dacă unul eșuează, apare în rezultat, ca acum |
+| Binance hedge: „Închide” mai mult decât poziția | Binance refuză, cu mesajul lui |
+| Bitget clasic: ordinul nu mai poartă `oneWayMode` în hedge | în hedge, ordinul e „open” / „close” pe parte; în one-way, ca acum |
+| eToro: long și short pe același instrument | ambele în formular; „Închide” pe fiecare rând, ca acum |
+| Alpaca: vânzare cu un short deja deschis | mărește short-ul (dacă contul permite), ca acum |
+| Un exchange răspunde la mod cu o eroare de rețea | eroarea, înainte de trimitere; formularul doar nu arată modul |
+
+### 3. Conflicte cu ce exista
+- **FD-KUCOINHEDGE §1** („Celelalte exchange-uri rămân doar one-way”): înlocuit de §1 de aici.
+- **FD-TRADING** (cercetarea: OKX „net”, Bitget „modul trebuie trimis cu fiecare ordin”; §7: hedge refuzat pe Binance, OKX, Bitget, Bybit): hedge-ul merge acum; rămâne refuzat doar pe contul unificat KuCoin.
+- **Ghidul:** „Futures în modul one-way. Excepție: KuCoin” devine „one-way sau hedge, pe toate exchange-urile cu futures, în afară de contul unificat KuCoin”.
+
+## FD-WATCHDRAWER — Lista de simboluri pe telefon: panou care glisează din dreapta (20 oct 2026)
+Cererea (după deploy):
+- „Nu ai testat pe mobil. Nu funcționează panoul de simboluri. Nu trebuie afișat sub grafic, ci ca panou sliding din dreapta. Și după ce îl retrag nu mai poate fi adus înapoi. Și strică și mărimea paginii pe lățime.”
+- „Nu e vorba de tranzacționare. E vorba de lista de simboluri.”
+
+Ce era greșit (măsurat în Chrome, 320–430 px, cu atingere):
+- lista stătea sub grafic (FD-CHARTTV §3, „pe ecran îngust”), nu era un panou;
+- grupul butoanelor din bara graficului nu se rupea pe rânduri (FD-CHARTTV §2), deci se întindea până la 545 px. Pagina devenea mai lată decât ecranul, iar butonul listei ajungea la x 445–489, în afara ecranului. După „Ascunde lista”, lista nu mai putea fi readusă.
+
+### 1. Pe telefon (sub 768 px lățime)
+- **Lista e un panou** care glisează din dreapta peste grafic, pe toată înălțimea ecranului, lat de 340 px (cel mult 88 % din ecran), cu pagina umbrită în spate.
+- **Se deschide** cu butonul listei din bara graficului (mereu pe ecran, §3).
+- **Se închide:**
+  - cu butonul din capul listei;
+  - atingând zona umbrită;
+  - cu Esc (tastatură);
+  - alegând un simbol (se deschide graficul lui, iar panoul se închide).
+- **La fiecare intrare pe pagină, panoul e închis**, ca să nu acopere graficul. Pe telefon nu se ține minte nimic, iar lățimea și „ascunsă” de pe ecranele late rămân neatinse.
+- Cât e deschis, pagina din spate nu derulează (FD-SCROLLLOCK). Focusul trece în panou, iar la închidere revine la butonul listei.
+- **În ecranul complet:** panoul merge la fel. Esc închide întâi panoul, abia apoi ecranul complet.
+- Conținutul e același ca pe ecranele late: capul, căutarea, coloanele (după lățime: la 340 px apar toate patru) și reordonarea.
+
+### 2. Pe ecranele late (de la 768 px: tabletă, desktop)
+- Ca acum (FD-CHARTTV §3): panoul din dreapta graficului, cu lățimea trasă, ascuns sau arătat, ținut minte în browser.
+
+### 3. Bara graficului
+- Pe telefon, butoanele („Pozițiile mele”, „Tranzacționează”, „Indicatori”, butonul listei, ecranul complet) se rup pe rânduri cât e nevoie. Nimic nu iese din ecran, iar pagina nu mai e mai lată decât el.
+- De la 768 px, grupul rămâne nedespărțit (FD-CHARTTV §2: ieșirea din ecranul complet lângă „Indicatori”).
+
+### 4. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Telefonul rotit (lățimea trece peste 768 px) | panoul de telefon se închide, iar lista apare ca pe ecranele late (după ce s-a ținut minte acolo) |
+| Fereastra îngustată sub 768 px cu lista arătată | lista devine panoul de telefon, închis |
+| Cauți în panou | rezultatele se deschid sub căutare, în panou |
+| Reordonezi favoritele în panou | ca în listă (apăsare lungă, apoi tragi) |
+| Niciun favorit | panoul spune cum se adaugă |
+| Panou deschis și apeși butonul listei din bară | nu se poate (e sub zona umbrită); se închide cu ✕ / zona umbrită / Esc |
+| Alt sertar (setările unui indicator) sau ⌘K deschise | fiecare își are stratul și blocarea derulării (numărată, FD-SCROLLLOCK) |
+
+### 5. Conflicte cu ce exista
+- **FD-CHARTTV §3** („Pe ecran îngust: lista stă sub grafic”): înlocuit de §1.
+- **FD-CHARTTV §2** („grupul nu se rupe”): doar de la 768 px.
+
+## FD-CHARTTOUCH — Pinch pe grafic (telefon, iPad) și butonul listei ultimul în dreapta (20 oct 2026)
+Cererea:
+- „Bugul de pinch to zoom încă e prezent.” „Pinch to zoom pe grafic face pe pagină, nu pe grafic. Comportamentul este inconsecvent.”
+- „Butonul de panou trebuie să fie primul la dreapta… pentru că deschide un panou de la dreapta.”
+- „Tratează bine. M-am săturat de câte deploy-uri faci.” „Faci deploy când termini.”
+
+Ce era greșit (cercetat în biblioteca graficului, lightweight-charts 5.2.1, și reprodus):
+- Biblioteca renunță la pinch dacă primul deget s-a mișcat **oricât de puțin** (orice `touchmove`) înainte să atingă al doilea. Safari pe iPhone / iPad trimite și mișcările de 1 px, iar Chrome le ascunde pe cele mici (de aceea testele mele din Chrome nu vedeau problema).
+- Fără pinch-ul bibliotecii, gestul ajungea la browser, care mărea pagina. Pentru că primul deget se mișcă sau nu, după mână, comportamentul era inconsecvent.
+- Tragerea liberă a lui Sentiq (FD-CHARTTV §4) prelua mișcarea pe verticală de la 3 px. Un pinch în care primul deget se mișca 3–5 px stingea „A” și muta prețurile.
+
+### 1. Pinch-ul (telefon, tabletă)
+- **Pinch cu două degete pe grafic mărește sau micșorează graficul, de fiecare dată**, oricum ar atinge degetele (simultan sau unul după altul, cu primul mișcat puțin).
+- **Pagina nu se mai mărește** dintr-un gest pe grafic (nici pinch, nici dublă atingere), nici pornit de pe ce stă peste grafic (legenda, „A” / „L”, », „+”). Atingerile pe butoanele acestea merg ca înainte. Pe restul paginii, zoom-ul browserului rămâne ca acum.
+- **„A” rămâne cum era:** un pinch nu e tragere; scala prețului se încadrează singură în continuare.
+- Tragerea cu un deget: ca acum (în orice direcție). Începe după 8 px de mișcare: sub atât, poate fi începutul unui pinch.
+- Derularea paginii: ca acum. Pe grafic, glisarea o folosea și înainte graficul; deasupra și dedesubtul lui, pagina derulează.
+
+### 2. Butonul listei
+- În bara graficului, butonul listei e **ultimul, cel mai din dreapta** (după „Ecran complet” / ieșirea din el), pentru că deschide un panou din dreapta.
+- Pe telefon, unde butoanele se rup pe rânduri, butonul listei stă la marginea din dreapta a rândului lui.
+- Când bara graficului trece pe rândul ei, sub numele simbolului (de ex. la 1440 px, cu „Tranzacționează”), se aliniază la dreapta. Așa, butonul listei stă deasupra listei, la marginea conținutului.
+- Ieșirea din ecranul complet rămâne lângă „Indicatori” (FD-CHARTTV §2).
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Primul deget se mișcă sub 8 px, apoi vine al doilea | pinch |
+| Primul deget se mișcă peste 8 px (tragere începută), apoi vine al doilea | tragerea continuă (biblioteca nu face pinch în timpul unei trageri). Pagina nu se mărește |
+| Pinch pe scala prețului sau a timpului | ca biblioteca (pe scale, tragerea le schimbă) |
+| Atingere scurtă (tap) pe grafic | ca acum (crucea, „+” la linia orizontală) |
+| Un deget ținut aproape pe loc (sub 8 px) un sfert de secundă | crucea care urmărește degetul (apăsare lungă), ca înainte; pragul de „pe loc” era 5 px, acum 8 px. O tragere care pornește foarte încet poate deveni cruce |
+| Pinch pe scara logaritmică | la fel, „A” rămâne |
+| Mouse / trackpad | neschimbat (rotița, tragerea de la 3 px) |
+
+### 4. Conflicte cu ce exista
+- **FD-CHARTTV §4** (tragerea liberă de la 3 px): la atingere, de la 8 px. Al doilea deget lasă scala cum era înainte de gest.
+- **FD-CHARTTV §2:** ordinea butoanelor din grup: „Pozițiile mele”, „Tranzacționează”, „Indicatori”, ecranul complet, lista.
+- **FD-CHARTSTEADY:** partea din stânga a barei (numele, prețul) rămâne cu baza fixă. Partea din dreapta, când trece pe rândul ei, stă acum la dreapta, nu la stânga.
+
+## FD-CHARTPOLISH — Lista, bara, A / L și „+”: corecturi (20 oct 2026)
+Cererea:
+- „Nu ai pus destul spațiu între item-urile din lista de simboluri. La hover, fundalul elementului selectat și fundalul de hover al elementului de lângă se ating.”
+- „Când fac scroll în panou nu se mai face scroll la pagină, ceea ce e bine. Dar când am ajuns la capătul listei, dacă insist cu scrollul în aceeași direcție, ar trebui să permiți scroll pe pagină, temporar.”
+- „Scoate butonul de ascundere a panoului din panou, pentru că există deja buton deasupra panoului. De ce e de 2 ori?”
+- „Rândul cu intervalele, Pozițiile mele etc. de ce nu e aliniat la stânga? Ai aliniat butonul de ascundere a panoului la dreapta și ai tras tot rândul cu el.”
+- „Butoanele A și L sunt la baza barei de preț, nu la baza panoului secundar din grafic.”
+- „Când fac hover pe butonul +, nu trebuie să dispară liniile punctate și nici fundalul prețului de pe linia pe care sunt.”
+
+### 1. Lista de simboluri
+- **Spațiu între rânduri:** 4 px. Fundalul rândului deschis (încadrat) și cel de hover al vecinului nu se mai ating.
+- **Derularea**, pe ecranele late (panoul lateral):
+  - cât lista mai are unde derula, derulează doar lista;
+  - ajunsă la capăt, un scroll nou în aceeași direcție derulează pagina (comportamentul obișnuit al browserelor: gestul început în listă rămâne în listă, cel început la capătul ei trece la pagină);
+  - înapoi, lista derulează din nou;
+  - **în ecranul complet, nu** (FD-IPADFS §1): acolo nu e nicio pagină de derulat, iar pe iPad derularea trecută mai departe ajungea la Safari, care ieșea din ecranul complet.
+- **Pe telefon** (panoul glisant), pagina din spate rămâne blocată cât panoul e deschis (FD-WATCHDRAWER).
+- **Fără buton de ascundere în capul listei:** capul arată doar „Listă” și numărul. Lista se ascunde și se arată din butonul de deasupra ei (ultimul din dreapta al barei graficului).
+- **Pe telefon, panoul se închide:**
+  - atingând zona umbrită;
+  - trăgând panoul spre dreapta (îl urmează degetul; peste 80 px se închide, altfel revine);
+  - cu Esc;
+  - alegând un simbol.
+
+### 2. Bara graficului
+- Intervalele, „Pozițiile mele”, „Tranzacționează”, „Indicatori” și ecranul complet stau **aliniate la stânga**, ca înainte de FD-CHARTTOUCH.
+- **Doar butonul listei e la marginea din dreapta**, deasupra listei, pe orice lățime. Pe telefon e la capătul ultimului rând de butoane (lângă ecranul complet), la dreapta, nu singur pe un rând.
+
+### 3. A și L
+- Stau **la baza scalei prețului** (colțul din dreapta jos al panoului cu lumânări), nu sub panourile de dedesubt (LMA, indicatori).
+- Fără panouri dedesubt: tot acolo, deasupra axei timpului.
+- Au fundalul graficului sub ele, ca să nu se amestece cu prețurile de pe scală.
+
+### 4. Butonul „+”
+- Cât mouse-ul e pe „+” sau pe meniul lui, crucea rămâne: liniile punctate (orizontală și verticală) și eticheta gri a prețului de pe scală, la prețul unde era.
+- Plecat de pe „+” înapoi pe grafic: crucea urmează mouse-ul, ca de obicei. Plecat în afara graficului (cu meniul închis): crucea dispare.
+
+### 5. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Lista scurtă (nu derulează) | scroll-ul pe ea derulează pagina |
+| Cauți în listă (rezultatele derulează în ele) | ca acum: rezultatele nu trec la pagină |
+| Reordonezi un rând (tragere) | spațiul dintre rânduri nu încurcă |
+| Tragere spre dreapta mai mult pe verticală decât pe orizontală (pe telefon) | e derularea listei, nu închiderea |
+| Apăsare lungă pe un rând, apoi tragere (reordonare) | reordonarea, nu închiderea |
+| A / L cu un preț de pe scală chiar acolo | butoanele îl acoperă, cu fundalul graficului |
+| Meniul „+” deschis, mouse-ul plecat | crucea rămâne până se închide meniul |
+| Scara logaritmică, panoul LMA ascuns | A / L la baza scalei prețului, la fel |
+
+### 6. Conflicte cu ce exista
+- **FD-CHARTTV §3:** butonul de ascundere din capul listei dispare.
+- **FD-CHARTTV §4:** A / L nu mai stau în colțul de sub toate panourile.
+- **FD-WATCHDRAWER §1:** închiderea cu butonul listei dispare, iar tragerea spre dreapta se adaugă.
+- **FD-CHARTTOUCH §2:** alinierea la dreapta a întregii bare se retrage; doar butonul listei rămâne la dreapta.
+
+## FD-NAVOVERFLOW — Bara de sus pe un singur rând, cu „»” pentru meniurile care nu încap (20 oct 2026)
+Cererea (cu o captură: bara de sus pe două rânduri, meniul pe primul, căutarea / ceasurile / contul pe al doilea):
+- „Asta ar trebui să fie un singur rând. Prefer să colapsezi meniul, să ascunzi items din meniu cu un buton de genul » și, când apăs pe el, să afișezi restul de items, floating, decât să faci două rânduri.”
+
+### 1. Comportament
+- **Un singur rând la orice lățime**, de la telefon la ecranele mari: logo-ul, meniul, apoi în dreapta „Rezumat” (pe Azi), căutarea, ceasurile, tema și contul, cum sunt acum.
+- **Meniul arată câte pagini încap**, în ordinea de acum (Azi, Știri, Calendar, Economie, Grafice, Tranzacții, Setări, Stare sistem pentru admin). Cele care nu încap trec, de la coadă, sub un buton **„»”**, pus imediat după ultima pagină vizibilă.
+- **„»”** deschide o listă plutitoare, sub el, cu paginile ascunse (iconița și numele, ca în meniu). Alegerea unei pagini o deschide și închide lista. Lista se închide și cu un click în afara ei, cu Esc (focusul revine pe „»”) sau cu un nou click pe „»”.
+- **Pagina deschisă ascunsă sub „»”:** butonul „»” are culoarea paginii active, iar în listă pagina e marcată la fel ca în meniu.
+- **Redimensionarea** (fereastra, rotirea telefonului, „Rezumat” apărut pe Azi): meniul își recalculează pe loc câte pagini arată.
+- **Toate încap:** „»” nu apare.
+- **Pe telefon**, meniul nu mai e un al doilea rând care derulează orizontal: e în același rând, cu „»” (de obicei, pe telefon, aproape toate paginile sunt sub „»”). Comutatorul de temă rămâne în meniul contului (FD-THEME §2).
+- **Sub 768 px**, ca totul să încapă pe un rând: căutarea e doar lupa (fără textul „Caută…” și fără ⌘K), iar „Rezumat” (pe Azi) e doar iconița cu scânteie. Numele lor se citesc în continuare (cititoarele de ecran, explicația la cursor).
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Un singur meniu nu încape lângă „»” | doar „»”, cu toate paginile în listă |
+| Fonturile se încarcă după prima afișare (lățimi schimbate) | calculul se refac la încărcarea fonturilor |
+| Utilizatorul nu e admin | „Stare sistem” nu există nici în meniu, nici sub „»” |
+| Lista deschisă și fereastra se lărgește până încap toate | „»” dispare, lista se închide |
+| Tastatura | Tab ajunge la „»”; Enter / Space o deschide; ↓ / ↑ trec prin pagini; Esc închide |
+| Navigare din altă parte (⌘K, un link) | lista se închide |
+
+### 3. Conflicte cu ce exista
+- **FD-REDESIGN / §1 Navigare și layout** („Pe telefon meniul derulează orizontal”): înlocuit de §1.
+
+## FD-FULLWIDTH — Toate paginile pe toată lățimea (20 oct 2026)
+Cererea:
+- „Să modifici cât de wide este conținutul fiecărei pagini, să fie la fel pe toate paginile. De exemplu, Calendar, Economie și Grafice sunt full width și celelalte nu: fă-le pe toate full width.”
+
+Ce era: conținutul avea cel mult 1600 px. Peste asta, Știri, Tranzacții, Setări (ambele file), Stare sistem și Utilizatori aveau 1240 px, Securitate 1100 px, Economie 1400 px; Azi, Calendar și Grafice nu aveau limită proprie.
+
+### 1. Comportament
+- **Toate paginile au aceeași lățime:** toată lățimea ferestrei, cu aceeași margine laterală (16 px pe telefon, 24 px de la 640 px), fără limită de 1600 px.
+- **Ce nu se schimbă:**
+  - ferestrele (rezumatul zilei, confirmările, formularul de ordin) și formularele de autentificare (login, 2FA) rămân cât sunt;
+  - în pagini, câmpurile și textele care au o lățime a lor (de ex. un câmp de formular) rămân așa.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Ecran foarte lat (2000 px și peste) | paginile se întind pe toată lățimea; grilele de panouri își folosesc coloanele, iar listele (Știri) au rânduri mai lungi |
+| Telefon | neschimbat (paginile erau deja pe toată lățimea) |
+
+## FD-IPADFS — iPad: ecranul complet nu se mai închide la tragerea în jos; loc pentru ✕ (20 oct 2026)
+> **Nu a rezolvat ieșirea** (deploy `dd04edcd`, verificat de utilizator): gestul Safari nu ține cont de pagină. Reparația e FD-IPADFS2; §1 de aici rămâne, §2 e retras, iar iPhone-ul (§3) e tratat tot acolo.
+Cererea:
+- „Gestul de scroll down pe iPad în modul full screen scoate pagina din full screen. Repară asta.”
+- „Mută primul rând câțiva pixeli la dreapta, pentru că nu e îndeajuns spațiu pentru butonul X introdus de Safari.”
+- „Pe iPhone, partea de sus a panoului de simboluri e tăiată.”
+
+Lămuriri:
+- gestul: oriunde, cu degetul în jos;
+- apare de la versiunea de la 10:48 (FD-CHARTPOLISH);
+- cauza, spusă de utilizator: „Ai introdus tu, la cererea mea, permisiunea de scroll în momentul în care am ajuns la limita unei liste. Înainte era blocat scroll-ul. Asta cauza problema aceasta.” și „În full screen nu ai la ce să faci scroll.”
+
+Cercetare (codul WebKit pentru ecranul complet pe iOS / iPadOS, `WKFullScreenWindowControllerIOS`):
+- Safari are propriul gest de ieșire: o tragere în jos, recunoscută odată cu gesturile paginii;
+- din cod nu reiese exact când îl lasă să pornească;
+- derularea lăsată să treacă mai departe (FD-CHARTPOLISH §1) iese din listă spre pagina din spatele ecranului complet;
+- versiunea de dinainte de 10:48, cu lista blocată la capăt, nu ieșea din ecranul complet.
+
+### 1. Derularea în ecranul complet
+- **În ecranul complet** (al sistemului sau „din pagină”), lista de simboluri din panoul lateral **nu mai trece derularea mai departe** când ajunge la capăt (ca înainte de FD-CHARTPOLISH).
+- Restul ecranului complet rămâne cum era înainte de 10:48 (nu trecea derularea mai departe nici atunci).
+- **În afara ecranului complet**, rămâne ca în FD-CHARTPOLISH §1: la capătul listei, derularea trece la pagină.
+- Panoul glisant de pe telefon era deja blocat; nu se schimbă.
+
+### 2. Loc pentru ✕-ul Safari
+- Pe iPad, în ecranul complet al sistemului, numele simbolului (primul rând) începe la **80 px** de marginea ecranului complet, în loc de 56 px. **Retras de FD-IPADFS2** (fără ecranul complet al sistemului pe iPad, fără ✕).
+- Pe alte dispozitive și în ecranul complet „din pagină”, nu se schimbă nimic.
+
+### 3. iPhone: partea de sus a panoului
+- **Nu se reproduce în Chrome.** Am verificat la 390 × 844 (pagina derulată înainte) și în modul orizontal (844 × 390, 932 × 430), cu și fără ecran complet: capul panoului („Listă”) e întreg și vizibil.
+- **Cauza ține de Safari pe iPhone:**
+  - iOS 26 are probleme cunoscute cu elementele fixe (după tastatură, cu bara de adrese sus);
+  - fără o captură nu se știe care dintre ele e.
+- **Nu se schimbă nimic aici** până la captură (cu versiunea iOS și poziția barei Safari: sus sau jos).
+
+### 4. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Ecran complet, tragere în jos pe listă, ajunsă la capăt | lista stă; ecranul complet rămâne |
+| Ecran complet, tragere în jos pe grafic | graficul se mută (FD-CHARTTOUCH); neschimbat față de versiunea de dinainte de 10:48 |
+| Ecran complet, tragere în jos pe bara de sus a graficului | neschimbat față de versiunea de dinainte de 10:48 |
+| Cadrul ecranului complet mai înalt decât ecranul (telefon culcat) | cadrul derulează în el; la capete nu trece mai departe (neschimbat) |
+| Ieșit din ecranul complet | lista trece iar derularea la pagină, la capăt |
+| ✕-ul Safari ascuns (ecranul complet fără bara lui) | numele rămâne la 80 px (nu se știe când apare bara) |
+| Ieșirea voită din ecranul complet | butonul de ieșire de lângă „Indicatori”, Esc (tastatură) sau ✕-ul Safari |
+
+### 5. Conflicte cu ce exista
+- **FD-CHARTPOLISH §1:** derularea trecută la pagină de la capătul listei nu mai există în ecranul complet.
+- **FD-CHARTTV §1:** spațiul pentru ✕ crește de la 56 la 80 px.
+
+## FD-IPADFS2 — iPhone și iPad: ecranul complet „din pagină” (20 oct 2026)
+Cererea, după deploy-ul FD-IPADFS:
+- „Nu a funcționat. Rezolvă. Nu știu cum, dar rezolvi.”
+- „Trebuie să înțelegi că comportamentul de acum este un conflict cu ce ai implementat tu, pentru că orice scroll în jos omoară full screen, și îți dai seama că Apple nu putea livra așa ceva.”
+- „Nici pe iPhone nu funcționează.”
+
+Cercetare:
+- **Codul WebKit** (`WKFullScreenWindowControllerIOS`, pe iPhone și iPad):
+  - ecranul complet al sistemului are un gest „trage în jos”, care iese imediat (`requestExitFullScreen`);
+  - gestul e pus deasupra paginii și se recunoaște odată cu orice derulare.
+- **Apple îl vrea așa** ([WebKit 264215](https://bugs.webkit.org/show_bug.cgi?id=264215), inginerul WebKit al ecranului complet): „intenționat, o protecție anti-phishing; site-ul nu-l poate împiedica pe utilizator să iasă din ecranul complet”.
+  - Nici `preventDefault`, nici `touch-action: none` nu îl opresc.
+  - MDN, la iPad: „Swiping down exits fullscreen mode”.
+- **De ce a apărut abia azi:**
+  - lista de simboluri e în ecranul complet de azi-dimineață (FD-CHARTTV);
+  - derularea ei în sus înseamnă un deget care trage în jos, deci exact gestul Safari;
+  - FD-IPADFS (lista blocată la capăt) nu putea ajuta: gestul nu ține cont de pagină.
+- **Pe iPhone:**
+  - ce iOS are ecranul complet al sistemului primește același gest;
+  - în plus, ecranul complet al sistemului acoperă tot ecranul, inclusiv zona camerei și a barei de stare. Partea de sus a panoului de simboluri ajungea probabil acolo (nu se poate verifica fără iPhone; în Chrome capul panoului e întreg).
+
+### 1. Comportament
+- **Pe iPhone și iPad**, butonul „Ecran complet” nu mai cere ecranul complet al sistemului. Graficul acoperă toată fereastra browserului, ca pe iPhone până acum:
+  - dispar bara de sus a aplicației, banda de prețuri și marginile paginii;
+  - rămân bara graficului, graficul și lista de simboluri;
+  - barele Safari (adresa, filele) rămân vizibile;
+  - nicio tragere în jos nu mai iese din ecranul complet;
+  - ieșirea: butonul de lângă „Indicatori”, Esc (tastatură).
+- **Pe calculator** (Mac, Windows, Linux) și pe Android, nu se schimbă nimic: ecranul complet al sistemului, ca până acum.
+- Panoul de simboluri de pe iPhone stă în fereastra Safari, deci sub barele lui, nu sub zona camerei.
+- Fără ✕-ul Safari, numele simbolului nu mai e mutat spre dreapta pe iPad.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| iPad cu tastatură | Esc iese; ⌘K iese și deschide căutarea (ca până acum) |
+| iPad în Split View / Stage Manager | graficul acoperă fereastra Safari, oricât de mică |
+| iPhone cu „Site pentru desktop” (se prezintă ca Mac) | tot ecranul complet „din pagină” (are ecran tactil) |
+| Chrome / Firefox / Edge pe iPhone sau iPad | la fel (toate folosesc WebKit, deci au același gest) |
+| Mac cu Safari | ecranul complet al sistemului, ca până acum |
+| Derulare în listă în ecranul complet | doar lista derulează; pagina din spate e blocată |
+| Rotirea ecranului | graficul acoperă fereastra nouă |
+
+### 3. Conflicte cu ce exista
+- **FD-CHARTUX §4** („modul ecran complet al sistemului”): pe iPhone și iPad, întotdeauna cel „din pagină”.
+- **FD-CHARTTV §1 și FD-IPADFS §2** (locul pentru ✕-ul Safari): retrase, fiindcă nu mai există ✕.
+- **FD-IPADFS §1** rămâne: lista nu trece derularea mai departe în ecranul complet.
+
+## FD-CHARTAUDIT — Pagina Grafice testată buton cu buton (20 oct 2026)
+Cererea:
+- „Fă test la toată pagina aia. Fiecare buton îl apeși, până când iese bine. […] sunt multe alte probleme, cum ar fi popup-uri care nu apar în ecran complet. Te rog frumos, ia în serios treaba asta. Fă o analiză completă și repară orice problemă de UI și user experience.”
+- „Butonul + nu ține pasul cu linia dungată și nici cu prețul de lângă: dacă mișc liniile rapid, butonul + rămâne în urmă.”
+- „Odată ce am apăsat pe + și a apărut opțiunea de linie orizontală, butonul + nu mai dispare dacă apăs oriunde ca să dispară popupul.”
+
+Cum s-a testat:
+- **Safari real** din simulatorul iOS 27 (iPhone 17 Pro, iPad Pro 11"):
+  - pagina comandată de la distanță, de pe aceeași origine, doar într-o copie de test;
+  - capturi de ecran reale din simulator;
+  - măsurători cu `elementFromPoint` (e deasupra?) și cu dreptunghiurile elementelor (e pe ecran?).
+- **Chrome, pe desktop**, cu mouse real și ecranul complet al sistemului.
+- Butoanele încercate, în și în afara ecranului complet:
+  - antetul, intervalele, „Pozițiile mele”, „Tranzacționează” (Spot / Futures, verificarea ordinului), „Indicatori” (căutare, adăugare);
+  - legendele (ochiul, setările, ✕), A / L, „+” și meniul lui, linia orizontală și setările ei;
+  - lista (căutarea, alegerea, ascunderea), panoul de pe telefon, ieșirea din ecranul complet;
+  - pe telefon, meniul „»”; tabelul de semnale și alertele.
+
+Ce a mers fără probleme:
+- toate ferestrele („Ordin nou”, confirmarea, „Indicatori”, setările, meniul lui „+”, rezultatele căutării, panoul listei) apar deasupra în ecranul complet, pe iPad, pe iPhone și pe desktop;
+- intervalele, A / L, ochiul, ✕, ascunderea listei, alegerea unui simbol (rămâne în ecranul complet), ieșirea, meniul „»”.
+
+### 1. Butonul „+” de lângă prețul crucii
+- **Ține pasul cu crucea:** se mută în același cadru cu linia punctată și cu eticheta gri a prețului, oricât de repede se mișcă (mouse-ul sau degetul).
+- **Pe ecran tactil** (iPhone, iPad, orice ecran atins cu degetul):
+  - „+” apare unde e crucea, ca acum (apăsare lungă, apoi tragere);
+  - după ce meniul lui se închide printr-o atingere oriunde în afara lui, „+” dispare, și odată cu el crucea; atingerea care a închis meniul nu-l readuce, nici pe grafic;
+  - după „Linie orizontală la …”, la fel: linia se adaugă, iar „+” și crucea dispar;
+  - o atingere pe „+” nu-l mai face să pară „sub mouse” (de aceea rămânea).
+- **Cu mouse-ul**, ca până acum:
+  - „+” urmează mouse-ul pe panoul cu lumânări;
+  - un clic în afara graficului închide meniul, iar „+” dispare;
+  - un clic pe grafic închide meniul, iar „+” urmează iar mouse-ul;
+  - după „Linie orizontală la …”, „+” revine la următoarea mișcare.
+
+### 2. Panoul de setări (indicatori, Slingshot, LMA, linia orizontală)
+- **Ce era:**
+  - pe iPhone și iPad, panoul avea înălțimea „ecranului mare” al Safari, mai mare decât partea vizibilă;
+  - butoanele de jos (Salvează, Anulează, Valorile implicite, Șterge linia) rămâneau sub ecran, deci nu se puteau atinge;
+  - măsurat: iPad, butoanele la 1093–1137 px dintr-un ecran vizibil de 1078; iPhone, la 694–738 din 714.
+- **Acum:** panoul ține de sus până jos exact cât partea vizibilă a ferestrei; butoanele de jos sunt mereu pe ecran.
+- Pe ecrane mai înguste de 440 px, panoul are toată lățimea (nu mai rămâne o fâșie de grafic de 2 px în stânga).
+
+### 3. „Indicatori”: ce e deja pe grafic
+- „Adăugat” apare o secundă și jumătate, ca acum.
+- **Apoi rămâne „Pe grafic”** lângă un indicator deja adăugat, sau „Pe grafic × 2” dacă e de două ori, ca la cele Premium.
+- Indicatorul se poate adăuga în continuare (de mai multe ori, cu parametri diferiți).
+
+### 4. Căutarea din lista de simboluri
+- **↓ / ↑** trec prin rezultate (cel ales e evidențiat și adus în vedere); **Enter** deschide rezultatul ales, sau primul dacă nu e ales niciunul.
+- **Esc:**
+  - cu text în căutare: o golește, fără să închidă panoul de pe telefon și fără să iasă din ecranul complet „din pagină”;
+  - cu căutarea goală: ca până acum (închide panoul sau iese din ecranul complet).
+  - În ecranul complet al sistemului (desktop), browserul iese oricum la Esc; pagina nu poate împiedica asta.
+- Cititoarele de ecran: o listă de opțiuni, cu cea aleasă anunțată.
+
+### 5. Eticheta de stare LMA (BULLISH / BEARISH / NEUTRAL)
+- Pe ecranele înguste (telefonul), eticheta de la capătul liniei era tăiată de scara prețului („NE…”).
+- **Acum, când nu încape la dreapta, trece în stânga ancorei** (vârful spre dreapta) și se citește întreagă.
+- Când încape, rămâne ca în TradingView (la dreapta).
+
+### 6. Graficul cât se încarcă un alt interval sau simbol
+- **Ce era:** panoul graficului scădea la înălțimea mesajului „Se încarcă lumânările…” (măsurat: 682 → 70 px, apoi înapoi după ~0,5 s), deci tot ce era dedesubt sărea în sus și înapoi.
+- **Acum:** panoul își păstrează înălțimea, iar mesajul stă în mijlocul lui. La fel mesajul de eroare.
+
+### 7. „Serverul Sentiq nu răspunde” în ecranul complet
+- Bannerul era doar în pagina din spatele ecranului complet, deci nu se vedea.
+- **Acum apare și în ecranul complet**, deasupra graficului (aceeași cerere, nimic în plus).
+
+### 8. Bara graficului: butonul listei nu mai rămâne singur pe un rând
+- **Ce era:** la 1180 px (iPad Air culcat, laptopuri mici) și la 1024 px în ecranul complet (iPad culcat), butonul listei trecea singur pe un rând nou, sub celelalte.
+- **Acum:** de la 768 px în sus, butonul listei e la capătul rândului cu „Pozițiile mele”, „Tranzacționează”, „Indicatori” și ecranul complet, la marginea din dreapta, și trece pe rândul următor doar împreună cu ele.
+- Pe telefon, neschimbat: la capătul ultimului rând (FD-CHARTPOLISH §2).
+
+### 9. Meniul lui „+” pe ecrane înguste
+- **Ce era:** la 320 px, meniul („Linie orizontală la …”) începea la stânga graficului și era tăiat.
+- **Acum:** meniul nu e niciodată mai lat decât zona graficului; textul trece pe două rânduri dacă nu încape.
+
+### 10. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Mouse pe iPad (trackpad) | ca mouse-ul: „+” urmează cursorul, iar hover-ul contează |
+| Creion (Apple Pencil) | ca degetul: atingerea nu contează ca hover |
+| Atingere pe „+” cu meniul deschis | meniul se închide (ca acum), „+” rămâne pentru următoarea atingere |
+| Atingere în afara meniului, pe altă fereastră sau buton | meniul se închide, „+” și crucea dispar; butonul atins își face treaba |
+| Esc cu meniul lui „+” deschis | se închide doar meniul (ca acum) |
+| „Linie orizontală” blocată (limita de linii, nicio pereche) | meniul arată motivul; nimic nu se adaugă |
+| Panou de setări cu tastatura de pe ecran deschisă (iPhone) | panoul stă deasupra tastaturii, cu butoanele de jos vizibile (FD-MODALFIT; înainte, doar dacă Safari micșora fereastra) |
+| Panou de setări pe desktop | neschimbat (cât fereastra) |
+| Căutare fără rezultate + Enter | nimic |
+| Rezultate încă în curs + Enter | se deschide primul rezultat deja venit |
+| ↓ după ultimul rezultat | revine la primul (și ↑ de la primul, la ultimul) |
+| Text nou în căutare | alegerea se șterge (Enter = primul) |
+| Eticheta LMA nu încape nici la stânga | rămâne la dreapta (tăiată), ca înainte |
+| Ancora etichetei LMA în afara graficului (derulat spre dreapta) | nu se desenează, ca înainte |
+| Eroare la încărcarea lumânărilor | „Încearcă din nou” în panoul de aceeași înălțime |
+| Ecran complet + interval nou | panoul avea deja înălțimea ecranului complet; neschimbat |
+| Serverul revine | bannerul dispare din ambele locuri |
+| Bara la orice lățime între 320 și 1600 px, în și în afara ecranului complet | butonul listei niciodată singur pe un rând |
+
+### 11. Conflicte cu ce exista
+- **FD-CHARTPOLISH §2 (bara):** butonul listei face parte din grupul de butoane de la 768 px în sus; locul lui (marginea din dreapta) rămâne.
+- **FD-HLINE §2 / FD-CHARTPOLISH §4 („+”):** pe ecran tactil, „+” și crucea dispar după închiderea meniului (înainte rămâneau). Cu mouse-ul, neschimbat.
+- **FD-WATCHDRAWER, FD-CHARTUX (Esc):** Esc golește întâi căutarea din listă.
+- **FD-SCROLLLOCK:** neschimbat (panoul de setări blochează în continuare pagina).
+- **FD-ONLINE §3:** bannerul apare și în ecranul complet.
+
+### 12. Retestat în Safari, după reparații (iPhone 17, iOS 27)
+- Reluat după ce simulatoarele au fost oprite, cu un singur simulator pornit.
+- Confirmat în Safari:
+  - „+” ține pasul cu degetul: 0 px față de deget după fiecare mișcare (20 de mișcări);
+  - o atingere în afara meniului lui „+” închide meniul și ia „+” și crucea;
+  - meniul lui „+” e în zona graficului (80–320 px într-un grafic de 13–389 px);
+  - panoul de setări (Slingshot, linia orizontală) are toată lățimea, iar „Salvează”, „Anulează” și „Șterge linia” sunt pe ecran;
+  - „Indicatori” arată „Pe grafic”; „Ordin nou” și lista apar deasupra în ecranul complet;
+  - căutarea: ↓ / ↑ aleg, Esc golește căutarea, iar ecranul complet și panoul rămân;
+  - panoul graficului rămâne la 682 px în toate cele 37 de cadre cât se încarcă un simbol nou;
+  - eticheta NEUTRAL a LMA e întreagă (trecută în stânga ancorei);
+  - bannerul „nu răspunde” apare în ecranul complet și dispare când serverul revine.
+- Apoi pe iPad Air 11" (iOS 27), după reparațiile §13–§18: în ecranul complet, butonul listei e pe rândul cu „Indicatori”, „Salvează” e pe ecran (1034–1078 din 1094 px), iar gesturile cu „+” se comportă ca pe iPhone.
+- Găsite la retestare: §13, §14, §15 și §18.
+
+### 13. Pe ecran tactil, apăsarea lungă nu mai mută prețurile
+- **Ce era:**
+  - apăsare lungă pe grafic (apar crucea și „+”), apoi tragere ca să alegi prețul;
+  - crucea urma degetul, dar se mutau și prețurile, pe verticală (tragerea graficului din FD-CHARTTV §4), iar „A” se oprea;
+  - prețul de sub deget se schimba deci chiar în timp ce îl alegeai.
+- **Acum:**
+  - după apăsarea lungă, tragerea mută doar crucea și „+”; prețurile stau, iar „A” rămâne cum era;
+  - la fel cât timp crucea e încă pe ecran după o apăsare lungă: tragerea o mută pe ea (modul cruce, ca până acum).
+- O tragere obișnuită, fără apăsare lungă și fără cruce pe ecran, mută graficul ca până acum, în ambele direcții.
+
+### 14. Pe ecran tactil, după ce „+” dispare, graficul se derulează iar
+- **Ce era:**
+  - după „Linie orizontală la …”, sau după o atingere în afara meniului lui „+” (în afara graficului), crucea și „+” dispăreau;
+  - graficul rămânea însă în modul cruce: următoarea glisare nu îl derula, ci aducea înapoi crucea și „+”, mutate cu degetul.
+- **Acum:** odată cu „+”, graficul iese și din modul cruce. Următoarea glisare derulează graficul, iar crucea revine doar la o nouă apăsare lungă.
+
+### 15. Scurtătura „⌥H” din meniul lui „+”, pe telefon
+- Sub 768 px nu se mai arată, ca scurtăturile din bara de sus: pe un telefon nu e tastatură.
+- Pe iPad și pe desktop rămâne.
+
+### 16. Cazuri limită (§13–§15)
+| Situație | Comportament |
+|---|---|
+| Apăsare lungă, tragere, ridicare, apoi altă tragere (crucea încă pe ecran) | se mută crucea, nu prețurile (modul cruce, ca până acum) |
+| Apoi o atingere scurtă pe grafic | crucea și „+” dispar (ca până acum); următoarea tragere derulează graficul |
+| Meniul lui „+” deschis, apoi o tragere pe grafic | meniul, „+” și crucea dispar; tragerea derulează graficul, în ambele direcții |
+| Meniul lui „+” deschis, apoi o atingere pe un buton al paginii | meniul, „+” și crucea dispar; butonul își face treaba; următoarea glisare pe grafic derulează |
+| Tragere fără apăsare lungă | ca până acum: graficul se mută în ambele direcții, iar „A” se oprește |
+| Scala logaritmică, apăsare lungă și tragere | prețurile stau, iar „A” rămâne pornit |
+| Doi degete (ciupire) | neschimbat (FD-CHARTTOUCH) |
+| Apăsare lungă pe o linie orizontală, apoi tragere | se mută crucea; linia nu (pe ecran tactil liniile nu se trag, FD-HLINE) |
+| Mouse, trackpad | neschimbat |
+| Mouse pe grafic (iPad cu trackpad), apoi o tragere cu degetul | graficul se mută în ambele direcții (crucea mouse-ului nu e modul cruce) |
+| iPad, sub sau peste 768 px | „⌥H” se vede de la 768 px în sus |
+
+### 17. Conflicte (§13–§15)
+- **FD-CHARTTV §4 (tragerea în ambele direcții):** nu și în modul cruce, pe ecran tactil.
+- **FD-CHARTAUDIT §1:** când „+” dispare după o atingere, graficul iese și din modul cruce.
+- **FD-CHARTTOUCH (ciupirea):** neschimbat.
+- **FD-HLINE (scurtătura Alt+H):** tasta merge în continuare; doar indicația lipsește pe telefon.
+
+### 18. Pe ecran tactil, o glisare care pornește de pe o linie orizontală nu-i mai deschide setările
+- **Ce era:** o glisare spre stânga sau spre dreapta pornită chiar de pe o linie derula graficul, dar la ridicarea degetului se deschideau și setările liniei. Ca „mișcare” se număra doar deplasarea pe verticală.
+- **Acum:** o mișcare de cel puțin 10 px în orice direcție înseamnă glisare: graficul se derulează, iar setările nu se deschid.
+- O atingere scurtă pe linie îi deschide setările, ca până acum.
+- **Cu mouse-ul sau creionul, neschimbat:** linia se trage doar în sus și în jos, iar un clic îi deschide setările.
+
+| Situație | Comportament |
+|---|---|
+| Atingere scurtă pe linie (sub 10 px de mișcare) | setările liniei (ca până acum) |
+| Glisare orizontală pornită de pe linie | graficul se derulează; setările nu se deschid |
+| Glisare verticală pornită de pe linie | ca până acum: graficul se mută cum îl mută biblioteca, iar setările nu se deschid |
+| Apăsare lungă pe linie, fără mișcare | setările liniei (ca până acum) |
+| Mouse: clic pe linie, cu o mică mișcare laterală | setările liniei (ca până acum) |
+
+## FD-MODALFIT — Ferestrele nu mai ies din ecran pe iPhone și iPad (20 oct 2026)
+Cererea: „Nu ai rezolvat popupul de indicatori. Am deschis «Indicatori» pe grafic și iese în afara ecranului.”
+
+### 1. Ce era
+- Ferestrele aplicației își luau înălțimea din `vh`:
+  - „Indicatori”, „Ordin nou” și celelalte ferestre de tip Modal: sus la 6 % din `vh`, cel mult 88 % din `vh`;
+  - asistentul de conturi: la fel;
+  - rezumatul zilei: cel mult 94 % din `vh`;
+  - căutarea (⌘K): lista ei, cel mult 50 % din `vh`.
+- Pe iPhone și iPad, `vh` e înălțimea ferestrei cu barele Safari ascunse, deci mai mare decât partea vizibilă când barele se văd. Cât de mare e diferența depinde de bara aleasă în Safari (compactă, jos, sus) și de poziția telefonului; culcat, e cea mai mare.
+- Cu o listă lungă („Indicatori” → „Toți”, „Ordin nou” cu toate câmpurile), partea de jos a ferestrei ieșea din ecran și nu se mai putea ajunge la ea.
+- **Tastatura de pe ecran** acoperea și ea partea de jos (ferestrele, panoul de setări al graficului, panoul listei de pe telefon), fără ca acestea să se strângă.
+- Aceeași cauză ca la panoul de setări (FD-CHARTAUDIT §2). Acolo a fost reparată doar pentru panou; ferestrele n-au fost verificate cu lista lungă.
+
+### 2. Acum
+- **Orice fereastră** (Modal, asistentul de conturi, rezumatul zilei, căutarea) e cel mult cât partea vizibilă a ferestrei browserului, minus marginile ei. Ce nu încape se derulează în interiorul ferestrei, iar antetul (cu ✕) rămâne sus.
+- **Cu tastatura de pe ecran deschisă:** ferestrele, panoul de setări al graficului și panoul listei de pe telefon stau deasupra tastaturii (în partea care se vede).
+- Pe desktop nu se schimbă nimic (acolo partea vizibilă e toată fereastra).
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| iPhone culcat (înălțime mică) | fereastra ține de sub marginea de sus până la cea de jos; lista se derulează |
+| Barele Safari apar / dispar | fereastra urmează partea vizibilă |
+| Tastatura apare (căutarea din „Indicatori”, câmpurile din „Ordin nou”) | fereastra se strânge deasupra ei; câmpul în care scrii rămâne vizibil |
+| Tastatura dispare | fereastra revine la înălțimea ei |
+| Pagina mărită cu două degete | fereastra urmează partea mărită care se vede |
+| Fereastră scurtă (puține rânduri) | neschimbată: cât conținutul, sus |
+| Browser fără `visualViewport` | doar limita din CSS (partea vizibilă fără tastatură) |
+| Ecranul complet „din pagină” (iPhone, iPad) | la fel, ferestrele sunt deasupra lui |
+| Fereastra „Rezumatul nu a putut fi afișat” | neschimbată (două rânduri, fără câmpuri) |
+
+### 4. Conflicte
+- **FD-CHARTAUDIT §2 (panoul de setări):** rămâne de sus până jos; acum și deasupra tastaturii (cazul limită „panoul cu tastatura deschisă” din §10 nu mai depinde de Safari).
+- **FD-WATCHDRAWER (panoul listei pe telefon):** la fel, deasupra tastaturii.
+- **FD-SCROLLLOCK:** neschimbat.
+
+## FD-SCOREWHY — „De ce acest scor?” în „Ce mișcă piața” (20 oct 2026)
+Cererea: „Vreau să adaugi în «Azi» «de ce acest scor», ca la știri, și la «ce mișcă piața».” Dintre cele trei locuri propuse („Ce mișcă piața”, „Știri live”, „Sentimentul zilei”), a fost ales „Ce mișcă piața”.
+
+### 1. Ce se vede
+- Sub titlul fiecărei știri din „Ce mișcă piața” (cele două cele mai puternice în fiecare sens, sau toate cu „Arată toate”) apare **„De ce acest scor?”**, închis la început, ca pe pagina Știri.
+- Deschis, arată aceleași rânduri ca pe pagina Știri:
+  - **Motor:** modelul local + regulile, doar regulile, sau AI-ul tău („Gemini (gemini-3.8-flash)”), după cine a dat scorul;
+  - **Model:** scorul modelului local, când există;
+  - **Regulile** care s-au potrivit: „Regula «hack» pe «exchange hacked»: −0,6 (negată)”;
+  - **Relevanța și importanța**, cu sursa importanței (AI-ul, cuvintele-cheie, sau amândouă când diferă).
+- În plus, specific acestei liste: **„Cântărește 12% din indicele zilei”**, adică partea știrii din media ponderată din care iese indicele. Ponderea vine din relevanță, importanță, sursă, cât de recentă e știrea și câte surse au scris-o.
+- Scorul afișat (de ex. +0,62) e cel din care s-a calculat indicele tău: al AI-ului tău unde a dat unul, altfel cel comun. Explicația e a aceluiași scor.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Știre scorată de AI-ul tău | „Motor: Gemini (…)”, fără model și reguli; importanța AI-ului |
+| Știre scorată doar cu regulile (modelul local indisponibil) | „Motor: doar reguli”, regulile potrivite |
+| Știre fără nicio regulă potrivită (doar modelul) | motorul și „Model: …”, fără rânduri de reguli |
+| Importanța AI-ului diferă de cea din cuvinte-cheie | amândouă, ca pe pagina Știri |
+| Știrea a dispărut între calcul și explicație (curățenia zilnică) | doar „Cântărește …” |
+| Sub 0,5% din indicele zilei | „Cântărește sub 1% din indicele zilei” |
+| Lista se reîmprospătează (la 60 s) cu explicația deschisă | rămâne deschisă cât timp știrea e în listă |
+| „Arată toate” / „Mai puține” | fiecare știre are explicația ei; cele ascunse și reafișate pornesc închise |
+| Telefon | rândurile explicației trec pe mai multe rânduri |
+| Zilele trecute (istoricul) | neschimbate: explicația e doar pentru azi, calculată la cerere, nu salvată |
+
+### 3. Conflicte
+- **Pagina Știri:** aceeași explicație, din aceeași componentă; textul de acolo nu se schimbă.
+- **FD-TODAYGRID:** tile-ul crește cu un rând mic pentru fiecare știre afișată.
+- **Rezumatul zilei (AI):** primește driverii ca până acum, fără explicație.
+
+## FD-INDEXWHY — „Cum s-a calculat?” la Sentimentul zilei (20 oct 2026)
+Cererea: „În cardul Sentimentul zilei, sub cele patru carduri cu scorurile pe categorii, un link sau un buton care deschide un pop-up și explică cum s-a calculat sentimentul zilei, cu fiecare element luat în considerare și scorul care i s-a dat. Dacă sunt foarte multe știri, nu le afișa pe toate: «știrile au cântărit atât». Vreau să observ în timp ce trebuie ajustat: unde trebuie mai multă sau mai puțină importanță.”
+
+### 1. Butonul
+- Sub cele patru carduri (Crypto, Acțiuni, Macro, Geopolitică), în stânga: **„Cum s-a calculat?”**, în culoarea de accent. Pe același rând, în dreapta, rămâne „N știri încă în analiză”, când e cazul. *(Mutat pe rândul de titlu al cardului: FD-WHYPLAIN §2.)*
+- Deschide o fereastră mare (ca „Indicatori”), cu datele de acum. Se închide cu ✕, Esc sau clic în afara ei.
+
+### 2. Fereastra „Cum s-a calculat sentimentul zilei”
+Antetul: indicele, eticheta, încrederea și ora calculului („azi, până la 16:40”). Indicele e cel al tău: din scorurile AI-ului tău unde a dat unul și cu filtrul tău pentru știrile de acțiuni, ca pe card.
+
+**Pașii**, fiecare cu cifrele de azi:
+1. **Știrile zilei** (de la 00:00, în fusul tău, până acum):
+   - câte intră în calcul: pozitive (peste +0,2), neutre, negative (sub −0,2);
+   - câte nu țin de piețe (relevanță 0): nu intră;
+   - câte nu au încă scor: intră când primesc unul.
+2. **Ponderea fiecărei știri** = relevanță × importanță × greutatea sursei × factor × prospețime × poveste (× plafonul sursei), cu regula fiecărui termen:
+   - **relevanța:** 1 pentru crypto; 1 pentru acțiuni și macro cu termeni de piață, altfel 0,8; 0,8 pentru geopolitica legată de piețe, altfel 0;
+   - **importanța** 1–3: a AI-ului, unde a dat una; altfel din cuvinte-cheie (3: Fed, dobânzi, inflație, război, tarife, hack, faliment…; 2: ETF, randamente, dolar, BTC / ETH…; 1,5: alte monede din top 10; 1: restul);
+   - **greutatea sursei**, aleasă în Setări → Admin → Surse;
+   - **factorul:** sponsorizat 0,2; speculativ sau rezumat 0,5; altfel 1;
+   - **prospețimea:** se înjumătățește la fiecare 8 ore;
+   - **povestea:** o știre preluată de n surse cântărește, toate la un loc, 1 + 0,5 · log₂ n, împărțit între ele;
+   - **plafonul sursei:** cu cel puțin 4 surse, niciuna nu trece de 25 % din total; se spune la care s-a aplicat azi.
+3. **Media ponderată a scorurilor:** Σ(pondere × scor) ÷ Σ pondere, cu valorile de azi.
+4. **Spre neutru când sunt puține știri:** media × Σ pondere ÷ (Σ pondere + 4).
+5. **Pe scala 0–100:** 50 + 50 · tanh(1,6 × rezultatul de la pasul 4), rotunjit la o zecimală, adică indicele.
+6. **Încrederea:** din Σ pondere (sub 3 mică, sub 10 medie, altfel mare).
+
+**Pe categorii:** pentru fiecare categorie, câte știri, Σ pondere, media și indicele. Fiecare se calculează la fel, doar din știrile ei.
+
+**Pe surse:** fiecare sursă cu știri azi: câte știri, greutatea ei (cea din Setări → Admin → Surse), ponderea știrilor ei înainte și după plafon (cea tăiată e marcată) și partea ei din total. O sursă tăiată poate avea, după plafon, o parte mai mare decât înainte: totalul a scăzut și el; de aceea se arată ponderile, nu doar procentele.
+
+**Știrile**, de la cea care a cântărit cel mai mult:
+- scorul (colorat), titlul (legătură spre articol), sursa, categoria, ora;
+- termenii ponderii cu valorile lor („relevanță 1 × importanță 2 (cuvinte-cheie) × sursă 1,2 × prospețime 0,84 × poveste 0,61 (3 surse)”), ponderea, partea din total și **contribuția** la medie (pondere × scor ÷ Σ pondere; suma contribuțiilor e media de la pasul 3);
+- „De ce acest scor?” (FD-SCOREWHY): motorul, modelul, regulile;
+- primele 20, apoi „Arată încă 20”, până la 100;
+- **celelalte**, într-un singur rând: „Celelalte 160 de știri: 31 % din pondere, contribuție +0,05 la medie.”
+
+**Parametrii** (la final): toate constantele de mai sus într-un loc, cu ce se poate schimba azi din aplicație (greutatea surselor) și ce ține de cod (restul).
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Nicio știre azi | pașii cu zero; indicele 50, încredere mică; lista goală („Încă nu sunt știri analizate azi.”) |
+| Doar știri fără scor | la fel, cu „N încă fără scor” |
+| Sub 4 surse | „Plafonul nu se aplică (sub 4 surse).” |
+| Plafonul nu atinge nicio sursă | „Nicio sursă nu a trecut de 25 %.” |
+| O știre cu pondere 0 (de ex. sursa la 0) | în listă, la sfârșit, cu pondere 0; fără „plafon” (nu a fost tăiată) |
+| Știrea a dispărut între calcul și explicație | rândul ei, fără „De ce acest scor?” |
+| Scor 0 (neutru) | intră cu ponderea ei: trage media spre 0; contribuția 0 |
+| Peste 100 de știri | primele 100 în listă; restul în rândul „Celelalte” |
+| AI-ul tău a notat știrea | scorul și importanța lui; „(AI)” la importanță |
+| Filtrul de acțiuni pe indici | doar știrile lui, ca la indice |
+| Indicele de pe card s-a schimbat între timp (la 60 s) | fereastra arată ora calculului ei; „Recalculează” o reface |
+| Zi cu schimbarea orei (25 sau 23 de ore) | ziua în fusul tău, ca la indice |
+| Telefon | rândurile trec pe mai multe rânduri; fereastra încape (FD-MODALFIT) |
+| Eroare la încărcare | mesajul și „Încearcă din nou” |
+
+### 4. Conflicte
+- **FD-SCOREWHY:** aceeași explicație a scorului, în fiecare rând.
+- **FD-TODAYGRID:** cardul crește cu un rând (butonul).
+- Nimic din calcul nu se schimbă: fereastra doar îl arată. Aceleași funcții calculează indicele și explicația, deci cifrele nu pot fi diferite.
+
+## FD-WHYPLAIN — Explicații pe înțeles: cât mută o știre indicele, și de ce (20 oct 2026)
+Cererea, după ce a văzut explicațiile pe datele reale: „Toate știrile de la «Ce mișcă piața» au acest text: «Motor: Claude… Cântărește sub 1% din indicele zilei.» De ce? Ce înseamnă sub 1%? De ce au fost alese aceste 10? Eu vreau o explicație; ce mi-ai dat nu înseamnă nimic.” Apoi: „Da (efectul în puncte, rezumatul în cuvinte, motivul cerut lui Claude), și mută «Cum s-a calculat?» pe eyebrow-ul «Sentimentul zilei».”
+
+Pe datele reale din 20 oct: 1.147 de știri azi, din care 937 neutre (82 %); o știre obișnuită are 0,09 % din pondere; cele din „Ce mișcă piața” 0,2–0,4 %, adică fiecare mută indicele cu 0,1–0,2 puncte; Investing.com a dat 393 de știri și e tăiată la 25 %.
+
+### 1. „Ce mișcă piața”
+- **Sub titlu, de ce sunt acolo:** „Din cele N știri de azi: cele care au împins indicele cel mai mult în sus și cele care l-au tras cel mai mult în jos (pondere × scor).”
+- **La fiecare știre, mereu vizibil, efectul ei:** „Fără ea, indicele ar fi 47.8 (acum 47.9): +0,10 puncte.” (indicele scris ca pe card) Calculat refăcând indicele fără știrea aceea (cu plafonul, cu apropierea de neutru), deci exact cât a mutat-o.
+- **„De ce acest scor?”** (închis la început): motorul, regulile (la modelul local), relevanța și importanța, ca până acum, plus **de ce cântărește cât cântărește**, în cuvinte: „Cântărește de 4,4 ori cât o știre obișnuită de azi: importanță 3 (Claude), sursa CoinDesk are greutatea 1,2, e de acum 4 h (mai contează 68 %).” Plus, când e cazul: „relevanță 0,8”, „preluată de 2 surse (contează o dată)”, „factor 0,5 (speculativ)”, „sursa ei a fost tăiată de plafon”.
+- Rândul „Cântărește sub 1% din indicele zilei” dispare.
+
+### 2. „Cum s-a calculat?”
+- **Titlul cardului, „Sentimentul zilei”, e legătura** care deschide fereastra: subliniat punctat (se vede că e legătură și pe ecran tactil), în culoarea de accent la hover, cu „Cum s-a calculat sentimentul zilei” ca indicație. Nu mai e niciun buton separat, nici sub categorii, nici pe rând. *(Prima variantă punea un buton „Cum s-a calculat?” pe rândul de titlu: cererea era ca titlul însuși să fie legătura.)*
+- **Funcție premium:** după titlul ferestrei, insigna PREMIUM (aceeași ca la Slingshot și LMA). Deocamdată e doar insigna: Sentiq nu are încă plăți sau acces premium, deci fereastra se deschide pentru oricine.
+- **Sus, „Pe scurt”, în cuvinte**, cu cifrele de azi:
+  - câte știri intră și câte sunt pozitive, neutre (cu procentul) și negative;
+  - când neutrele sunt peste jumătate: „Neutrele trag media spre 0, deci indicele spre 50.”;
+  - cât cântărește o știre obișnuită și cât cea mai grea; care știre a mutat singură cel mai mult indicele și cu câte puncte (dintre cele 100 mai grele, când sunt mai multe);
+  - de la ce sursă vin cele mai multe știri, partea ei și dacă a fost tăiată de plafon;
+  - media ponderată și indicele care iese din ea.
+- **La fiecare știre din listă:** „fără ea: 47,8 (+0,10 puncte)”, lângă partea din total.
+- Restul (pașii, categoriile, sursele, parametrii) neschimbat.
+
+### 3. Motivul scorului, de la Claude (AI-ul utilizatorului)
+- La fiecare titlu notat, AI-ul dă și **un motiv scurt, în română** (cel mult o propoziție, ~120 de caractere), lângă scor și importanță.
+- Se păstrează cu scorul (al acelui utilizator) și apare primul în „De ce acest scor?”: „Motivul (Claude): Fluxuri record în ETF-ul BlackRock: cerere instituțională.”
+- Doar pentru știrile notate de acum înainte; cele notate înainte nu au motiv (rândul lipsește).
+- **Costul:** ~30 de tokeni de răspuns în plus pe știre, pe cheia utilizatorului; se văd ca până acum la „Ce a consumat cheia ta azi”.
+- **Pornire:** cere o coloană nouă în bază (migrarea 6), deci ajunge doar odată cu deploy-ul. Codul de pe Azure nu pornește pe o bază mai nouă decât el, așa că nu se pornește local pe baza reală înainte.
+
+### 4. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| O singură știre azi | „Fără ea, indicele ar fi 50,0” (fără știri, neutru) |
+| Efectul sub 0,005 puncte | „+0,00 puncte”: practic nu a mutat indicele |
+| Știre dintr-o sursă tăiată de plafon (azi: Investing.com, 393 de știri) | „Sursa ei e tăiată de plafon, deci fiecare știre a ei cântărește cu X % mai puțin.” Efectul o spune pe rândul lui: de obicei aproape 0 (fără ea, sursa tot ar avea 25 %, ponderea se împarte între celelalte știri ale ei); mare doar când sursa e chiar la limită și fără știre coboară sub plafon |
+| Efect cu semn opus scorului (rar: plafonul sursei redistribuie ponderea) | se arată cum e, e efectul real |
+| Știre veche (de 12 h) | „mai contează 35 %” |
+| Neutrele sub jumătate | fără rândul despre neutre |
+| Nicio știre | „Pe scurt” spune doar că nu sunt știri |
+| AI-ul nu dă un motiv pentru un titlu, sau îl dă gol | fără rândul „Motivul” |
+| Motiv prea lung | tăiat la 160 de caractere |
+| Știre notată de modelul local | regulile, ca până acum (motivul e doar al AI-ului) |
+| Alt AI (ChatGPT, Gemini) | la fel: „Motivul (ChatGPT): …” |
+
+### 5. Conflicte
+- **FD-SCOREWHY:** „Cântărește X%” e înlocuit de efectul în puncte și de explicația ponderii.
+- **FD-INDEXWHY §1:** butonul se mută pe rândul de titlu.
+- **FD-AIKEYS (scorarea cu AI-ul utilizatorului):** cererea și răspunsul au un câmp în plus; restul neschimbat.
+
+## FD-HISTORYCHART — „Ultimele 30 de zile”: graficul pe toată înălțimea și comparația cu Fear & Greed (20 oct 2026)
+Cererea: „Acum că s-a înălțat panoul «Ce mișcă piața», panoul «Ultimele 30 de zile» e trei sferturi gol. Ce am putea pune acolo?” Din propuneri a ales: (1) graficul pe toată înălțimea, cu scara mărită și valoarea la hover; (2) comparația cu Fear & Greed crypto și CNN Fear & Greed (acțiuni), pe aceleași 30 de zile.
+
+Ce era: bare de la linia de 50 în sus sau în jos, pe o scară 0–100. Zilele reale (47–49) dădeau bare de 1–2 px, abia vizibile („liniuțe”), într-un panou cu trei sferturi gol.
+
+### 1. Graficul
+- Ocupă toată înălțimea panoului (cât îi dă rândul, lângă „Ce mișcă piața”), cel puțin 160 px.
+- O coloană pe zi, 30 de zile, cea mai veche în stânga, azi în dreapta, în fusul utilizatorului (ca acum). O zi fără valoare rămâne goală (linia se întrerupe).
+- **Trei linii, pe aceeași scară 0–100** (toate trei sunt indici 0–100, deci se pot compara direct):
+  - **Sentiq** (accentul aplicației, mai groasă, cu puncte; ziua de azi și zilele încă provizorii cu punct gol);
+  - **Fear & Greed crypto** (alternative.me), albastru;
+  - **Stocks F&G**, adică CNN Fear & Greed, gri punctat. E doar al bursei americane (S&P 500, maximele / minimele de la NYSE, VIX, put / call, junk bonds, active-refugiu), nu global; legenda spune sursa la hover. Doar zilele de bursă, între ele linia continuă (weekendul nu e o pauză a datelor).
+- **Scara se mărește** pe liniile afișate: de la puțin sub cea mai mică valoare la puțin peste cea mai mare (o zecime din interval, cel puțin un punct), cu 50 mereu inclus și marcat (linie punctată), cel puțin 4 puncte între capete. Etichetele scării (sus, 50, jos) stau într-o margine în dreapta, departe de linii. Cu toate trei, scara cuprinde și Fear & Greed (de obicei mai larg); cu doar Sentiq (de ex. 47–52 → scara 45–53), se văd și zecimile.
+- **Legenda**, sus, butoane cu culoarea, numele și valoarea de azi: „Sentiq 48.3”, „Crypto F&G 34”, „Stocks F&G 52” (la hover, sursa fiecăreia). Un clic ascunde sau arată linia, iar scara se reface. Ultima linie rămasă nu se poate ascunde.
+- **Cursor sau atingere pe o zi:** linie verticală și o etichetă cu data și valorile zilei: „azi, 20 oct. · Sentiq 48.3 (provizoriu) · 1.209 știri · Crypto F&G 34, frică · CNN F&G 52, neutru”. Cu mouse-ul dispare când cursorul pleacă; pe ecran tactil rămâne până la următoarea atingere pe grafic (glisarea cu degetul trece prin zile, iar derularea paginii în sus și în jos merge mai departe).
+- **Azi** e indicele live, ca pe card (provizoriu): istoricul îl are doar de la ultima salvare, care poate fi încă a zilei de ieri.
+- **Datele** sub grafic: prima zi, mijlocul și „azi”.
+
+### 2. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Sentiq are sub 2 zile (instalare nouă) | Fear & Greed se văd pe toate 30 de zile; nota „Istoricul se construiește zi de zi” rămâne pentru Sentiq |
+| Contextul pieței lipsește sau nu s-a putut încărca | doar Sentiq; legenda nu arată Fear & Greed |
+| Unul dintre Fear & Greed lipsește | doar celălalt |
+| Valorile Fear & Greed mai vechi de 30 de zile | nu intră |
+| Fear & Greed crypto (o valoare pe zi, ora 00:00 UTC) | ziua lui e data UTC a valorii |
+| CNN (zile de bursă, ora New York) | ziua lui e data din New York |
+| O singură valoare pe o linie | un punct, fără linie |
+| Toate valorile egale | scara tot cuprinde 50 și o margine |
+| Telefon | graficul pe lățimea panoului; eticheta zilei se mută spre stânga lângă marginea din dreapta, ca să nu iasă din panou |
+| Teme (deschisă / închisă) | culorile din temă |
+| Cititor de ecran | rezumatul: „Sentiq în ultimele 30 de zile, între X și Y, azi Z; Fear & Greed crypto azi …; CNN azi …” |
+
+### 3. Conflicte
+- **FD-TODAYGRID:** panoul păstrează locul (lângă „Ce mișcă piața”); doar conținutul se schimbă.
+- **Banda de sus (FD-SENTIQ):** arată aceleași Fear & Greed; folosesc aceeași interogare, deci nicio cerere în plus.
+
+## FD-MULTICAT — Surse de știri cu mai multe categorii („General”) (20 oct 2026)
+Cererea: „Vreau să pot adăuga un news feed în categoria General: General înseamnă că oferă informații din toate cele 4 categorii. Sau să mă lași să aleg mai multe categorii. De exemplu, benzinga.com dă știri din toate cele 4 categorii.”
+
+### 1. Ce era
+- Fiecare sursă avea o singură categorie (Crypto, Acțiuni, Macro, Geopolitică), iar toate știrile ei o primeau pe aceea, oricare ar fi fost subiectul.
+- Un feed general (Benzinga, Reuters Business…) trebuia pus într-una singură. Știrile lui despre Bitcoin intrau atunci, de exemplu, la Acțiuni: categoria greșită pe pagina Știri, la filtre și în indicele pe categorii, cu relevanța acelei categorii.
+
+### 2. Acum
+- **Setări → Admin → Surse, la adăugare:** „Categorii”, cu patru butoane (Crypto, Acțiuni, Macro, Geopolitică), oricâte alese, cel puțin unul, plus **„Toate (general)”**, care le alege pe toate patru.
+- **O sursă cu o singură categorie:** ca până acum.
+- **O sursă cu mai multe categorii:** fiecare știre a ei primește, la aducere, **categoria pe care o tratează, dintre cele alese pentru sursă**, după:
+  - monedele crypto numite (Bitcoin, ETH…) → Crypto;
+  - companiile și acțiunile numite (Apple, „$TSLA”, „(NYSE: F)”), indicii bursieri → Acțiuni;
+  - cuvintele subiectului: crypto (blockchain, stablecoin, token…), acțiuni (shares, earnings, IPO, S&P 500, Nasdaq…), macro (Fed, inflație, dobânzi, PIB, randamente, dolar, tarife…), geopolitică (război, sancțiuni, rachete, alegeri, NATO…).
+  - Câștigă categoria cu cele mai multe semne. La egalitate, ordinea e Crypto, Acțiuni, Macro, Geopolitică.
+- **O știre fără niciun semn al categoriilor alese** (de ex. „Cele mai bune carduri de credit” într-un feed general) intră la prima categorie a sursei, dar cu relevanță 0: apare în listă cu „relevanță scăzută” și nu intră în indice.
+- Relevanța, importanța și restul calculului se fac apoi exact ca la o sursă din acea categorie (de ex. geopolitica fără legătură cu piețele are relevanța 0, ca la BBC World).
+- **În tabel**, coloana „Categorie” arată „General” pentru toate patru, altfel „Crypto + Acțiuni”.
+- **La sursele adăugate de tine, categoriile se pot schimba din tabel** („Schimbă”, aceleași patru butoane, „Salvează” / „Anulează”). La salvare, știrile păstrate ale sursei se reclasează după noile categorii. Sursele implicite rămân cum sunt (ca până acum: doar activarea și ponderea).
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Niciun buton ales | „Adaugă sursa” nu merge; mesaj: „Alege cel puțin o categorie” |
+| Un singur buton ales | sursă obișnuită, ca până acum |
+| „Toate (general)” apăsat cu toate alese | le deselectează pe toate (nu poți adăuga până nu alegi) |
+| Știre cu Bitcoin și Fed („Bitcoin scade după decizia Fed”) | Crypto: moneda numită contează mai mult |
+| Știre despre Apple și dobânzi | categoria cu mai multe semne; la egalitate Acțiuni înaintea Macro |
+| Știre despre tarife | Macro (tarifele sunt și macro, și geopolitică; la egalitate Macro) |
+| Sursă doar Crypto + Acțiuni, știre despre Fed | nu are semne Crypto / Acțiuni: Crypto (prima), relevanța 0 |
+| Titlul unei știri se schimbă la sursă | scorul se reface, ca acum, și categoria se alege din nou |
+| Reetichetarea zilnică a știrilor recente (lista de monede s-a schimbat) | la sursele cu mai multe categorii, categoria se alege din nou, cu aceleași reguli |
+| Categoriile unei surse schimbate din tabel | toate știrile ei păstrate se reclasează; indicele de azi se reface singur; zilele trecute înghețate rămân cum au fost |
+| Feed-uri automate ale acțiunilor (Nasdaq: AAPL) | neschimbate (Acțiuni) |
+| Filtrul „Știrile despre acțiuni pe indici” (FD-INDEXNEWS) | se aplică știrilor cu categoria Acțiuni, oricare ar fi sursa |
+| Pagina Știri, filtrul „Categorie” | după categoria fiecărei știri (o sursă generală apare la fiecare categorie, cu știrile ei de acolo) |
+
+### 4. Conflicte
+- **FD-INDEXNEWS, FD-AUTOFEED:** neschimbate (lucrează pe categoria știrii).
+- **Schimbarea categoriei unei surse (API-ul existent):** până acum rescria doar categoria știrilor, nu și relevanța lor (care depinde de categorie). Acum le reclasează complet.
+- **Migrarea 7** (coloana `categories` a surselor): ajunge pe baza reală odată cu deploy-ul, împreună cu migrarea 6.
+
+## FD-HTMLFEED — Știri de pe site-uri fără RSS (20 oct 2026)
+Cererea: „Există servicii care generează RSS din adresele care nu au RSS și vor abonament, ceea ce mi se pare ridicol: putem construi noi același lucru. Pentru site-urile fără RSS, construiește un feed pentru acea adresă, sau citește direct conținutul site-ului, dacă se poate. Vreau să-ți dau un site și să prind știrile de pe el, chiar dacă n-are RSS. Sunt site-uri foarte importante fără RSS.”
+
+### 1. Ce s-a verificat pe site-uri reale (20 oct)
+- **Reuters:** paginile întorc 401 (protecție anti-bot). Sitemap-ul de știri ar merge tehnic (cele mai noi 50 de articole, cu titlul și ora exactă), dar `robots.txt` îl interzice: „Block all other bots: `User-agent: *` → `Disallow: /`”, iar termenii lor interzic colectarea automată fără acord scris. **Sentiq nu-l citește.**
+- **AP News:** paginile și sitemap-ul de știri sunt în spatele provocării Cloudflare („Just a moment…”): nu se pot citi automat.
+- **CNBC Markets:** pagina se citește: 59 de titluri, cu data luată din adresă (`/2026/10/20/…`).
+- **CoinDesk Markets:** pagina se citește: 27 de titluri, cu ora exactă din `<time>` de lângă fiecare.
+- **Benzinga:** pagina de Markets întoarce 403, dar Benzinga are RSS (`https://www.benzinga.com/feed`), care se citește normal.
+
+### 2. Cum citește Sentiq o adresă
+Se dă adresa paginii (de ex. `https://www.reuters.com/markets/`), exact ca un feed. Sentiq încearcă, în ordine:
+1. **E un feed RSS / Atom:** ca până acum.
+2. **Pagina declară un feed** (`<link rel="alternate" type="application/rss+xml">`): se citește feed-ul acela.
+3. **Pagina are JSON-LD** cu articole (titlu, adresă, dată): se citesc acelea.
+4. **Titlurile din pagină:** legăturile spre articole ale aceluiași site, cu text de titlu (cel puțin 4 cuvinte, 20–220 de caractere), din titluri sau carduri. Meniurile, antetul, subsolul și casetele laterale nu contează. Data vine din `<time>`-ul cardului știrii, altfel din adresă; dacă lipsesc amândouă, știrea nu are dată.
+5. **Sitemap-ul de știri al site-ului** (din `robots.txt`): când pagina e blocată (401, 403, 429, provocare anti-bot) sau are prea puține titluri (sub 3). Dacă adresa dată avea o secțiune (`/markets/`), se păstrează doar articolele din ea.
+- **Înainte de orice citire a unei pagini sau a unui sitemap, `robots.txt`:** o adresă interzisă cititorilor obișnuiți (`User-agent: *`) nu se citește deloc. Exemplu: „Reuters interzice cititorii automați (robots.txt: Disallow / pentru toți, în afara celor aprobați).”
+
+**„Testează”** spune ce a găsit și cum: „Citită din sitemap-ul de știri al site-ului (secțiunea /markets/): 18 știri, toate cu oră. Ultimele: …”. Dacă nu merge nimic: „Site-ul blochează cititorii automați (HTTP 403 / Cloudflare) și nu are un sitemap de știri care să se poată citi.”
+
+**La adăugare**, Sentiq ține minte modul găsit și îl folosește la fiecare citire. Coloana „Stare” din tabel îl arată sub numărul de știri: „titlurile din pagină”, „sitemap-ul de știri”, „feed găsit în pagină”, „datele structurate ale paginii” (la feed-urile RSS, nimic, ca până acum).
+- După o schimbare a adresei în formular, rezultatul testului de dinainte dispare (era al adresei vechi).
+
+### 3. Știrile fără dată
+- O pagină poate avea titluri fără nicio dată. La prima citire nu se știe cât de vechi sunt, așa că nu intră ca știri noi: Sentiq le notează ca „văzute” și nu le adaugă (altfel 50 de titluri vechi ar intra toate ca știri „de acum” și ar strica indicele zilei).
+- De la a doua citire, un titlu fără dată apărut între timp e nou: intră cu ora la care a fost văzut.
+- Un titlu cu dată mai veche de 3 zile nu intră, ca la feed-uri (de ex. linkurile vechi rămase pe pagină).
+- **Data doar din adresă** (`/2026/10/20/…`, doar ziua): la prima citire, ora 12:00 UTC a acelei zile (sau acum, dacă e mai devreme). După aceea, o știre nouă de azi intră cu ora la care a fost văzută (altfel o știre de seară ar fi cântărit ca una de prânz).
+
+### 4. Ritmul și politețea
+- **Paginile și sitemap-urile** se citesc o dată la 10 minute (feed-urile, ca până acum, la 5).
+- Se respectă `robots.txt` (grupul `User-agent: *`), la pagină și la sitemap: ce e interzis nu se citește, oricât de important ar fi site-ul. Feed-urile RSS (făcute anume pentru cititori automați) se citesc ca până acum.
+- `robots.txt` care nu există (404) = totul permis; `robots.txt` cu eroare de server (5xx) sau fără răspuns = nu se citește acum, se reîncearcă mai târziu (ca Google).
+- Sentiq nu ocolește protecțiile anti-bot (Cloudflare, provocări JavaScript, autentificare): ce nu se citește așa, nu se citește.
+- Doar adrese ale aceluiași site: un feed sau un sitemap declarat spre alt site (sau spre o adresă internă) nu se urmează.
+
+### 5. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Pagina e un feed RSS | ca până acum („feed RSS”) |
+| `robots.txt` interzice pagina, dar permite sitemap-ul | se citește sitemap-ul (dacă are știri) |
+| `robots.txt` interzice tot (Reuters) | nu se adaugă: „Site-ul interzice cititorii automați” |
+| Pagina declară mai multe feed-uri | primul care se citește |
+| Site construit doar în JavaScript (pagina goală fără browser) | „Pagina nu are titluri care să se poată citi fără browser”; se încearcă sitemap-ul |
+| Sitemap index | se citește sitemap-ul cel mai recent din index |
+| Sitemap fără titluri (sitemap obișnuit, nu de știri) | nu se folosește |
+| Secțiunea dată nu are articole în sitemap | „Sitemap-ul are N știri, dar niciuna din /secțiune/” |
+| Pagina se schimbă (alt design) și nu mai are titluri | eroare în tabel, ca la un feed stricat; „Testează” spune de ce |
+| Același articol pe două surse | o singură dată (după adresă), ca acum |
+| Același titlu la două adrese în aceeași pagină (variante, parametri de urmărire) | o singură dată, prima |
+| Pagina redirecționează | se urmează redirecționarea, ca la feed-uri |
+| Titlu fără dată la prima citire | notat ca văzut, neadăugat |
+| Un link vechi rămas pe pagină, cu data în adresă | nu intră (peste 3 zile) |
+| Pagină foarte mare | cel mult 5 MB, ca la feed-uri |
+| Categoriile | ca la orice sursă (FD-MULTICAT) |
+
+### 6. Conflicte
+- **Feed-urile existente:** neschimbate (modul lor e „feed RSS”).
+- **FD-MULTICAT:** o sursă de pagină poate avea mai multe categorii.
+- **Migrarea 8** (modul și adresa citită ale unei surse): ajunge pe baza reală odată cu deploy-ul, împreună cu 6 și 7.
+
+## FD-AIQUOTA — Erorile de credit și de limită ale AI-ului, spuse exact (20 oct 2026)
+Cererea: celălalt utilizator primea „contul Google nu mai are credit sau a atins limita planului” cu o cheie nouă, făcută pe un abonament plătit. Sentiq nu păstra textul primit de la Google, așa că nu se putea spune ce limită era. În jurnal s-a văzut, o singură dată, `402: Your prepayment credits are depleted` (soldul Prepay al proiectului era 0), apoi doar mesajul general. „Implementează partea noastră”: textul exact al furnizorului, un mesaj clar pentru soldul Prepay și o pauză care rămâne valabilă după o repornire.
+
+Ce spune Google (documentația Gemini API, 20 oct):
+- Limitele sunt **ale proiectului, nu ale cheii**; cele zilnice se resetează la miezul nopții ora Pacificului.
+- Cu facturarea Prepay, API-ul răspunde doar cât soldul e peste 0; altfel întoarce 402.
+- Creditele Cloud (inclusiv cele primite cu un abonament) se folosesc doar după ce există credit Prepay cumpărat.
+
+### 1. Ce se vede
+Avertismentul din Setări → Ale mele → Inteligență artificială (sub alegerea scorului) spune acum exact ce s-a întâmplat, când Google o spune:
+
+| Ce răspunde Google | Mesajul |
+|---|---|
+| 402, sau „prepayment credits are depleted” | creditul preplătit (Prepay) al proiectului Google al cheii e epuizat: adaugă credit în AI Studio, la Billing. Creditele primite cu abonamentul se folosesc doar cât soldul Prepay e peste 0 |
+| 429, limita zilnică a nivelului gratuit (N cereri) | cheia e pe nivelul gratuit Google și a atins limita lui zilnică: N cereri pe zi pentru `model`. Limita e a proiectului Google, nu a cheii: o cheie nouă din același proiect nu ajută. Pentru mai mult, proiectul cheii trebuie legat de facturare (AI Studio, la Billing) |
+| 429, limita 0 pe nivelul gratuit | modelul `model` nu e inclus în nivelul gratuit Google: cheia trebuie să fie dintr-un proiect cu facturare (AI Studio, la Billing) |
+| 429, limita zilnică a unui nivel plătit | proiectul Google al cheii a atins limita zilnică a nivelului său: N cereri pe zi pentru `model`. Limita e a proiectului, nu a cheii |
+| 429, limita 0 pe un nivel plătit | proiectul Google al cheii are limita 0 pentru `model`: modelul nu e disponibil pe nivelul proiectului (vezi AI Studio, la Rate limits) |
+| altceva (OpenAI, Anthropic, o limită pe care Google nu o descrie) | ca până acum: „contul … nu mai are credit sau a atins limita planului” |
+
+- **La limitele zilnice:** „Google resetează limita pe 21 oct., 10:00.” Ora e miezul nopții ora Pacificului, arătat în fusul orar din Setări. Propoziția nu apare după ce ora a trecut, nici la limita 0 (aceea nu se resetează).
+- **Textul exact al furnizorului, sub mesaj:** „Răspunsul Google: „You exceeded your current quota … limit: 20, model: …””, cel mult 600 de caractere. Apare la erorile de credit sau limită și la cele de cereri pe minut, la orice furnizor (Anthropic, OpenAI, Google). La celelalte erori, textul furnizorului e deja în mesaj (permisiune, cerere respinsă, conexiune, altă eroare) sau nu spune nimic în plus (cheie invalidă, model inexistent, supraîncărcare, timp depășit).
+- **Jurnalul serverului:** același mesaj, plus textul furnizorului.
+- **Rezumatul zilei:** aceeași eroare are mesajul precis; jurnalul are și textul furnizorului.
+
+### 2. Pauza
+- Duratele rămân ca până acum: credit sau limită → 30 de minute; eroare trecătoare → 5 minute; cheie refuzată → până se schimbă cheia sau modelul.
+- **Nou: pauza și eroarea rămân valabile după o repornire** a aplicației (deploy, repornire Azure). Nu se mai trimite o cerere imediat după pornire dacă furnizorul tocmai refuzase.
+- **Bug reparat:** după o repornire, eroarea veche rămânea afișată și după ce scorarea mergea din nou, până la următoarea eroare. Acum dispare la primul răspuns bun.
+- **Reîncercare imediată:** pauza se șterge când utilizatorul salvează cheia furnizorului ales (chiar aceeași) sau schimbă alegerea AI (furnizor, model, scorul pornit sau oprit). Următoarea rulare, în câteva secunde, încearcă din nou. Așa se poate reîncerca imediat după ce s-a rezolvat facturarea la Google, fără 30 de minute de așteptare. Merge și când pagina e servită de o altă instanță decât cea care rulează joburile (Mac / Azure).
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| 429 cu mai multe încălcări (pe minut și pe zi) | contează cea zilnică; dacă vreuna are limita 0, contează limita 0 |
+| 429 doar pe minut | „limită de cereri Google atinsă”, ca acum (trecătoare: reîncercări după câteva secunde, apoi pauză de 5 minute), cu textul Google dedesubt |
+| Limita zilnică fără număr în răspuns | mesajul fără număr („limita zilnică a nivelului gratuit”) |
+| Răspunsul nu numește modelul | modelul cerut |
+| Răspuns doar cu text, fără `details` | se citește din rândurile „Quota exceeded for metric: …, limit: N, model: …”; o metrică `…_per_day` e limita zilnică (pauză de 30 de minute, nu de 5) |
+| Textul furnizorului conține ceva ce seamănă cu o cheie (`sk-…`, `AIza…`) | înlocuit cu „…” înainte de afișare și de jurnal, inclusiv în mesajele care conțin textul furnizorului (permisiune, cerere respinsă, conexiune, altă eroare) |
+| Text foarte lung sau pe mai multe rânduri | spațiile adunate, tăiat la 600 de caractere |
+| Stare salvată de versiunea veche (fără text, fără ora de resetare) | se afișează ca înainte |
+| Cheie refuzată definitiv, apoi repornire | rămâne oprită (nu se trimite nimic) până se schimbă sau se salvează din nou cheia ori alegerea AI |
+| Pauza a expirat cât aplicația era oprită | după pornire se încearcă imediat; eroarea veche rămâne afișată până la primul răspuns |
+| Starea nu s-a putut salva (baza nu răspunde) | după o repornire, prima rulare încearcă imediat, ca până acum |
+| Salvarea cheii cade exact în timpul unei încercări care eșuează | contează eșecul (pauză nouă); următoarea salvare reîncearcă |
+| Pe telefon, adrese lungi în textul Google | textul se rupe pe rânduri, fără depășire orizontală |
+| Cheie nouă, alt proiect Google | stare nouă, ca până acum (starea e a furnizorului, modelului și cheii) |
+
+### 4. Conflicte
+- **FD-AIKEYS** (pauza; starea văzută de ambele instanțe): starea primește două câmpuri opționale (textul furnizorului și ora de resetare); o stare veche fără ele merge.
+- **FD-AICLARITY** (consumul de azi): neschimbat. Cererile refuzate nu au tokeni și nu se numără.
+- **Verificarea cheii la salvare** (lista de modele, gratuită): o cheie fără credit trece de obicei verificarea, iar eroarea apare la primul scor. Dacă Google refuză și lista (402), cheia se salvează cu avertismentul precis („…nu a putut fi verificată acum (creditul preplătit (Prepay) … e epuizat …)”), nu cu „eroare Google 402”.
+
+## FD-AISLOW — Scorarea AI când furnizorul răspunde greu (20 oct 2026)
+Cererea: „nu a ajutat deloc ce ai făcut, aceeași eroare o primea și înainte”. Eroarea din captura celuilalt utilizator e „Gemini: Google nu a răspuns la timp”, nu una de credit: FD-AIQUOTA nu o atingea.
+
+Ce s-a văzut (producție, 20 oct, UTC):
+- **12:54–12:57:** 10 runde la rând, câte 2 loturi, cam 5 secunde pe lot. Cheia și creditul erau în regulă.
+- **De la 12:58:** aproape fiecare rulare se termină cu „Google nu a răspuns la timp” (limita era de 90 de secunde). Loturile care trec durează 30–60 de secunde (de exemplu 18:56 → 18:58: două loturi în 89 de secunde).
+- **După fiecare timp depășit urma o pauză de 5 minute.** Rezultatul: cam 25 de titluri la 7 minute, deși intră 100–180 de știri pe oră. La 19:20 așteptau 1.639 de titluri din ultimele 48 h. Totuși, cheia scorase 1.495 de titluri în 24 h, iar avertismentul arăta ca și cum nimic nu ar merge.
+- **Utilizatorul 1 (Claude):** nimic nu așteaptă.
+- **Forumul Google AI pentru dezvoltatori** (fără răspuns oficial de la Google): de la 13 oct, gemini-3.8-flash răspunde foarte lent și dă 503 „no capacity”, mai rău pe 20 oct. Un raport din septembrie, despre gemini-3.7-flash: Flash-urile mai vechi, pe aceeași cheie, răspundeau în circa o secundă, iar nivelul Priority nu ajuta.
+
+Problema e la Google și Sentiq nu o poate repara. Partea Sentiq: să ceară mai inteligent, să nu se oprească degeaba, să spună adevărul despre progres și ce se poate face.
+
+### 1. Mai mult timp pentru un răspuns
+- Un lot de scor are acum **3 minute** (înainte 90 de secunde), cât are și Rezumatul zilei.
+- **Timpul e al întregii cereri, cu reîncercările ei cu tot** (după un 503, de exemplu), la toți furnizorii. Înainte, fiecare încercare avea timpul ei: până la de 3 ori 90 de secunde, iar la Anthropic, prin SDK, la fel.
+  - Așa, un lot nu ține runda mai mult de 3 minute.
+  - O reîncercare a cărei așteptare ar trece de timp nu se mai face: rămâne eroarea primită (de exemplu „Google e supraîncărcat acum”).
+- Mesajul spune cât s-a așteptat: „Google nu a răspuns în 3 minute”, la fel la OpenAI și Anthropic. La verificarea cheii Google sau OpenAI: „…în 15 secunde”.
+
+### 2. Reîncercare repede după o eroare trecătoare
+Erorile trecătoare sunt: timp depășit, supraîncărcare, conexiune, limită pe minut, eroare 5xx.
+- **Pauza după ele nu mai e fixă (5 minute).** Crește cu fiecare eroare la rând: 1 minut după prima, apoi 2, 4, 8, cel mult 15 minute. Primul răspuns o readuce la zero.
+- **Neschimbate:** credit sau limită zilnică → 30 de minute; cheie refuzată → până se schimbă; altă eroare (cerere respinsă, 4xx) → 5 minute.
+- Și un răspuns fără scor folosibil (refuz, prea lung) e un răspuns: seria de erori se oprește.
+
+### 3. Utilizatorii nu se mai așteaptă unul pe altul
+- Fiecare rundă a jobului face **un singur lot (25 de titluri) pentru fiecare utilizator**, iar utilizatorii sunt serviți **în paralel** (cel mult 4 deodată).
+- Un furnizor lent (până la 3 minute) întârzie doar runda, nu și pe ceilalți utilizatori în aceeași rundă. Un utilizator cu Claude primește o rundă cel puțin la 3 minute, chiar dacă un altul așteaptă după Google.
+- Jobul nu mai începe runde noi după **5 minute** de la pornire. Lotul în curs se termină, deci rularea rămâne sub limita jobului (10 minute) și nu se pierde un răspuns deja plătit.
+
+### 4. Ce se vede în Setări → AI
+- **O singură eroare trecătoare nu mai aprinde avertismentul.** Se reîncearcă într-un minut, iar de obicei trece. Avertismentul apare de la a doua eroare la rând:
+  > Gemini: Google nu a răspuns în 3 minute (a 3-a eroare la rând). Se reîncearcă automat la 22:14; între timp, titlurile nescorate au scorul modelului local. Dacă se repetă, alege alt model din listă: unele răspund mai repede.
+
+  Dacă pauza a trecut deja: „Se reîncearcă automat în curând”.
+- Celelalte erori (credit, cheie, cerere respinsă) se arată ca până acum, de la prima.
+- **Rândul nou, mereu vizibil cât scorul AI e pornit și cheia e salvată:**
+  > Ultimele 48 h: Gemini a scorat 1.869 din 3.508 titluri; ultimul scor acum 2 min.
+
+  Variante:
+  - toate scorate: „Ultimele 48 h: Gemini a scorat toate cele 3.508 titluri; ultimul scor acum 2 min.”;
+  - un singur titlu: „…a scorat singurul titlu” / „…nu a scorat încă singurul titlu”;
+  - niciun scor până acum: fără „ultimul scor”.
+
+  Titlurile numărate sunt aceleași pe care le scorează AI-ul: din sursele active, care contează în indice. Unul pe care modelul nu l-a putut scora (refuz) a trecut totuși prin el și se numără. Așa se vede că scorarea merge, chiar dacă încet.
+
+### 5. Jurnal
+- Un lot care a primit răspuns după mai mult de un minut se notează cu durata: „AI scoring (gemini:gemini-3.8-flash): 25 headlines answered in 74 s”. Ajută la diagnostic data viitoare.
+
+### 6. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Repornire în mijlocul unei serii de erori | seria și pauza rămân (sunt în starea salvată, ca la FD-AIQUOTA) |
+| Stare salvată de versiunea veche (fără serie) | avertismentul se arată ca înainte (seria necunoscută contează ca repetată) |
+| Utilizatorul salvează cheia sau alegerea AI | pauza și seria se șterg; următoarea rundă încearcă din nou |
+| Oprirea aplicației sau a jobului în timpul unui lot | nu e o eroare: nu crește seria |
+| Google răspunde cu 503 de mai multe ori | reîncercările de câteva secunde din cerere rămân (1 s, 4 s), în cele 3 minute ale cererii; apoi pauza din §2 |
+| Utilizatorul salvează cheia după o eroare trecătoare, când pauza trecuse deja | seria se șterge și ea (următoarea eroare are din nou un minut) |
+| Modelul refuză setarea de gândire / raționament (un 400, imediat) | a doua cerere, fără ea, are din nou 3 minute; se întâmplă o singură dată pe cheie și model, ca până acum |
+| O eroare de credit după timpi depășiți | 30 de minute, avertismentul imediat (nu e trecătoare) |
+| Furnizorul nu răspunde deloc ore întregi | pauzele cresc până la 15 minute, deci cel mult ~4 cereri pe oră, fiecare de cel mult 3 minute |
+| Cererea abandonată după 3 minute | Google o poate factura dacă a terminat-o după ce Sentiq a renunțat; un lot are cam 1.500 de tokeni, adică sub un cent |
+| Eroare a bazei la un utilizator | ceilalți își termină lotul; rularea e marcată cu eroare, ca înainte |
+| Mai mult de 4 utilizatori cu scor AI | câte 4 deodată, în ordine |
+| Niciun titlu în ultimele 48 h | rândul de progres nu apare |
+| Scorul AI oprit sau fără cheie | rândul de progres nu apare (ca avertismentul) |
+| Pe telefon | rândul de progres și avertismentul se rup pe rânduri, fără depășire orizontală |
+| Două instanțe (Mac / Azure) | scorează doar instanța cu joburile; pagina citește starea și progresul din bază |
+
+### 7. Conflicte
+- **FD-AIQUOTA §2** (durata pauzelor): „eroare trecătoare → 5 minute” devine pauza care crește 1 → 15 minute. Credit / limită și cheie refuzată: neschimbate.
+- **FD-AIKEYS** („două loturi pe rulare”): devine un lot pe rundă, runde cât permite timpul (5 minute) și cel mult 40, utilizatorii în paralel.
+- **Rezumatul zilei:** tot 3 minute, dar acum cu reîncercările cu tot (înainte, 3 minute pe fiecare încercare); mesajul la timp depășit e cel precis. La fel la verificarea cheii (15 secunde).
+- **FD-AICLARITY** (consumul de azi): neschimbat; rândul de progres e separat.
+
+Ce poate face celălalt utilizator acum: alege alt model Gemini din listă. Rapoartele de pe forum spun că modelele Flash mai vechi răspundeau mult mai repede; viteza lor nu e verificată de Sentiq. Sau rămâne pe gemini-3.8-flash: cu schimbările de mai sus, scorarea înaintează și când Google e lent.
+
+## FD-EARNTV — Data rezultatelor trimestriale și de la TradingView (20 oct 2026)
+Cererea: „de ce în calendar nu îmi apare earnings de la SpaceX, care sunt chiar în 30 de minute, deși SPCX e în lista mea de urmărire”, apoi „da, adaugă TradingView”.
+
+Cauza:
+- Sentiq lua rezultatele doar din calendarul Nasdaq (§4.5).
+- **Nasdaq nu avea SPCX pe 20 oct.** Îl avea pe 3 nov., ca dată „estimată de un algoritm din datele istorice de raportare” (furnizorul Zacks), deși SpaceX anunțase pe 16 oct. rezultatele pe 20 oct., după închidere.
+- **TradingView avea data corectă**, cu tipul de publicare „confirmat” și ora „după închidere”. Tesla (21 oct.) și Apple (2 nov.) erau corecte la ambele.
+
+Ce dă TradingView (scanner-ul public `scanner.tradingview.com/america/scan`, verificat pe 20 oct.), pentru fiecare acțiune:
+
+| Câmp | Ce e |
+|---|---|
+| `earnings_release_next_trading_date_fq` | ziua de bursă a următoarei publicări (miezul nopții UTC al zilei) |
+| `earnings_publication_type_next_fq` | 10 = dată estimată; 11 = confirmată, înainte de deschidere; 12 = confirmată, după închidere; 13 = confirmată, fără oră |
+| `earnings_release_next_time` | −1 înainte de deschidere, 1 după închidere, 0 necunoscut |
+| `earnings_release_next_calendar_date` | sfârșitul trimestrului raportat (ex. 30 sept. 2026) |
+| `earnings_per_share_forecast_next_fq` | EPS-ul estimat de analiști |
+| `earnings_release_trading_date_fq` | ziua ultimei publicări (rezultate deja date) |
+
+Codurile au fost deduse din date: 227 de companii mari cu rezultate în 60 de zile, comparate cu ora Nasdaq și cu anunțurile cunoscute. TradingView nu le documentează.
+
+### 1. Regula
+Pentru fiecare acțiune din favorite, la fiecare reîmprospătare (6 ore și la adăugarea unei acțiuni):
+- **Data confirmată de TradingView câștigă.**
+  - Rezultatul apare în ziua confirmată (dacă e în cele 10 zile lucrătoare), chiar dacă Nasdaq nu-l are în acea zi. Așa apare SpaceX pe 20 oct.
+  - O dată Nasdaq diferită pentru aceeași acțiune dispare, pentru că e o estimare depășită. Excepție: ziua ultimei publicări, adică rezultatele date chiar azi.
+- **După o publicare, estimările vechi dispar.** O dată Nasdaq la mai puțin de 45 de zile după ultima publicare știută de TradingView e o estimare care nu s-a actualizat: dispare. Exemplu: SpaceX raportează pe 20 oct., iar Nasdaq încă îl are pe 3 nov.
+- **O dată doar estimată de TradingView nu schimbă nimic:** rămâne ce spune Nasdaq, ca înainte.
+- **Fără date TradingView** pentru acțiune (ETF, simbol necunoscut, TradingView indisponibil): totul ca înainte, doar Nasdaq.
+- **Ora:** cea confirmată de TradingView (înainte de deschidere / după închidere), altfel cea de la Nasdaq. Afișarea rămâne cea de acum: 08:00 sau 16:30 ora New York-ului, ori toată ziua.
+
+### 2. Ce se vede
+- **Când Nasdaq are rezultatul în aceeași zi:** Prognoza și Anteriorul rămân de la Nasdaq (EPS estimat, EPS-ul din același trimestru de anul trecut).
+- **Când doar TradingView îl are:**
+  - Prognoza e EPS-ul estimat de TradingView („$0.13”);
+  - Anterior lipsește (TradingView nu dă EPS-ul de anul trecut pe același trimestru);
+  - trimestrul vine din sfârșitul perioadei raportate.
+- **Nota** spune de unde e data:
+  - doar Nasdaq: ca acum;
+  - data confirmată de TradingView, numerele de la Nasdaq: „…după închiderea bursei (în jur de 16:30, ora New York-ului). Data e confirmată (TradingView). Prognoza este EPS-ul estimat de analiști, iar Anterior este EPS-ul din același trimestru de anul trecut (Nasdaq).”;
+  - doar TradingView: „…Data e confirmată (TradingView). Prognoza este EPS-ul estimat de analiști (TradingView); Nasdaq nu are încă rezultatele în calendar.”
+
+### 3. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| TradingView nu răspunde / răspunde greșit | doar Nasdaq, ca înainte; în jurnal un avertisment; jobul nu e marcat cu eroare dacă Nasdaq a răspuns |
+| TradingView își schimbă coloanele (o coloană necunoscută vine ca null, fără eroare) | acțiuni fără nicio dată de rezultate în tot răspunsul = schimbare: doar Nasdaq, cu avertisment în jurnal („s-au schimbat coloanele?”); doar ETF-uri fără date e normal |
+| O dată TradingView în afara intervalului valid | tratată ca lipsă |
+| Nasdaq nu răspunde pentru o zi | ziua își păstrează ce avea (ca înainte); TradingView nu adaugă nimic în ea |
+| Nasdaq nu răspunde deloc | eroare a jobului, ca înainte (zilele rămân cum erau) |
+| ETF-uri (SPY, QQQ, SMH, SSK) | TradingView nu are date de rezultate: doar Nasdaq (care nu le are nici el) |
+| Clase de acțiuni (GOOGL, BRK.B) | același simbol cu punct la Nasdaq, TradingView și Sentiq; TradingView le marchează „neprimare”, deci nu se filtrează după asta |
+| Același simbol pe mai multe burse la TradingView | se ia rândul cu date de rezultate; între mai multe, cel principal |
+| Simboluri care nu sunt acțiuni (indici `^SPX`) | nu se trimit la TradingView |
+| Data confirmată e în weekend sau după cele 10 zile lucrătoare | nu apare încă; datele Nasdaq diferite din fereastră dispar |
+| Data confirmată a trecut (TradingView nu s-a actualizat după publicare) | nu apare; o dată Nasdaq diferită dispare (după o publicare nu mai vine alta în două săptămâni) |
+| Rezultatele de azi, deja publicate | rămân azi (ziua ultimei publicări e păstrată), și după ce TradingView trece la trimestrul următor |
+| Ora confirmată diferă de Nasdaq | ora TradingView |
+| Confirmată fără oră (13) | ora Nasdaq dacă o are, altfel toată ziua |
+| EPS estimat lipsă la TradingView | Prognoza goală |
+| EPS negativ | „-$0.09”; rotunjit înainte de semn, deci niciodată „-$0.00” |
+| Multe acțiuni în favorite | o singură cerere TradingView pentru toate, la fiecare reîmprospătare |
+| Evenimente salvate de versiunea veche | se citesc ca înainte (nota „Nasdaq”) |
+
+### 4. Conflicte
+- **§4.5 (Calendar):** sursa devine „Nasdaq, cu data confirmată de TradingView”; restul (filtrul, ora afișată, 10 zile, 6 ore, la adăugare) neschimbat.
+- **FD-USERS §2:** fiecare vede doar rezultatele acțiunilor lui, neschimbat.
+- **Evenimentul următor (Azi, banda de sus) și exploziile TradingView ale calendarului economic:** rezultatele nu le pornesc, neschimbat (filtrul pe sursele `ff` / `tv` ale calendarului economic).
+
+## FD-WATCHLISTS — Liste de urmărire (20 oct 2026)
+Cererea:
+- un element nou în meniu, „Liste de urmărire”, după Tranzacții;
+- liste cu nume, cu simboluri în ele;
+- simbolurile se aleg prin selecție multiplă, ca să fie copiate sau mutate în altă listă ori șterse;
+- ordinea se poate schimba;
+- lista de favorite din Setări se mută în acest concept, iar Setările nu o mai au;
+- în Grafice, ca în TradingView, panoul de simboluri are un dropdown cu listele;
+- pe fiecare rând, un buton deschide un popup mare cu datele financiare: descrierea, apoi rezultatele pe ultimele 4 trimestre; la crypto, măcar descrierea.
+
+Alegerile utilizatorului (20 oct):
+1. **Toate listele împreună** alimentează restul aplicației (Azi, banda, scanner-ul, știrile, calendarul, Rezumatul).
+2. **Descrierile se traduc în română** cu AI-ul utilizatorului, când are cheie; altfel apare originalul în engleză.
+
+### 1. Meniul și pagina
+- **Meniul:** „Liste de urmărire” vine după „Tranzacții”, cu adresa `/watchlists`. Apare și în căutarea ⌘K (Pagini) și în meniul de pe telefon.
+- **Pe ecrane late, două coloane:**
+  - **stânga, „Listele mele”:** în antet, butonul **+** („Listă nouă”); dedesubt, fiecare listă cu numele și numărul de simboluri, cea deschisă evidențiată. Se ordonează trăgând sau cu Alt + ↑ / ↓;
+  - **dreapta:** lista deschisă.
+- **Pe telefon:** lista se alege dintr-un câmp de selecție, cu butoanele + / Redenumește / Șterge alături, iar dedesubt vine lista deschisă.
+- **Nimic nu împinge pagina** (cerut de utilizator pe 21 oct.): ce apare la o acțiune apare peste pagină sau în locul a ceva de aceeași înălțime.
+  - Numele unei liste noi (și, pe telefon, redenumirea) se scrie într-o fereastră mică sub buton; un clic în afară sau Esc renunță.
+  - Pe ecrane late, redenumirea se face în rândul listei.
+- **Acțiunile unei liste:**
+  - **Redenumește:** câmp în loc.
+  - **Șterge:** cu confirmare, care spune câte simboluri pleacă și din restul aplicației, pentru că nu mai sunt în nicio altă listă.
+  - **Ultima listă nu se poate șterge:** „Păstrează cel puțin o listă; o poți goli”.
+- **Lista deschisă** e în adresă (`?list=ID`): reîncărcarea și un link o păstrează. Fără adresă, se deschide prima listă.
+
+### 2. Lista deschisă
+- **Antet:** numele listei și „N simboluri”.
+- **Adăugare:** un comutator Crypto / Acțiuni / Indici și o căutare. Rezultatele, inclusiv cei șapte indici, se deschid sub câmp, peste pagină. Cei deja în listă au „în listă” și nu se mai pot alege. La Indici, lista se deschide imediat.
+- **Tabelul**, pe fiecare rând:
+  - căsuța de selecție;
+  - ordinea (mâner de tras, ↑ / ↓, Alt + ↑ / ↓);
+  - simbolul (sigla, simbolul, numele);
+  - tipul;
+  - perechea / bursa;
+  - **Ultimul** și **Var%** (aceleași prețuri ca banda);
+  - aliasurile din știri (ca în Setări până acum);
+  - butonul ⓘ „Date financiare”.
+  Pe telefon tabelul se derulează orizontal în cadrul lui, ca până acum în Setări; pagina nu iese din ecran.
+- **Selecția:**
+  - căsuța din antet selectează tot sau nimic (și „parțial”, când sunt câteva);
+  - Shift + clic pe o căsuță selectează tot intervalul de la ultima bifată;
+  - selecția e a listei deschise: se golește la schimbarea listei.
+- **Bara de acțiuni**, mereu deasupra tabelului: „Niciunul selectat” / „N selectate” · **Copiază în…** · **Mută în…** · **Șterge** · **Anulează selecția**. Butoanele sunt dezactivate cât nu e nimic bifat, deci bifarea nu mută nimic.
+- **Mesajele acțiunilor** („3 copiate în Tech; 1 era deja acolo.”, erorile) apar jos, peste pagină, și dispar singure după câteva secunde; se pot închide cu ×.
+- **Fiecare schimbare se vede imediat**, înainte de răspunsul serverului (de pe Mac, ~1 s până la Azure): adăugarea, ștergerea, copierea, mutarea, redenumirea și ștergerea unei liste.
+  - Schimbările pleacă una după alta. Răspunsul serverului pune starea exactă după ultima.
+  - La o eroare, mesajul spune de ce și listele se recitesc.
+  - O listă nouă apare când răspunde serverul, pentru că abia atunci are un număr.
+  - **Copiază în** (meniu cu celelalte liste):
+    - simbolurile ajung la sfârșitul listei alese, în ordinea lor;
+    - cele care erau deja acolo rămân pe locul lor;
+    - mesajul: „3 copiate în Tech; 1 era deja acolo.”
+  - **Mută în:** la fel, apoi le scoate din lista deschisă, inclusiv pe cele care erau deja în ținta.
+  - **Șterge:**
+    - cu confirmare: „Ștergi 3 simboluri din Favorite?”;
+    - dacă unele nu mai sunt în nicio altă listă, confirmarea adaugă: „AAPL, TSLA nu mai sunt în nicio altă listă: dispar și din Azi, din bandă, din scanner, din filtrul de știri și din calendar.”
+  - Cu o singură listă, Copiază / Mută sunt dezactivate, iar indicația („Fă întâi altă listă…”) apare la trecerea cu mouse-ul.
+- **Lista goală:** „Lista e goală. Adaugă simboluri cu căutarea de mai sus.”
+
+### 3. Popup-ul „Date financiare” (butonul ⓘ)
+Un popup mare (pe telefon, aproape tot ecranul), cu titlul „AAPL · Apple Inc.” și închis cu ×, Esc sau clic în afară.
+- **Descrierea, prima:**
+  - **Cu cheie AI:** traducerea în română. Cât se traduce, se vede originalul cu „Se traduce în română…”. Traducerea se ține minte (o dată pe text, pentru toți), iar a doua deschidere e imediată.
+  - **Fără cheie:** originalul, cu „În engleză. Cu o cheie AI (Setări → Inteligență artificială), descrierea apare în română.”
+  - **Traducerea eșuează:** originalul, cu „Traducerea nu s-a putut face: {motivul}.”
+  - **Sursa** sub text: Nasdaq (acțiuni), CoinGecko (crypto), Sentiq (indici).
+- **Date scurte:**
+  - acțiuni: sectorul și industria;
+  - crypto: categoriile (primele 5), data lansării, site-ul.
+- **Rezultate trimestriale** (acțiuni): ultimele 4 trimestre raportate, cel mai nou în stânga, cu luna în care s-a încheiat trimestrul („iun. 2026”).
+  - **Rândurile:** Venituri, Profit brut (cu marja brută), EBITDA, Profit net (cu marja netă), EPS diluat, Flux de numerar liber.
+  - **Comparația cu anul trecut:** la venituri și la EPS, sub valoare („+21,0% față de anul trecut”), când TradingView are și trimestrul de acum un an.
+  - **Sumele** în dolari, scurt și ca în restul aplicației: „28,24 mld. USD”, „541 mil. USD”, „-0,04 USD”. Valorile negative sunt roșii.
+  - **Sursa:** TradingView, care are și companiile listate de curând, ca SpaceX, pe care Nasdaq încă nu le are.
+  - **Sub tabel**, rezultatele următoare, din FD-EARNTV: „Următoarele rezultate: 21 oct. 2026, după închiderea bursei (confirmat) · EPS estimat 0,45 USD”, sau „(dată estimată)”.
+- **Fond (ETF):** „Fond tranzacționat la bursă (ETF): fondurile nu publică rezultate trimestriale.” Nasdaq nu dă descrieri de fonduri, deci nu apare descriere.
+- **Indice:** o descriere scurtă în română, scrisă în Sentiq pentru fiecare din cei șapte indici, plus „Un indice nu are rezultate financiare.”
+- **Crypto:** descrierea CoinGecko și „Monedele nu publică rezultate financiare.”
+- **O sursă care nu răspunde:** se arată ce s-a putut citi, iar partea lipsă spune „nu s-a putut încărca acum ({motivul})”.
+
+### 4. Grafice
+- **Antetul panoului de simboluri** („Listă”) devine un dropdown cu listele (nume și număr de simboluri). Rândurile sunt ale listei alese, iar ordinea se schimbă în lista aceea.
+- **Lista aleasă se ține minte** pentru utilizator, pe toate dispozitivele. O listă ștearsă duce la prima.
+- **Lista goală:** „Lista e goală. Adaugi simboluri în Liste de urmărire.”, cu link.
+- **Graficul deschis când adresa nu are pereche:** primul simbol urmărit, ca până acum.
+
+### 5. Setări
+- **Panoul „Favorite” dispare** din Setări → Ale mele. Totul (adăugare, ordine, aliasuri) e acum în Liste de urmărire.
+
+### 6. Restul aplicației: toate listele împreună („simbolurile urmărite”)
+- **Ce folosesc:** Azi, banda de sus, scanner-ul, filtrul de știri, rezultatele din Calendar, feed-urile automate de știri ale acțiunilor, Rezumatul, recunoașterea în titluri și ⌘K folosesc toate simbolurile din toate listele, o singură dată fiecare.
+- **Ordinea lor:** listele în ordinea lor, simbolurile în ordinea din listă; un simbol din mai multe liste stă pe primul loc unde apare.
+- **Cuvintele** se schimbă unde „favorite” însemna acest ansamblu:
+  - „doar favorite” devine „doar urmărite” (Știri);
+  - grupul „Favorite” devine „Urmărite” (⌘K);
+  - Azi fără simboluri: „Nu urmărești încă nicio monedă sau acțiune. Adaugă simboluri”, cu link la Liste de urmărire;
+  - alte texte mai mici (Calendar, Rezumat, Știrile acțiunilor, ștergerea unui cont).
+- **Limitele:**
+  - **cel mult 50 de simboluri diferite** în toate listele împreună, ca până acum: așa rămân în buget Twelve Data (scanner-ul) și feed-urile automate. Copierea unui simbol deja urmărit în altă listă nu se socotește;
+  - **cel mult 20 de liste;**
+  - **numele unei liste:** 1–40 de caractere, unic la utilizator (fără deosebire între litere mari și mici).
+- **Setările unui simbol sunt ale simbolului,** nu ale listei: perechea crypto, aliasurile și numele sunt aceleași în toate listele în care apare. Aliasurile schimbate într-o listă se schimbă peste tot.
+
+### 7. Trecerea la liste
+- **La actualizare:** favoritele fiecărui utilizator devin lista „Favorite”, în aceeași ordine.
+- **Un utilizator nou:** lista „Favorite”, cu BTC, ETH și SOL, ca până acum.
+- **Simboluri adăugate sau șterse de o versiune veche** a Sentiq (de exemplu Mac-ul, înainte să fie actualizat):
+  - unul adăugat intră la sfârșitul primei liste;
+  - unul șters iese din toate listele;
+  - corectura se face la următoarea citire.
+
+### 8. Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Adaugi BTC (perechea USDC) când BTC e urmărit cu USDT în altă listă | BTC intră în listă cu perechea de până acum (USDT); mesaj: „BTC e deja urmărit ca BTC/USDT; perechea e aceeași în toate listele.” |
+| Adaugi un simbol deja în lista deschisă | refuzat: „AAPL e deja în Favorite.” |
+| Al 51-lea simbol diferit | refuzat: „Listele au împreună cel mult 50 de simboluri diferite.”; copierea / mutarea între liste nu e afectată |
+| A 21-a listă | refuzat: „Poți avea cel mult 20 de liste.” |
+| Nume gol, prea lung sau deja folosit | refuzat, cu motivul; spațiile de la capete se taie |
+| Mutare în aceeași listă | nu e oferită (meniul arată doar celelalte liste) |
+| Copiere / mutare / ștergere cu simboluri pe care altă filă le-a scos între timp | cele care nu mai sunt sunt ignorate; mesajul spune câte s-au făcut |
+| O listă ștearsă în altă filă | la următoarea acțiune: „Lista nu mai există”; pagina se întoarce la prima listă |
+| Două file schimbă ordinea în același timp | câștigă ultima salvare; lista se recitește după o eroare |
+| Ștergi o listă cu simboluri care sunt și în alte liste | rămân urmărite; doar cele care nu mai sunt nicăieri pleacă din restul aplicației |
+| Lista aleasă în Grafice e ștearsă | Grafice arată prima listă |
+| Selecție, apoi schimbi lista | selecția se golește |
+| Shift + clic fără o căsuță bifată înainte | bifează doar căsuța aceea |
+| Popup pentru un simbol fără date TradingView (o acțiune nouă, un ADR rar) | descrierea, plus „Rezultatele trimestriale nu sunt disponibile pentru acest simbol.” |
+| Mai puțin de 4 trimestre raportate (listare recentă) | câte sunt |
+| Comparația cu anul trecut fără trimestrul de acum un an | nu apare |
+| Descriere foarte lungă (unele monede) | tăiată la ~1.500 de caractere, la sfârșit de frază, cu „…” |
+| Descrierea CoinGecko cu linkuri HTML | text simplu, fără etichete |
+| Moneda nu e la CoinGecko sau simbolul e ambiguu | se ia moneda cu acel simbol exact și cea mai bună poziție după capitalizare; fără niciuna: „Descrierea nu e disponibilă.” |
+| Traducerea: cheie fără credit, limită, timp depășit | originalul, cu motivul (mesajele precise de la FD-AIQUOTA / FD-AISLOW) |
+| Traducerea costă | câțiva tokeni pe descriere, o singură dată pe text (ținută minte pentru toți utilizatorii); apare la „Ce a consumat cheia ta azi”, pe un rând nou „Traduceri” |
+| Datele financiare se schimbă | ținute minte 12 ore (descrierile 7 zile), deci după un raport apar în cel mult 12 ore |
+| Telefon | popup aproape pe tot ecranul, tabelul trimestrelor se derulează orizontal în el; nicio depășire a paginii |
+| Utilizator fără niciun simbol | Azi și Grafice trimit la Liste de urmărire |
+| După o adăugare sau o ștergere care schimbă simbolurile urmărite | știrile ultimelor 7 zile se reetichetează **în fundal** (~20 s pentru 10.000 de știri văzute de pe Mac): răspunsul nu așteaptă; schimbări repetate cer o singură trecere în plus; filtrul de știri „doar urmărite” prinde simbolul nou după trecere |
+
+### 9. Conflicte
+- **FD-SENTIQ §4.1 / FD-INDICES (favoritele):** devin simbolurile din liste. Validarea simbolurilor și aliasurile implicite (numele companiei, ale indicelui) rămân.
+- **FD-CHARTFAV §2 (ordinea prin tragere):** se aplică în fiecare listă. Ordinea comună (Azi, banda) vine din ordinea listelor.
+- **FD-CHARTTV §3 / FD-WATCHDRAWER (panoul de simboluri):** primește dropdown-ul; lățimea și ascunderea rămân per browser.
+- **FD-USERS §2:** listele sunt ale fiecărui utilizator. Feed-urile automate și rezultatele merg după simbolurile urmărite de oricine, ca până acum.
+- **FD-AICLARITY:** consumul are un rând nou, „Traduceri”.
+- **Ștergerea unui cont:** îi șterge și listele.
+
+## FD-LOCALSTAGE — Testarea locală înaintea unui deploy (21 oct 2026, decizie)
+Întrebarea: o versiune cu o migrare nouă (FD-WATCHLISTS: migrarea 9), pornită pe Mac, schimbă baza comună cu producția înainte de deploy.
+
+Am propus o copie a datelor reale într-o schemă separată (`scripts/sentiq.sh stage`). Utilizatorul a ales să testeze **direct pe datele reale**: Sentiq local pornește cu codul nou pe baza reală și o migrează, iar deploy-ul vine după test.
+- **Producția, cu codul vechi:** merge mai departe pe baza nouă (o migrare care doar adaugă tabele nu o deranjează). La o repornire Azure de dinainte de deploy, ar refuza să pornească până la deploy; utilizatorul acceptă riscul.
+- **Ce rămâne de reținut:** o greșeală găsită chiar în migrare se repară cu o migrare nouă (baza reală o are deja); ce se schimbă la testare rămâne în datele reale.
+- **Ce s-a schimbat în cod:** nimic. Copia de test a rămas doar propunere și nu a fost păstrată.
+
+## FD-SLINGSHOT34 — Slingshot System 3.4: partea SHORT (21 oct 2026)
+
+### Ce cere utilizatorul
+- O versiune nouă a indicatorului, **3.4**, care pe lângă LONG dă și semnale **SHORT**.
+- **SHORT = exact regulile LONG-ului, inversate.** Nicio regulă în plus și nicio regulă schimbată: semnalul se activează când se îndeplinesc condițiile și lumânarea atinge norul, ca la LONG.
+- Long și Short sunt **opțiuni bifabile**; cel puțin una rămâne bifată.
+- **Backtest-ul verifică doar că semnalele SHORT se activează exact unde spun regulile**, pe multe simboluri. Rata de succes nu e criteriu: ea depinde de piață, nu de algoritm.
+- Versiunea 3.3 (fișierul Pine) rămâne neatinsă.
+
+> **Corecție (21 oct 2026).** Prima variantă 3.4 avea două lucruri care nu fac parte din algoritm. Utilizatorul le-a respins, așa că au fost scoase:
+> - o regulă proprie: SHORT confirmat doar cu o închidere sub nor, aleasă după rata de succes din backtest;
+> - o legătură între părți: un semnal nou al unei părți oprea urmărirea TP/SL a celeilalte.
+
+### Setări noi (grupul „Signals”, primul în setările indicatorului)
+| Setare | Implicit | Ce face |
+|---|---|---|
+| Long Signals | bifat | semnalele LONG, exact ca în 3.3 |
+| Short Signals | nebifat | semnalele SHORT |
+| Short Signal Color | albastru `#2196F3` (culoarea SHORT din vechea versiune) | culoarea etichetei SHORT; doar afișare |
+
+- Cel puțin unul dintre Long și Short rămâne bifat.
+  - **În Sentiq:** ultima casetă bifată nu se poate debifa (e dezactivată, cu explicație); serverul refuză oricum o combinație fără niciunul.
+  - **În TradingView:** cu amândouă debifate, indicatorul arată o eroare.
+- Implicit (doar Long), 3.4 se comportă **identic cu 3.3**.
+
+### SHORT = LONG inversat
+Fiecare regulă a LONG-ului, cu sus și jos inversate: maximul ↔ minimul, K ↔ 100 − K (supravânzarea ↔ supracumpărarea), uptrend ↔ downtrend. Altfel spus, SHORT-ul pe un grafic dă exact ce dă LONG-ul pe același grafic întors cu susul în jos.
+
+| | LONG (3.3, neschimbat) | SHORT (3.4) |
+|---|---|---|
+| Trend | EMA 38 > EMA 62 (nor verde) | EMA 38 < EMA 62 (nor roșu) |
+| V1 (candidat) | K ≤ 20 și lumânarea atinge norul; reține **minimul** | K ≥ 80 și lumânarea atinge norul; reține **maximul** |
+| Deal | K ≥ 80: fixează V1 | K ≤ 20: fixează V1 |
+| Căutarea V2 | K ≤ 20, atinge norul, după deal, **minim mai sus** decât V1; urmărește minimul cel mai jos | K ≥ 80, atinge norul, după deal, **maxim mai jos** decât V1; urmărește maximul cel mai sus |
+| Anulare V2 | minimul coboară până la V1 | maximul urcă până la V1 |
+| Confirmare | K iese din supravânzare, V2 > V1, uptrend | K iese din supracumpărare, V2 < V1, downtrend |
+| Stop loss | minimul V2 − ATR × multiplicator | maximul V2 + ATR × multiplicator |
+| Breakout | cel mai mare maxim din ultimele 20 de lumânări | cel mai mic minim din ultimele 20 de lumânări |
+| Take profit (ATR) | breakout + ATR × multiplicator | breakout − ATR × multiplicator |
+| Succes în istoric | maximul trece de breakout înaintea SL | minimul trece sub breakout înaintea SL |
+
+Restul regulilor din 3.3 sunt inversate la fel:
+- invalidarea la întoarcerea trendului;
+- un SHORT confirmat înlocuiește SHORT-urile încă urmărite, cum face LONG-ul cu LONG-urile;
+- nivelurile SHORT-ului confirmat se păstrează până la stop loss sau până la un SHORT mai nou (FD-SS33).
+
+### Fiecare parte, independent
+- Mașinile LONG și SHORT nu se influențează. Semnalele, istoricul, tranzacția urmărită și alertele unei părți sunt aceleași, fie că cealaltă parte e bifată, fie că nu.
+- Un LONG și un SHORT pot fi urmărite în același timp. Fiecare rămâne urmărit până la stop loss-ul lui sau până la un semnal nou de aceeași parte.
+
+### Pe grafic
+- **SHORT:** triunghi în jos deasupra lumânării V2, cu „SHORT”, în culoarea short-ului. Devine roșu dacă semnalul eșuează (stop loss, înlocuit, trend întors), ca LONG-ul.
+- Semnalul **în formare** (V2 căutat) apare la fel, deasupra lumânării.
+- **TAKE PROFIT al short-ului:** triunghi sub lumânarea care trece sub breakout, verde (culoarea de take profit), mutat la minimul cel mai jos.
+- **Liniile și etichetele TP/SL:** fiecare parte le are pe ale ei. Arată ca în 3.3 tranzacția ei urmărită, iar fără una, setup-ul ei în formare. La short, TAKE PROFIT e sub preț, iar STOP LOSS deasupra.
+- **Tabelul TP/SL:** rândurile LONG, apoi „TAKE PROFIT (SHORT)” / „STOP LOSS (SHORT)”. În TradingView e tabelul din colț. În Sentiq e caseta de pe grafic.
+- Norul, EMA-urile și Market Structure nu se schimbă.
+
+### Alerte noi
+**Short Signal**, **Short Take Profit Signal**, **Short ATR Take Profit Hit**, **Short ATR Stop Loss Hit**. Funcționează ca cele de LONG. Alertele LONG și Market Structure rămân, cu aceleași nume.
+
+### Verificare (backtest)
+Pe 192 de serii reale:
+- 44 de monede de pe Binance, pe 1h, 4h și 1d;
+- 60 de acțiuni și ETF-uri americane, pe 1d.
+
+Verificările:
+1. **SHORT-ul se activează exact unde trebuie.** SHORT-ul pe prețurile reale dă exact ce dă LONG-ul pe prețurile întoarse:
+   - aceleași lumânări V2 și de confirmare;
+   - aceleași prețuri, întoarse (V2, SL, TP, breakout);
+   - același rezultat;
+   - aceleași etichete și alerte;
+   - același TP/SL urmărit.
+
+   Deci fiecare SHORT apare acolo unde regulile LONG-ului, inversate, îl cer, și nicăieri altundeva.
+2. **Doar Long = 3.3**, identic.
+3. **Cu ambele bifate,** partea LONG e identică cu Long singur, iar partea SHORT cu Short singur.
+
+### În Sentiq
+- **Grafice:**
+  - setările noi;
+  - semnalele SHORT, desenate;
+  - liniile și caseta TP/SL ale fiecărei părți;
+  - tabelul „Semnale Slingshot 3.4”: prima coloană arată partea (LONG / SHORT) și ora V2, apoi prețul V2 (minimul la LONG, maximul la SHORT), SL, TP și rezultatul;
+  - lista de alerte, cu alertele noi.
+- **Azi (scanner):** ultimul semnal arată partea („SHORT 19 oct., activ”), apare „SHORT în formare” și sunt afișate TP/SL ale fiecărei tranzacții urmărite („TP … SL …”, „SHORT · TP … SL …”). Scanner-ul folosește aceleași setări ca graficul: short-ul apare doar dacă e bifat.
+- **Rezumatul AI:** primește partea semnalului (LONG / SHORT) și short-ul în formare.
+- **Numele:** „[DE] Slingshot System 3.4” (pe grafic, „[DE] Slingshot 3.4”).
+
+### În TradingView
+- Fișierul nou: `Sling Shot System/sling-shot-system-3.4.pine`. Titlul era „[Dusty Investments] Slingshot System 3.4”, iar titlul scurt „[DI] SS 3.4”, fără „LONG”, fiindcă are ambele părți. Din 26 oct 2026 sunt „[DE] Slingshot System 3.4” / „[DE] Slingshot 3.4”, ca în Sentiq (FIX-PINESYNC).
+- `sling-shot-system.pine` (3.3) rămâne neschimbat.
+- Alertele create pe 3.3 rămân pe 3.3; pentru 3.4 se creează din nou.
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| Doar Long bifat (implicit) | identic cu 3.3: semnale, etichete, alerte, TP/SL, Market Structure |
+| Doar Short bifat | niciun LONG; SHORT, alertele lui, TP/SL short; Market Structure ca de obicei |
+| Ambele bifate | ambele părți, independent; tabelul de semnale le amestecă, în ordinea timpului |
+| Ambele debifate | Sentiq nu permite (caseta rămasă e dezactivată; serverul refuză); TradingView arată o eroare |
+| LONG urmărit, trendul se întoarce, apoi SHORT confirmat | amândouă rămân urmărite, fiecare cu liniile, rândurile din tabel și alertele lui de TP/SL |
+| LONG urmărit, SHORT în formare | LONG-ul își arată tranzacția urmărită, SHORT-ul setup-ul în formare |
+| SHORT urmărit și cu take profit atins (cu „Hide ATR Levels … on Take Profit Hit”) | se ascund doar liniile SHORT-ului, ca la LONG; ale LONG-ului rămân |
+| Praguri asimetrice (ex. 30 / 70) | short-ul folosește pragul de supracumpărare unde LONG-ul îl folosește pe cel de supravânzare și invers; toleranțele K și ale norului, la fel |
+| Istoric scurt | ca la 3.3: avertismentul „istoric insuficient” |
+| Lumânarea în formare | semnalele și alertele SHORT de pe ea sunt marcate „neconfirmat”, ca la LONG |
+| Setări salvate înainte de 3.4 | primesc valorile implicite (doar Long), deci nimic nu se schimbă până nu bifezi Short |
+| Setări salvate cu prima variantă 3.4 (cu regula „sub nor”) | câmpul vechi e ignorat; restul setărilor rămân |
+| Moneda / acțiunea în scanner cu Short nebifat | ca înainte: doar LONG |
+
+## FD-SS34LIVE — Slingshot 3.4: invalidarea live, X pentru invalidat, personalizarea semnalelor (21 oct 2026)
+
+### Ce cere utilizatorul
+- **Problema veche:** apar două semnale LONG (sau SHORT) unul după altul, fără un take profit între ele. Un semnal se termină întotdeauna cu take profit sau cu eșec.
+- **Cauza** (găsită de utilizator pe graficul SOL 30m):
+  - eticheta semnalului nou apare din prima bară a căutării V2 („în formare”);
+  - cel vechi devine roșu abia la confirmarea celui nou (K iese din supravânzare), câteva bare mai târziu;
+  - între timp se văd două semnale valide.
+- **Cerința:** invalidarea e live, ca afișarea semnalului nou.
+  - Cât timp semnalul nou e afișat, dar neconfirmat, cel vechi apare invalidat.
+  - Dacă cel nou dispare neconfirmat (piața s-a schimbat), cel vechi apare din nou valid.
+  - La LONG și la SHORT.
+- **Un semnal invalidat** se afișează ca acum, dar cu un **X mare** în loc de triunghi.
+- **Personalizare:**
+  - culori pentru LONG, take profit LONG, SHORT, take profit SHORT, eșec și invalidare;
+  - mărimea triunghiului (în TradingView e mai mare decât în Sentiq);
+  - regula generală: orice indicator se poate personaliza cât mai mult (vezi și FD-OPACITY).
+
+### Cum arată o etichetă de semnal
+| Starea | Forma | Culoarea |
+|---|---|---|
+| Valid: activ, sau terminat cu take profit | triunghi | Long Signal Color / Short Signal Color |
+| Eșuat: stop loss | triunghi | Failed Signal Color |
+| Invalidat: înlocuit de un semnal nou confirmat, sau trend întors | **X** | Invalidated Signal Color |
+| Invalidat live: un semnal nou de aceeași parte e în formare | **X** | Invalidated Signal Color; revine la „valid” dacă cel nou dispare neconfirmat |
+
+- În 3.3, eșuatul și invalidatul erau amândouă triunghiuri roșii. Implicit, cele două culori rămân roșii.
+- Semnalul în formare arată ca unul valid (triunghi, culoarea părții), ca până acum.
+- Invalidarea live e doar afișare. Semnalul vechi rămâne urmărit (istoricul lui, TP/SL, alertele) până la confirmarea celui nou, exact ca în 3.3.
+  - Dacă își atinge take profit-ul în timp ce cel nou e în formare, s-a terminat cu succes: triunghi, culoarea părții.
+  - Dacă își atinge stop loss-ul, e eșuat: triunghi, Failed Signal Color.
+- LONG și SHORT sunt independente: un SHORT în formare nu schimbă etichetele LONG, și invers.
+
+### Setări noi
+**Grupul „Signals”:**
+
+| Setare | Implicit |
+|---|---|
+| Long Signals / Short Signals | ca înainte |
+| Long Signal Color | `#00FFAA` |
+| Long Take Profit Color | `#00FFAA` |
+| Short Signal Color | albastru `#2196F3` |
+| Short Take Profit Color | `#00FFAA` |
+| Failed Signal Color | roșu `#FF5252` |
+| Invalidated Signal Color | roșu `#FF5252` |
+| Signal Size | Small (Tiny, Small, Normal, Large, Huge) |
+
+**Grupul nou „Cloud”:**
+- Cloud Uptrend Color (`#00FFAA`) și Cloud Downtrend Color (`#FF5252`).
+- EMA-urile au culoarea trendului; umplerea norului o are la jumătate din opacitate, ca acum.
+- Până acum norul folosea culorile ATR TP / SL. Acum are culori proprii, cu aceleași valori implicite.
+
+**Restul rămâne:**
+- culorile ATR (liniile, etichetele și tabelul TP/SL);
+- culorile Market Structure.
+
+**Opacitatea:** fiecare culoare o are (FD-OPACITY).
+
+### Mărimea
+- **Signal Size** se aplică triunghiurilor LONG, SHORT și TAKE PROFIT și X-ului, cu textul lor.
+- **În TradingView** sunt mărimile Pine `size.tiny` … `size.huge`.
+- **În Sentiq**, mărimile urmează TradingView:
+  - „Small” e calibrat pe capturile utilizatorului: un triunghi de ~24 px;
+  - celelalte sunt scalate (Tiny ~14 px, Normal ~32 px, Large ~44 px, Huge ~60 px).
+- Înainte, triunghiul din Sentiq avea 11 px.
+
+### În Sentiq
+- **Graficul:** formele, culorile și mărimea de mai sus.
+- **Tabelul de semnale:** cât timp un semnal nou de aceeași parte e în formare, rezultatul semnalului activ e „invalidat (semnal nou în formare)”. Tabelul spune astfel același lucru ca graficul.
+- **Alertele, scanner-ul și Azi:** neschimbate. Nivelurile TP/SL afișate cât timp un semnal e în formare le schimbă FD-SSLIVEBOX.
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| Semnal activ, apare unul nou în formare | cel vechi: X, Invalidated Signal Color, de pe bara pe care apare cel nou |
+| Cel nou se confirmă | cel vechi rămâne X (invalidat definitiv, ca în 3.3) |
+| Cel nou dispare neconfirmat (minimul coboară până la V1, K iese fără V2 valid, trend întors, deal nou) | cel vechi redevine triunghi, în culoarea părții |
+| Căutarea V2 repornește în același deal | cel vechi devine din nou X |
+| Cel vechi își atinge TP în timp ce cel nou e în formare | succes: triunghi, culoarea părții, plus eticheta TAKE PROFIT |
+| Cel vechi își atinge SL în timp ce cel nou e în formare | eșec: triunghi, Failed Signal Color |
+| Cel vechi e invalidat de întoarcerea trendului | X (era triunghi roșu în 3.3) |
+| SHORT în formare, LONG activ | LONG-ul rămâne valid (părțile sunt independente) |
+| Lumânarea în formare | invalidarea live poate apărea și dispărea odată cu semnalul nou, pe aceeași lumânare |
+| Setări salvate înainte | primesc valorile implicite: același aspect, cu X pentru invalidat |
+| Doar Long (implicit) | semnalele, alertele și TP/SL sunt ca în 3.3. Diferă doar aspectul: X-ul, invalidarea live, culorile și mărimea alese |
+
+## FD-OPACITY — opacitatea oricărei culori, în orice indicator (21 oct 2026)
+
+### Ce cere utilizatorul
+Oriunde se modifică o culoare, în orice indicator, se poate regla și opacitatea.
+
+### Unde
+- **Slingshot și LMA:** toate culorile din setări.
+- **Cei 117 indicatori standard și Volume:**
+  - culorile din tab-ul Intrări;
+  - culorile din tab-ul Stil: linii, paletele lor, liniile orizontale.
+- **Linia orizontală desenată** (FD-HLINE): culoarea ei.
+
+### Cum arată
+- Caseta de culoare rămâne de aceeași mărime și arată culoarea peste un fundal în carouri, ca opacitatea să se vadă.
+- Un click deschide un panou mic peste pagină, care nu împinge nimic. Panoul are:
+  - selectorul de culoare;
+  - codul hex;
+  - glisorul **Opacitate**, 0–100 %, cu valoarea lui.
+- Panoul se închide la click în afara lui, la Esc sau la un nou click pe casetă.
+  - Esc închide doar panoul, nu și fereastra de setări.
+  - La derularea ferestrei de setări (sau când apare tastatura pe telefon), panoul își urmează caseta. Se închide doar dacă aceasta iese din ecran.
+- Schimbarea se vede imediat în formular. Se aplică la „Salvează”, ca orice altă setare.
+
+### Ce se salvează și ce se desenează
+- **Salvarea:** `#RRGGBB` la 100 %, altfel `#RRGGBBAA`.
+- **Desenarea:** elementul se desenează cu acea opacitate.
+- **Slingshot:** unde indicatorul face el o culoare transparentă (umplerea norului la 50 %, fundalul etichetelor TP/SL la 20 %), cele două opacități se înmulțesc. În fișierul Pine 3.4 e la fel (`color.t`).
+- **LMA** e scriptul utilizatorului din TradingView, portat exact.
+  - Unde scriptul își fixează singur transparența (`color.new(culoare, 30)`, ca la liniile pragurilor), valoarea scriptului câștigă, ca în TradingView.
+  - În rest (linia de semnal, gradientul, culorile lumânărilor), opacitatea se aplică.
+- **Indicatorii standard:** culorile din Stil înlocuiesc culoarea liniei, cu opacitate cu tot.
+  - O culoare din Intrări ajunge la indicator ca în TradingView: unde scriptul fixează transparența, valoarea lui câștigă.
+
+### Umplerile
+Umplerile indicatorilor standard (de exemplu fundalul benzilor Bollinger) nu aveau o casetă de culoare. Le-a adăugat FD-FILLS, la cererea utilizatorului.
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| Culori salvate fără opacitate | 100 %, nimic nu se schimbă |
+| Culoarea implicită a unui indicator e `rgba(...)` sau `#RGB` | caseta o citește, cu opacitate cu tot; după o schimbare se salvează `#RRGGBBAA` |
+| Opacitate 0 % | elementul e invizibil, dar rămâne pe grafic (ca în TradingView) |
+| Panoul deschis lângă marginea ecranului / pe telefon | rămâne în ecran (se mută la stânga sau deasupra casetei) |
+| Tastatura | Tab ajunge în panou; Esc îl închide și întoarce focusul pe casetă |
+
+## FD-SSSL — Slingshot 3.4: eticheta STOP LOSS (21 oct 2026)
+
+### Ce cere utilizatorul
+Pe bara unde un semnal eșuează, o etichetă „STOP LOSS”, pereche cu TAKE PROFIT. Explică ce s-a întâmplat, mai ales pentru cine nu cunoaște algoritmul.
+
+### Cum arată
+- **Unde apare:** pe bara pe care semnalul își atinge stop loss-ul, aceeași pe care eticheta lui devine „eșuat” (triunghi în Failed Signal Color).
+  - **LONG:** sub lumânare, cu un triunghi în sus spre minimul care a atins stop loss-ul.
+  - **SHORT:** deasupra lumânării, cu un triunghi în jos spre maxim.
+- **Câte apar:** câte una pentru fiecare semnal eșuat. Unul invalidat (X) nu primește etichetă, fiindcă nu s-a terminat cu stop loss.
+- **Setări noi**, în grupul „Signals”: Long Stop Loss Color și Short Stop Loss Color (roșu `#FF5252`, cu opacitate). Mărimea e Signal Size.
+- **Alertele** rămân neschimbate („ATR Stop Loss Hit” există deja).
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| Semnalul arăta invalidat (unul nou în formare) și își atinge stop loss-ul | eșuat, plus eticheta STOP LOSS |
+| Mai multe semnale eșuează pe aceeași bară (nu se poate în practică: e cel mult unul activ pe parte) | câte o etichetă fiecare |
+| Doar Long | ca 3.3, plus etichetele STOP LOSS |
+| Limita de 500 de etichete | o etichetă în plus la fiecare eșec; cele mai vechi dispar primele, ca în Pine |
+
+## FD-SSLIVEBOX — Slingshot 3.4: TP/SL ale semnalului în formare (21 oct 2026)
+
+### Ce cere utilizatorul
+- **Până acum:** cât timp un semnal nou se forma, iar cel vechi apărea invalidat (FD-SS34LIVE), liniile și caseta TP/SL arătau încă nivelurile celui vechi, până la confirmare.
+- **Cerința:** utilizatorul a ales să arate nivelurile semnalului în formare.
+
+### Comportament
+Pe fiecare parte, ordinea afișării devine:
+1. semnalul în formare (TP = cel mai mare maxim din ultimele 20 de lumânări + ATR; SL = V2 − ATR; la SHORT, invers);
+2. altfel, semnalul urmărit (ca în 3.3, cu „Hide ATR Levels … on Take Profit Hit” / „… on Stop Loss Hit”).
+
+- **Când cel nou se confirmă:** apar nivelurile lui, ca semnal urmărit.
+- **Când dispare neconfirmat:** revin nivelurile celui vechi, dacă e încă urmărit și nu sunt ascunse.
+- **Urmărirea celui vechi nu se schimbă:** alertele „ATR Take Profit Hit” / „ATR Stop Loss Hit” și eticheta TAKE PROFIT rămân ale lui până la confirmarea celui nou. Se schimbă doar afișarea.
+- **În Sentiq**, aceleași niveluri apar:
+  - pe grafic;
+  - în caseta TP/SL;
+  - în cardurile din Azi;
+  - în contextul AI.
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| Semnalul urmărit și-a atins TP-ul, cu „Hide … on Take Profit Hit” | înainte nu se afișa nimic, nici semnalul în formare; acum apare cel în formare |
+| Niciun semnal urmărit | ca înainte: cel în formare |
+| Doar Long, fără semnal în formare | ca 3.3 |
+
+## FD-FILLS — umplerile indicatorilor standard în tab-ul Stil (21 oct 2026)
+
+### Ce cere utilizatorul
+Umplerile indicatorilor standard se pot ascunde și recolora, cu opacitate, ca în tab-ul Stil din TradingView. Exemple: fundalul benzilor Bollinger, Keltner sau Donchian, benzile VWAP, banda 70 / 30 a RSI-ului, norul Ichimoku.
+
+### Comportament
+**Unde:** în tab-ul Stil, secțiunea nouă **„Umpleri”**, după liniile orizontale. Fiecare umplere are:
+- **bifa „vizibilă”;** o umplere ascunsă nu se desenează;
+- **caseta de culoare cu opacitate**, dacă umplerea are o singură culoare. Arată culoarea cu transparența ei de acum: fundalul Bollinger e transparent 95 %, deci caseta arată 5 %.
+  - Culoarea aleasă se desenează exact, cu opacitatea ei. Transparența proprie a indicatorului nu se mai adaugă.
+- **doar bifa**, la o umplere colorată pe fiecare bară (norul Ichimoku) sau în gradient (supracumpărare / supravânzare la RSI), ca în TradingView.
+
+**Numele:** al umplerii (de exemplu „Background”, „BB Background”, „Cloud Fill”). Dacă nu are nume, apar cele două linii între care stă.
+
+**Care umpleri apar:**
+- cele declarate de indicator;
+- cele pe care le desenează acum, cu intrările salvate. De exemplu, „BB Background” apare la SMA doar cu netezirea „SMA + Bollinger Bands”.
+
+**Salvarea:** odată cu indicatorul, la „Salvează”. E ținută minte la readăugare (FD-STUDYMEMORY). „Valorile implicite” readuce umplerile ca la început.
+
+**Liniile ascunse:** o umplere legată de o linie ascunsă rămâne ascunsă, ca până acum.
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| Indicator fără umpleri | secțiunea nu apare |
+| Indicator ascuns (fără rezultat calculat) | apar doar umplerile declarate |
+| Două umpleri cu același nume | fiecare rămâne separată: primește un număr |
+| Umplere salvată care nu mai apare (alte intrări) | setarea ei rămâne și se aplică dacă apare din nou |
+| Studii salvate înainte | nicio umplere modificată: ca acum |
+
+## FD-ORDEREDIT — modificarea ordinelor și a SL / TP (Tranzacții și Grafice) (21 oct 2026)
+
+### Ce cere utilizatorul
+- **În Tranzacții:** modificarea a tot ce permite brokerul sau exchange-ul. Cel mai important sunt stop loss-ul și take profit-ul. Fiecare modificare arată impactul asupra PnL-ului.
+- **Pe Grafice, ca în TradingView:**
+  - liniile SL și TP se trag cu mouse-ul (sau cu degetul) până la nivelul nou;
+  - pe linia de intrare apar butoanele **Confirmă** / **Renunță**, care trimit sau anulează modificarea.
+- **Alinierea verticală** a textului „KuCoin” (numele exchange-ului, lângă variația pe 24 h din antetul graficului) și a textului „isolated” (lângă simbolul unei poziții futures), cu elementele de lângă ele.
+
+### Ce se poate modifica
+1. **SL / TP-ul unei poziții deschise:** poziții futures, poziții eToro, inclusiv dețineri. Se poate:
+   - muta un nivel existent;
+   - adăuga un SL / TP care lipsește;
+   - șterge unul.
+2. **Un ordin deschis:**
+   - prețul (limită);
+   - prețul de declanșare (stop);
+   - cantitatea;
+   - SL / TP-ul atașat, acolo unde platforma îl ține pe ordin.
+
+Pozițiile fără SL / TP propriu (acțiunile la Alpaca și Trading 212) au stop-urile și țintele ca ordine separate, care se modifică la punctul 2.
+
+### Cum se trimite, pe platforme
+| Platformă | Ordin deschis | SL / TP al poziției |
+|---|---|---|
+| Bybit | modificare directă (`amend`): preț, cantitate, declanșare, TP / SL atașate | SL / TP-ul poziției (`trading-stop`): setare, mutare, ștergere |
+| OKX | modificare directă: ordinul (`amend-order`, cu TP / SL atașate) sau ordinul de declanșare (`amend-algos`) | ordinele TP / SL (`conditional` / `oco`): mutare și ștergere directă (`amend-algos`); adăugare ca ordin nou |
+| Binance | futures limită: modificare directă (preț, cantitate); spot: înlocuire atomică (`cancelReplace`); stop-urile futures: înlocuire | înlocuire; adăugare ca ordin nou |
+| KuCoin | înlocuire (KuCoin nu are modificare pentru futures și ordinele stop) | înlocuire; adăugare ca ordin nou |
+| Bitget | înlocuire | înlocuire; adăugare ca ordin nou |
+| Kraken (spot) | modificare directă (`AmendOrder`): preț, cantitate, declanșare | — |
+| Coinbase (spot) | limită GTC: modificare directă; restul: înlocuire | — |
+| eToro | ordinele în așteptare nu se modifică (se anulează și se pune altul) | modificare directă a poziției (`PATCH`): SL, TP, ștergere |
+| Alpaca | modificare directă (`PATCH` / replace): preț, declanșare, cantitate (acțiuni întregi), inclusiv SL / TP dintr-un bracket | — (SL / TP sunt ordine) |
+| Trading 212 | înlocuire (API-ul nu are modificare) | — |
+| Interactive Brokers | — (nu tranzacționează din Sentiq) | — |
+
+**Înlocuirea** înseamnă două cereri, iar ordinea lor contează:
+- **Ordinele care doar închid** (SL / TP futures, reduce-only) nu blochează fonduri. Întâi se plasează cel nou, apoi se anulează cel vechi, deci poziția nu rămâne nicio clipă fără stop.
+  - Dacă anularea celui vechi eșuează, rămân amândouă. Mesajul spune asta, iar cel vechi se poate anula din listă.
+- **Ordinele care blochează fonduri sau ar putea dubla o intrare** (vânzările spot și de acțiuni, ordinele de intrare): întâi se anulează cel vechi, apoi se plasează cel nou.
+  - Confirmarea avertizează: „pentru o clipă, ordinul nu există”.
+  - Dacă plasarea eșuează, mesajul spune că ordinul vechi a fost anulat și de ce a fost refuzat cel nou.
+  - Dacă anularea eșuează (ordinul tocmai s-a executat), nu se plasează nimic.
+- **TP / SL atașate unui ordin de intrare:**
+  - unde platforma le citește (Bybit, OKX, Bitget), se păstrează la înlocuire;
+  - unde nu le citește (KuCoin), formularul spune deschis: ordinul nou pleacă doar cu TP / SL scrise în formular.
+
+### Verificarea și confirmarea
+- **Verificarea**, înainte de trimitere, pe server, cu prețul de acum:
+  - prețurile se rotunjesc la pasul pieței;
+  - SL-ul unui long trebuie să fie sub prețul de acum, iar TP-ul peste. Altfel s-ar executa imediat, deci se refuză cu explicație. La un short, invers;
+  - TP / SL ale unui ordin de intrare se compară cu prețul lui de intrare (regulile ordinului nou);
+  - cantitatea respectă pasul și minimul pieței.
+- **Confirmarea** arată:
+  - ce se schimbă (vechi → nou);
+  - cum se trimite (modificare directă sau înlocuire, cu ordinea pașilor);
+  - avertismentele;
+  - impactul asupra PnL-ului.
+- **Siguranța**, ca la ordinele noi:
+  - doar pe conturile cu tranzacționarea pornită, pe piețele pornite;
+  - limita de acțiuni pe minut;
+  - jurnalul („Modificare”) cu fiecare pas și rezultatul lui;
+  - aceeași confirmare trimisă de două ori pleacă o singură dată.
+
+### Impactul asupra PnL-ului
+- **SL / TP al unei poziții:**
+  - PnL-ul dacă se atinge nivelul nou, cu procentul față de cost; dacă nivelul e același, ca înainte;
+  - diferența față de vechiul nivel.
+
+  Exemplu: „La SL: −42,10 USDT (−1,6 %) · înainte −56,00 USDT · +13,90 USDT”.
+  - Un SL / TP care închide doar o parte din poziție se calculează pe cantitatea lui.
+  - Un SL șters: „fără stop: pierderea nu mai e limitată de un ordin”.
+- **Ordin de intrare** cu TP / SL: PnL-ul la TP și la SL, cu prețul și cantitatea noi, comparat cu cel dinainte.
+- **Ordin de intrare fără TP / SL:** valoarea ordinului înainte și după.
+- **Unde se vede:** în formular, în confirmare și, pe grafic, pe eticheta liniei trase, în timp ce o tragi.
+
+### În Tranzacții
+- **Poziții** (și **dețineri**: eToro cu o singură poziție; crypto spot când au deja ordine SL / TP): butonul **SL / TP**, lângă „Închide” / „Vinde”. Deschide formularul cu SL-ul și TP-ul de acum (sau un câmp gol pentru unul nou, unde se poate adăuga):
+  - câmpurile nivelurilor;
+  - butonul „Șterge”, pentru fiecare;
+  - impactul pe PnL;
+  - **Verifică** → confirmare → **Confirmă**.
+- **Ordine deschise:** butonul **Modifică**, lângă „Anulează”, doar la ordinele pe care platforma le lasă modificate (sau înlocuite). Formularul are doar câmpurile permise pe acel ordin. La eToro, rândurile SL / TP ale unei poziții deschid formularul poziției.
+- **Rezultatul:** „Modificat”, „Înlocuit (ordin nou …)”, sau eșecul, cu pasul la care s-a oprit. Listele se actualizează.
+
+### Pe Grafice
+- **Ce se poate trage:**
+  - SL-ul și TP-ul fiecărei poziții de pe simbol;
+  - linia unui ordin deschis, adică prețul lui sau declanșarea;
+  - TP / SL atașate unui ordin deschis, unde platforma le citește (acum apar și ca linii, legate de ordin).
+- **Când:** doar pe conturile cu tranzacționarea pornită pentru acea piață. Celelalte linii rămân fixe, ca acum.
+- **Cum arată o linie care se poate trage:**
+  - o etichetă în grafic, la dreapta, ca în TradingView: „SL · −56,00 USDT (−2,1 %)”;
+  - cursorul ↕ deasupra ei;
+  - în timp ce o tragi, eticheta arată PnL-ul la noul nivel, iar prețul se rotunjește la pasul pieței.
+- **După ce o lași:**
+  - linia rămâne la noul nivel, punctată;
+  - pe linia de intrare (intrarea poziției, sau linia ordinului) apar **Confirmă** și **Renunță**, la stânga graficului (eticheta liniei e la dreapta); pe telefon, doar iconițele ✓ și ✕;
+  - se pot trage și SL-ul, și TP-ul înainte de confirmare.
+- **Confirmă:**
+  - verificarea serverului; dacă are avertismente, se arată o fereastră de confirmare cu ele;
+  - trimiterea;
+  - un mesaj cu rezultatul.
+
+  Erorile apar lângă butoane, iar liniile rămân trase ca să poată fi corectate.
+- **Renunță:** liniile revin la nivelurile reale.
+- **Pe telefon:** o atingere pe o linie o selectează (se îngroașă); apoi se trage cu degetul. O atingere în altă parte o deselectează. Fără selecție, degetul derulează graficul, ca acum.
+- **Nimic nu se mută:** butoanele și etichetele stau peste grafic.
+
+### Ce trebuia citit în plus
+- **OKX:** ordinele TP / SL ale pozițiilor (algo `conditional` / `oco`) nu erau citite deloc, deci nu apăreau pe grafic. Acum se citesc. Un `oco` (TP și SL în același ordin) apare ca două linii.
+- **Bitget:** ordinele TP / SL (`profit_loss`) nu erau citite. Acum se citesc.
+- **Ordinele** aduc acum și TP / SL-ul atașat, unde platforma îl dă.
+
+### Alinierea
+- „KuCoin” lângă variația pe 24 h, din antetul graficului;
+- „isolated” lângă simbolul unei poziții, în tabelul din Tranzacții.
+
+Amândouă se centrează vertical cu elementele de lângă ele (măsurat în Chrome).
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| Ordinul s-a executat sau a fost anulat între timp | modificarea directă e refuzată de platformă; la înlocuire, anularea eșuează și nu se plasează nimic. Mesajul explică, iar listele se reîncarcă |
+| SL tras peste prețul de acum (long) | refuzat la verificare: s-ar executa imediat |
+| Nivel egal cu cel vechi | nicio cerere pentru el |
+| Două SL pentru aceeași poziție (unul parțial) | fiecare e o linie separată, care se trage separat |
+| Poziție hedge (long și short pe același simbol) | fiecare are SL / TP-ul ei; modificarea numește poziția (positionIdx / posSide / positionSide) |
+| SL șters pe o poziție cu levier eToro | eToro îl poate refuza („Normally it cannot be done for leveraged and future positions”): mesajul platformei |
+| Bybit, SL / TP de poziție „Full” | `trading-stop` îl mută sau, cu 0, îl șterge |
+| OKX `oco`, doar SL-ul mutat | `amend-algos` cu doar `newSlTriggerPx`; TP-ul rămâne |
+| Cont demo / paper | merge, cu insigna DEMO în confirmare |
+| Tranzacționarea oprită sau piața nepornită | nimic nu se poate trage; butoanele nu apar |
+| Două file / două confirmări | a doua primește rezultatul primei (cheia formularului) |
+| Limita de acțiuni pe minut | refuzat cu timpul de așteptare |
+| Pagina se reîncarcă în timp ce o linie e trasă | linia revine (nimic nu s-a trimis) |
+| Prețul se mișcă mult în timpul tragerii | verificarea folosește prețul de la confirmare; linia rămâne sub cursor / deget cât liniile se redesenează |
+| Două poziții eToro pe același instrument | fiecare are doar SL / TP-ul ei, pe grafic și în formular |
+| Aceleași schimbări făcute din nou, după o trimitere | o acțiune nouă, nu rezultatul celei vechi |
+| Un `oco` OKX: SL și TP trase amândouă | o singură confirmare, câte o modificare pentru fiecare nivel |
+
+## FD-TRADEUI — grafica unui trade ca în TradingView; Confirmă / Renunță la dreapta; alinierea peste tot (21 oct 2026)
+
+### Ce cere utilizatorul
+- **Butoanele Confirmă / Renunță:** la dreapta, lângă eticheta liniei de intrare, nu în stânga graficului.
+- **Grafica unui trade ca în TradingView:** pe fiecare linie, o casetă departe de marginea dreaptă, cu un × care închide trade-ul.
+- **× din mesajul „Modificat.”:** aliniat vertical cu textul.
+- **Rândurile din Tranzacții:** textul aliniat cu butoanele.
+- **Atenție la aliniere peste tot în aplicație.**
+
+### Casetele de pe grafic
+- **Pe fiecare linie** (intrare, take profit, stop loss, ordin, TP / SL atașat unui ordin, lichidare), o casetă: **cantitate | text | ×**.
+  - Marginea dreaptă e la 64 px de scala prețului, ca în TradingView. Înălțimea e de 20 px, textul de 12 px, centrat pe înălțimea cifrelor.
+  - **Textul casetei:**
+    - intrarea: PnL-ul de acum;
+    - SL, TP și TP / SL atașat: PnL-ul la acel nivel;
+    - un ordin: felul și partea („Limită cumpărare”, „Stop vânzare”);
+    - lichidarea: „Lichidare”, fără cantitate.
+  - **Culoarea textului:** verde pentru un PnL pozitiv, roșu pentru unul negativ; restul, în culoarea liniei.
+  - Cu mai multe conturi, textul se încheie cu numele contului („· Main”).
+- **Culorile TradingView:** un long albastru, un short roșu, TP verde, SL portocaliu, un ordin în culoarea părții lui (cumpărare albastru, vânzare roșu). Tema deschisă are variante mai închise.
+- **Liniile:**
+  - intrarea, SL și TP sunt continue;
+  - ordinele sunt întrerupte;
+  - lichidarea și o linie trasă (nesalvată încă) sunt punctate.
+
+  Prețul rămâne pe scală, în culoarea liniei.
+- **Linia separată „PnL acum” nu mai există:** PnL-ul de acum e în caseta intrării.
+- **Caseta urmează linia** și când e trasă: textul arată PnL-ul la noul nivel.
+
+### ×
+| Linia | Ce face × |
+|---|---|
+| Intrarea unei poziții | deschide formularul „Închide” al poziției (sau „Vinde” al deținerii), cu confirmarea lui |
+| Stop loss / take profit | ștergerea: verificarea serverului, apoi confirmarea (ce se schimbă, avertismentele, PnL-ul) |
+| TP / SL atașat unui ordin | scoaterea lui de pe ordin: verificare, apoi confirmare |
+| Un ordin | anularea, cu confirmare |
+| Lichidarea | nu are × |
+
+- × apare doar unde acțiunea e posibilă: tranzacționarea pornită pe piața aceea și un ordin pe care platforma îl poate schimba sau anula.
+- Nimic nu pleacă fără al doilea clic.
+
+### Pointerul
+- Linia se trage și de casetă, nu doar de linie, dar nu de ×.
+- Cursorul e ↕ peste casetă sau linie și mână peste ×. ×-ul se luminează sub mouse.
+- **Pe telefon:** o atingere pe × deschide confirmarea. O atingere pe casetă o selectează, la fel ca pe linie.
+- **Tastatura:** casetele sunt desenate în grafic (ca în TradingView), deci nu primesc focus. Aceleași acțiuni sunt în Tranzacții, cu butoane: Închide, SL / TP, Modifică, Anulează.
+
+### Confirmă / Renunță
+- **Ca în TradingView:** două casete cu forma, înălțimea (20 px) și fontul casetelor de trade, pe linia de intrare (sau a ordinului), **imediat la stânga casetei** de pe acel nivel, la 6 px.
+  - Ordinea e **Renunță** (conturată, fundalul graficului), apoi **Confirmă** (albastrul poziției, text alb), lângă caseta poziției.
+  - Pe un ecran tactil au 28 px înălțime (ținta unui deget), cu același aspect.
+  - Cât durează verificarea și trimiterea, „Confirmă” arată un cerc care se învârte în locul textului, fără să-și schimbe lățimea.
+- **O modificare neconfirmată** (o linie trasă sau lăsată, care încă nu a fost trimisă) arată ca în TradingView:
+  - caseta e colorată în nuanța liniei, cu conținutul estompat;
+  - linia e punctată și estompată;
+  - prețul de pe scală rămâne plin.
+- **Eroarea** apare sub ele (deasupra lor, în jumătatea de jos a graficului), aliniată la dreapta cu ele. Pe un ecran îngust pornește din stânga graficului.
+
+### Alinierea
+- **× din mesaje** e pe mijlocul primului rând de text.
+- **Rândurile tabelelor cu butoane** (Tranzacții: poziții, dețineri, ordine) au toate celulele pe mijlocul rândului. Sigla și numele simbolului sunt pe același mijloc.
+- **Iconițele și butoanele radio lângă un text** de unul sau mai multe rânduri stau pe mijlocul primului rând, oricât de mare e fontul:
+  - avertismente, erori, cheia cu drept de retragere, categoriile din Economie, alegerea scorului AI;
+  - alertele de pe grafic, unde iconița rămâne lângă nume și pe ecran îngust;
+  - iconița din rezumatul zilei.
+- **Titlul ferestrelor de dialog** (cu sigla platformei) e pe mijlocul antetului, ca ×-ul de închidere.
+- **Bifele din tabelul listelor** sunt pe mijlocul rândului.
+- **Verificarea:** o măsurătoare automată în Chrome, pe toate paginile și în ferestrele principale, la 1440 / 390 / 320. Compară mijlocul fiecărui text cu al butonului sau iconiței de pe același rând; orice diferență peste 1,5 px e o problemă.
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| Linia în afara graficului (sus / jos) | caseta nu se vede, ca linia |
+| Două niveluri foarte apropiate | casetele rămân pe linia lor; cea trasă sau selectată e deasupra |
+| Grafic îngust (telefon) | caseta rămâne în grafic: se lipește de marginea stângă dacă nu încape |
+| Cont fără tranzacționare pe acea piață | caseta, fără × și fără tragere |
+| eToro, SL / TP al unei poziții | × îl șterge (`PATCH` cu `clearStopLoss` / `clearTakeProfit`), după confirmare |
+| Bara Confirmă / Renunță lângă o casetă lată | bara se mută spre stânga; dacă pe linie nu mai e loc (un telefon), stă deasupra casetei (dedesubt, dacă sus nu încape), aliniată la dreapta cu ea și la cel puțin 8 px de marginea graficului, iar eroarea se deschide în partea opusă casetei |
+| PnL-ul își schimbă lățimea cu prețul | bara nu sare între cele două locuri: se întoarce pe linie doar cu 16 px de loc în plus |
+
+## FD-REVERSE — întoarcerea poziției (⇅); zona dintre intrare și SL / TP; etichetele de preț la aceeași mărime (21 oct 2026)
+
+### Ce cere utilizatorul
+- **⇅ ca în TradingView:** întoarce poziția, pe grafic și în Tranzacții.
+- **Zona colorată:** în timpul tragerii unui TP, spațiul dintre linia de intrare și TP se colorează (verde); la SL, la fel (portocaliu).
+- **Etichetele de pe scala prețului:** toate cele cu fundal (prețul curent inclus) au aceeași mărime, care nu se întinde până la marginea dreaptă a scalei.
+
+### Întoarcerea poziției
+- **Ce face:** o poziție futures long devine short (sau invers), cu aceeași mărime, levier și marjă.
+- **Cum se trimite:** două ordine la piață, pe toate exchange-urile și în ambele moduri (one-way, hedge):
+  1. poziția se închide (reduce-only);
+  2. se deschide poziția opusă;
+  3. ordinele SL / TP ale vechii poziții se anulează (pe Bybit, SL / TP-ul poziției se șterge). Ele erau ale ei; pentru poziția nouă se pun din nou.
+  - În modul hedge, cealaltă poziție de pe pereche (dacă există) și ordinele ei rămân neatinse.
+- **Unde:**
+  - **pe grafic:** ⇅ e o casetă în culoarea poziției, pe linia de intrare, la stânga casetei. Cu o modificare neconfirmată, Renunță și Confirmă stau între ⇅ și casetă (ca în TradingView);
+  - **în Tranzacții:** butonul „Întoarce” pe rândul poziției.
+- **Confirmarea:**
+  - verificarea serverului;
+  - poziția de acum și cea care devine (latura, mărimea), levierul și marja, prețul de acum;
+  - avertismentele: două ordine la piață; dacă al doilea e refuzat, poziția rămâne închisă; numărul de ordine SL / TP anulate;
+  - erorile (ex. poziția nu mai e deschisă);
+  - butonul „Întoarce poziția”.
+- **Rezultatul:** fiecare pas (închisă, deschisă, ordine anulate), în fereastră și în mesaj. În jurnal apare „Întoarcere poziție”.
+- **Siguranța:**
+  - doar pe conturile crypto cu tranzacționarea futures pornită;
+  - o singură trimitere pe confirmare (cheia);
+  - limita pe minut;
+  - un pas cu rezultat necunoscut oprește restul.
+- **Brokerii nu au ⇅:**
+  - Alpaca ține o poziție netă și nu întoarce dintr-un ordin;
+  - Trading 212 nu are short;
+  - la eToro, short-ul cere stop loss.
+
+### Zona dintre intrare și SL / TP
+- **Cât timp tragi** SL-ul sau TP-ul unei poziții, spațiul dintre linia de intrare și nivelul tras se colorează în culoarea liniei (TP verde, SL portocaliu), estompat, sub lumânări, pe toată lățimea graficului.
+- La TP / SL-ul atașat unui ordin, zona pornește de la prețul ordinului (cel nou, dacă și ordinul a fost tras).
+- Dispare când lași linia.
+
+### Etichetele de preț pe scală
+- Toate etichetele cu fundal de pe scala prețului au aceeași geometrie:
+  - lățimea textului plus aceleași margini;
+  - colțurile rotunjite spre exterior;
+  - aceeași distanță de margine.
+- Asta include prețul curent (cu numărătoarea inversă a lumânării pe al doilea rând), care se întindea până la marginea dreaptă.
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| Al doilea ordin (deschiderea) e refuzat | poziția rămâne închisă; mesajul o spune, iar ordinele SL / TP vechi se anulează oricum (nu mai au poziție) |
+| Închiderea e refuzată | nimic altceva nu pleacă |
+| Rezultat necunoscut la închidere sau la deschidere | restul se oprește; mesajul cere verificarea pozițiilor |
+| Levierul poziției nu e întreg (ex. 3,5×) | rotunjit, cu avertisment |
+| Hedge: long și short pe aceeași pereche | se întoarce doar poziția aleasă; ordinele celeilalte rămân |
+| Telefon îngust, fără loc pe linie | ⇅ (și butoanele) deasupra sau dedesubt casetei, unde nu acoperă altă casetă |
+| Linia de intrare în afara graficului | ⇅ dispare cu ea (Renunță / Confirmă rămân la marginea graficului) |
+
+## FD-CHARTSETTINGS — meniul graficului (click dreapta) și setările graficului, ca în TradingView (21 oct 2026)
+
+### Ce cere utilizatorul
+- **Meniul de click dreapta pe grafic:**
+  - „Resetează vizualizarea”;
+  - „Șterge N desene” (liniile orizontale);
+  - „Șterge N indicatori”;
+  - **„Setări…”**, cel mai important.
+- **Restul meniului TradingView** (copiază / lipește prețul, alerte, ordine, blocarea cursorului vertical, tabel, arborele obiectelor, șabloane) vine mai târziu.
+- **„Setări…” deschide o fereastră** cu tab-uri în stânga, cu opțiunile din capturi:
+  - Simbol;
+  - Linia de stare;
+  - Canvas;
+  - Alerte.
+- **Selectorul de culoare ca în TradingView:**
+  - paleta;
+  - culorile proprii (+);
+  - opacitatea;
+  - stilul liniei, unde e o linie.
+
+### Meniul
+- **Se deschide** la click dreapta pe grafic, în locul meniului browserului, la cursor, în fereastră. Rândurile au iconiță, text și scurtătură, ca acolo.
+- **Rândurile:**
+  - **Resetează vizualizarea** (⌥R / Alt+R, și fără meniu, cât timp nu scrii într-un câmp și nu e deschisă o fereastră): ultimele 180 de lumânări cu 20 de bare libere la dreapta, scala prețului din nou automată; vizualizarea ținută minte pentru simbolul și intervalul acesta devine aceasta;
+  - **Șterge N desene:** liniile orizontale ale graficului; apare doar când există;
+  - **Șterge N indicatori:** toți indicatorii de pe grafic, Slingshot și LMA incluși; apare doar când există;
+  - **Setări…**
+- **Ștergerile:** nu cer confirmare (ca în TradingView), dar mesajul de jos are **„Anulează”**, care le pune la loc.
+- **Tastatura:** săgețile mută selecția (și mouse-ul o mută), Enter alege, Esc sau Tab închid. Un click în afară, o derulare sau redimensionarea ferestrei închid.
+- **Locul:** la cursor; lângă marginea dreaptă sau de jos, se deschide spre stânga sau în sus, ca să rămână întreg în fereastră.
+- **Pe telefon** (fără click dreapta), butonul ⚙ din colțul din dreapta-jos al graficului, sub scala prețului (unde e în TradingView), deschide direct setările. Pe calculator, ⚙ e acolo la fel.
+
+### Fereastra „Setări”
+- **Aspectul:** tab-urile în stânga (pe telefon, sus, pe un rând care se derulează, fără iconițe), conținutul în dreapta, care se derulează, iar jos **Valorile implicite** (stânga), **Renunță** și **OK**. Fereastra are aceeași înălțime pe fiecare tab.
+- **Previzualizarea:** orice schimbare se vede pe loc pe grafic. **OK** salvează (pe cont, deci peste tot); **Renunță**, ×, Esc sau un click în afară pun la loc ce era.
+- **Ce nu există încă nu apare:**
+  - „Template”;
+  - tab-urile „Scale și linii”, „Trading” și „Evenimente” (fără capturi);
+  - „Butoane de cumpărare / vânzare” (tranzacționarea din grafic vine mai târziu).
+
+**Simbol — Lumânări**
+- **Colorează lumânările după închiderea anterioară:** sus / jos după închiderea lumânării dinainte, nu după deschiderea ei.
+- **Corp, Margini, Fitil:** fiecare cu o bifă și culoarea de creștere și de scădere. Implicit, aspectul de acum: corp și fitil verde / roșu, fără margini.
+- Un indicator care colorează lumânările (LMA cu „Color Price Bars”, orice `barcolor`) schimbă **doar umplerea corpului**; marginea și fitilul rămân în culorile de aici (vezi FD-BARCOLORBODY).
+
+**Simbol — Modificarea datelor**
+- **Precizia:** implicită (cea a perechii) sau 0–8 zecimale.
+- **Fusul orar:** cel din setările contului (implicit), sau oricare altul, doar pentru grafic: axa timpului și tabelele de sub el (semnalele, alertele).
+
+**Linia de stare** (rândul de sus din stânga graficului, deasupra indicatorilor)
+- **Instrumentul:**
+  - Logo;
+  - Titlul, ca simbol („BTC/USDT”), ca nume („Apple Inc.”; la o monedă, numele ei din aliasurile listei, de exemplu „Bitcoin”) sau ambele, urmat de interval și sursă („· 1h · KuCoin”, ca în TradingView); fără nume, simbolul;
+  - Starea pieței (un punct verde deschis / gri închis, cu explicația; crypto: mereu deschis);
+  - Valorile lumânării (D, Max, Min, Î);
+  - Variația lumânării (± și %);
+  - Volumul;
+  - Variația față de ziua dinainte (față de închiderea ultimei lumânări a zilei precedente, în fusul graficului), doar sub un interval de o zi: la 1d și 1w, variația lumânării e chiar aceea.
+
+  Valorile sunt ale lumânării de sub cursor (fără cursor, ale ultimei), în culorile corpului lumânării (creștere / scădere); semnul minus e „−” și la sumă, și la procent.
+- **Indicatorii:**
+  - Titlurile, cu Parametrii (sub-bifă);
+  - Valorile;
+  - Fundalul, cu opacitatea lui.
+- **Implicit:** logo, titlul ca simbol și volumul (ca în TradingView), plus indicatorii cum sunt acum: titluri, parametri, valori, fundal la 75 %.
+
+**Canvas — Stilurile graficului**
+- **Fundalul:** plin sau în degrade (două culori, de sus în jos).
+- **Liniile grilei verticale / orizontale:** bifă, culoare și stil (continuă, întreruptă, punctată). Implicit fără grilă, ca acum.
+- **Separatoarele panourilor:** culoarea.
+- **Cursorul în cruce:** culoarea și stilul.
+- **Filigranul:** ascuns, sau simbolul și intervalul în mijlocul graficului, cu culoarea lui.
+
+**Canvas — Scale**
+- **Textul:** culoarea și mărimea (10–16; implicit 11, ca acum). Eticheta prețului curent urmează aceeași mărime, deci etichetele rămân de aceeași lățime.
+- **Liniile:** culoarea marginilor scalelor.
+
+**Canvas — Butoane**
+- **Navigare** (butonul „mergi la ultima lumânare”) și **Panou** (ochiul, setările, × din legenda indicatorilor): vizibile când mouse-ul e pe grafic, mereu vizibile sau ascunse.
+  - Implicit „mereu”, ca acum.
+  - Pe ecranele fără mouse, „vizibile când mouse-ul e pe grafic” înseamnă mereu.
+
+**Canvas — Margini**
+- **Sus** și **Jos** (%, spațiul gol al scalei prețului).
+- **Dreapta** (bare libere după ultima lumânare).
+
+**Alerte — Notificări**
+- **Ascunde automat mesajele:** implicit da. Dacă nu, mesajele de jos (ex. „Modificat.”) rămân până la ×.
+- „Liniile alertelor” vin odată cu alertele de preț.
+
+**Culorile implicite** urmează tema (luminoasă / întunecată). O culoare aleasă rămâne aceeași în ambele teme; „Valorile implicite” din colțul ferestrei pun tab-ul curent la loc.
+
+### Selectorul de culoare (oriunde în aplicație)
+- **Ca în TradingView:**
+  - un rând de gri;
+  - un rând de culori de bază;
+  - 6 rânduri de nuanțe;
+  - **culorile proprii**: + deschide alegerea liberă (hex), iar culoarea se adaugă pe rând, ținută minte în acest browser, cel mult 10;
+  - **opacitatea**: glisorul pe tabla de șah și procentul;
+  - **stilul liniei** (continuă / întreruptă / punctată) unde culoarea e a unei linii.
+- **Același selector** e și la indicatori, Slingshot, LMA și liniile orizontale.
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| Setările salvate nu se mai pot citi (o versiune veche) | partea care nu se mai citește (lumânările, precizia, fusul, linia de stare, canvas-ul, alertele) revine la valorile implicite; restul rămâne |
+| Fusul orar al graficului nu mai e cunoscut (serverul actualizat) | graficul folosește fusul contului; salvarea merge mai departe |
+| Fusul orar al graficului greșit, trimis direct | refuzat |
+| „Renunță” după schimbări | graficul revine exact cum era |
+| Fereastra închisă din alt motiv (alt simbol, altă pagină) | ca „Renunță” |
+| Mărimea textului scalei mărită | scala se lărgește; etichetele, prețul curent inclus, au aceeași lățime |
+| Precizia mai mică decât a perechii | prețurile se rotunjesc doar la afișare; ordinele și liniile își păstrează prețul (o linie trasă sau adăugată se rotunjește la precizia perechii) |
+| Fundal în degrade | casetele tranzacțiilor, butoanele de lângă linii și banda A / L iau culoarea degradeului de la înălțimea lor |
+| Tema schimbată cu fereastra deschisă sau închisă | culorile lăsate „ale temei” o urmează pe loc (și fundalul casetelor) |
+| „Șterge N desene”, apoi „Anulează” după ce ai mai tras o linie | liniile șterse revin, iar cea nouă rămâne (în limita de linii) |
+| Lista de simboluri închisă pe telefon | ⌥R funcționează (lista închisă nu e o fereastră deschisă) |
+| Fusul orar al graficului ≠ al contului | doar graficul (axa timpului, tabelul semnalelor de sub el) |
+| Margini sus + jos ≥ 90 % | limitate (sus 0–40 %, jos 0–40 %) |
+| „Șterge N indicatori”, apoi „Anulează” după ce mesajul a dispărut | nu se mai poate anula (ca după 4,5 s în TradingView) |
+| Click dreapta pe legendă sau pe scale | meniul graficului doar pe zona lumânărilor și a panourilor; pe butoane, meniul lor (nimic) |
+
+## FD-BARCOLORBODY — un indicator colorează doar corpul lumânării (21 oct 2026)
+
+### Ce cere utilizatorul
+Când un indicator schimbă culoarea lumânărilor, schimbă **doar culoarea**, adică umplerea corpului. **Marginea** și **fitilul** rămân în culorile din setările graficului (Setări → Simbol → Lumânări).
+
+### Comportament
+- **LMA („Color Price Bars”)** și orice indicator cu `barcolor`: corpul ia culoarea indicatorului.
+- **Marginea:** culoarea de creștere / scădere din setări. Fără margini bifate, nu există margine.
+- **Fitilul:** culoarea de creștere / scădere din setări. Debifat, nu e desenat.
+- **Creșterea / scăderea** se socotește ca la lumânările fără indicator: după deschidere sau, cu „Colorează lumânările după închiderea anterioară”, după închiderea dinainte.
+- **„Corp” debifat:** indicatorul nu are ce colora; corpul rămâne gol, iar marginea și fitilul ca în setări.
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| LMA ascuns (ochiul) sau „Color Price Bars” oprit | lumânările sunt exact cele din setări |
+| Margini bifate | culoarea indicatorului umple corpul în interiorul marginii; marginea rămâne cea din setări |
+| Lumânare foarte îngustă (zoom mic), fără loc de umplere în interiorul marginii | ca biblioteca: se vede doar marginea |
+| Culoarea indicatorului cu opacitate | doar corpul e transparent; marginea și fitilul rămân întregi |
+| Tema schimbată | culorile din setări nu depind de temă; nimic nu se schimbă |
+| Lumânare doji (deschidere = închidere) | contează ca „creștere”, ca în bibliotecă |
+
+## FD-STYLEUNIFY — Slingshot: culoare, opacitate și mărime pentru fiecare stare; o singură casetă de linie în toți indicatorii (21 oct 2026)
+
+### Ce cere utilizatorul
+- **Slingshot:** o culoare (cu opacitate) și o mărime pentru **fiecare stare** a fiecărui element, separat pentru LONG și SHORT. Exemple: semnalul, take profit, stop loss, eșecul, invalidarea.
+- **Toți indicatorii** (Slingshot, LMA, cei standard), linia orizontală și setările graficului: **același mod** de a alege culoarea, opacitatea, grosimea și tipul liniei. Până acum, fiecare loc avea altul.
+- **Decizia utilizatorului:** caseta din TradingView, cu grosimea 1–4 px.
+
+### Caseta de linie (peste tot)
+- **O singură casetă:** în stânga culoarea (peste carouri, ca să se vadă opacitatea), în dreapta linia cu grosimea și tipul ei.
+- **Un click** deschide panoul:
+  - paleta TradingView și culorile tale (+);
+  - **Opacitate** 0–100 %;
+  - **Grosime:** patru butoane, 1, 2, 3 și 4 px, fiecare cu linia lui (o grosime veche, peste 4 px, apare ca al cincilea buton);
+  - **Stilul liniei:** continuă, întreruptă, punctată.
+- **Ce n-are un element nu apare:**
+  - un element fără tip de linie (o histogramă, cercuri, cruci) are doar grosimea;
+  - o umplere sau o etichetă are doar culoarea și opacitatea;
+  - grila graficului are culoarea și tipul (biblioteca nu-i schimbă grosimea).
+- **Culoarea care vine din altă parte** (linia de semnal LMA, colorată după stare; EMA-urile Slingshot, colorate după trend): caseta arată culorile, iar panoul are doar grosimea și tipul, cu o notă despre unde se schimbă culoarea.
+- **Grosimi vechi de 5–6 px:** indicatorii standard („Foarte groasă” la o linie de 4 px) și Market Structure (până la 5) le păstrează. Butonul lor apare selectat lângă 1–4, până alegi altă grosime.
+- **„Implicită / Groasă / Foarte groasă”** (FD-STUDYUX) devine grosimea în pixeli. Grosimea desenată acum e cea selectată.
+- **Denumiri unice** pentru stilul liniei, în toată aplicația: „Continuă”, „Întreruptă”, „Punctată”.
+
+### Mărimea (formele și textele)
+- **O singură listă,** peste tot: Tiny, Small, Normal, Large, Huge, ca mărimile Pine `size.*`.
+- **Aceeași mărime de text** pentru același nume, peste tot: Tiny 9, Small 11, Normal 13, Large 16, Huge 20 px. Textele Market Structure „Normal” și „Large” se aliniază la aceste valori (erau 12 și 14 px).
+
+### Slingshot
+**Signals:** fiecare stare pe un rând, cu culoarea și mărimea ei.
+
+| Rând (LONG; la fel SHORT) | Ce este | Implicit |
+|---|---|---|
+| Long Forming Signal | semnalul în formare (căutarea V2) | culoarea și mărimea semnalului de acum: `#00FFAA` (SHORT `#2196F3`), Small |
+| Long Signal | valid: activ sau terminat cu take profit | `#00FFAA` (SHORT `#2196F3`), Small |
+| Long Failed Signal | eșuat: și-a atins stop loss-ul (triunghi) | `#FF5252`, Small |
+| Long Invalidated Signal | invalidat: X (înlocuit, trend întors, unul nou în formare) | `#FF5252`, Small |
+| Long Take Profit | eticheta TAKE PROFIT | `#00FFAA`, Small |
+| Long Stop Loss | eticheta STOP LOSS (bara eșecului) | `#FF5252`, Small |
+
+- **Dispar:** Failed Signal Color, Invalidated Signal Color și Signal Size, comune ambelor părți. Fiecare parte își are acum culorile și mărimile ei.
+- **O etichetă care își schimbă starea** își schimbă și mărimea: de exemplu, un LONG invalidat ia mărimea „Long Invalidated Signal”.
+
+**ATR Settings:** câte un rând pentru fiecare nivel: Long Take Profit, Long Stop Loss, Short Take Profit, Short Stop Loss.
+- Fiecare rând are caseta liniei (culoare, opacitate, grosime, tip) și mărimea etichetei („TAKE PROFIT / preț”).
+- **Implicit:** culorile de acum (TP `#00FFAA`, SL `#FF5252`), 2 px, întreruptă, eticheta Small. Până acum, SHORT-ul folosea culorile LONG-ului; acum le are pe ale lui.
+- **Caseta TP / SL** din colțul graficului folosește culorile părții.
+
+**Cloud:** culorile trendului rămân (Uptrend / Downtrend).
+- **Slow EMA** și **Fast EMA** primesc grosimea și tipul liniei (implicit 1 px, continuă), ca în tab-ul Stil din TradingView.
+- Culoarea lor vine din trend.
+
+**Market Structure:** linia Bullish și linia Bearish au fiecare caseta ei (culoare, opacitate, grosime, tip) și mărimea textului ei. Implicit sunt valorile de acum: 1 px, punctată, Small. Lista mărimii textului primește și Huge.
+
+**Setări salvate înainte:** aspectul rămâne exact același.
+- Failed / Invalidated Color trec la ambele părți.
+- Signal Size trece la toate stările.
+- Culorile semnalului trec la „Forming Signal”.
+- Culorile ATR trec la SHORT.
+- Grosimea, tipul și mărimea textului Market Structure trec la ambele linii.
+
+**Fișierul Pine** (`sling-shot-system-3.4.pine`) primește aceleași intrări, ca Sentiq să rămână portul lui exact. EMA-urile se reglează în TradingView din tab-ul Stil, deci n-au nevoie de intrări.
+
+### LMA
+- **Long Threshold, Short Threshold, Neutral Line:** caseta de linie (culoare, opacitate, grosime, tip), cu bifa de afișare și valoarea nivelului, ca în tab-ul Stil din TradingView.
+  - Implicit, culoarea e a scriptului: Bullish / Bearish la 30 % transparență, respectiv gri. Urmează culorile din Visual Settings până alegi una.
+  - Grosimea implicită: 1 / 1 / 2 px. „Valorile implicite” pune la loc culoarea scriptului.
+- **LMA Signal:** caseta cu grosimea (1–4) și tipul liniei; culoarea rămâne după stare.
+
+### Indicatorii standard (tab-ul Stil)
+- **Fiecare linie:** bifa, numele, caseta de linie.
+- **O linie cu mai multe culori** (o paletă) are câte o casetă pentru fiecare culoare. Grosimea și tipul, comune liniei, se aleg din oricare.
+- **Liniile orizontale** au caseta de linie și nivelul. **Umplerile** au caseta de culoare.
+
+### Linia orizontală desenată (FD-HLINE)
+- **Linie:** caseta de linie, în loc de culoare + listă de grosime + listă de tip.
+- **Textul:** culoarea, mărimea, B / I, ca acum.
+
+### Setările graficului
+- **Cursorul în cruce:** caseta cu grosimea (1–4, implicit 1) și tipul.
+- **Grila:** caseta cu tipul.
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| Setări Slingshot salvate înainte de această versiune | același aspect (preluările de mai sus); la prima salvare se scriu cheile noi |
+| Linie standard salvată cu „Foarte groasă” (5–6 px) | caseta arată 5 / 6 selectat lângă 1–4, până alegi alta |
+| Market Structure salvat cu 5 px | la fel, „5” rămâne până alegi alta |
+| LMA: schimbi Bullish Color după ce ai ales culoarea pragului Long | pragul își păstrează culoarea aleasă (ca în TradingView); fără alegere, o urmează |
+| Opacitate 0 % | elementul e invizibil, dar rămâne (ca în TradingView) |
+| Doar Long activ | rândurile SHORT rămân în formular, fără efect până activezi Short |
+| O etichetă devine invalidată live, apoi validă la loc | revine la culoarea și mărimea „Long Signal” |
+| Mărimi mari (Huge) pe telefon | formele sunt mari, ca în TradingView; nimic nu iese din panou |
+| Panoul de culoare lângă marginea ecranului | rămâne în ecran (stânga / deasupra casetei) |
+| Grosimea în panou cu tastatura | butoanele se aleg cu Tab și Enter, ca restul panoului |
+
+## FD-TRADESOUND — un sunet la închiderea unui trade, cât timp graficul e deschis (21 oct 2026)
+
+### Ce cere utilizatorul
+Când un trade se termină, prin stop loss, take profit sau închidere manuală, se aude o dată `coin-money.mp3`. Doar cât timp pagina graficului e deschisă și se vede.
+
+### Comportament
+- **Ce e un trade terminat:**
+  - o **poziție** care nu mai există (futures; la eToro, fiecare poziție a instrumentului: una închisă din mai multe e un trade terminat);
+  - o **deținere vândută** în întregime: o monedă spot sau o acțiune care avea cel puțin 1 (în moneda contului) și din care a rămas cel mult 1 %.
+- **Toate conturile tale contează,** nu doar simbolul deschis: un trade ETH închis cât te uiți la BTC sună și el.
+- **Cum se află:** cât timp graficul se vede, portofoliile se citesc la 20 de secunde (serverul nu întreabă bursa mai des decât până acum). Un trade închis din Sentiq (×, „Întoarce poziția”, formularul de ordin) sună imediat ce se citește portofoliul.
+- **O singură dată:** mai multe trade-uri închise în același timp dau un singur sunet.
+- **Doar cât te uiți:**
+  - fila ascunsă (alt tab, ecran blocat) nu cântă;
+  - ce s-a închis între timp nu cântă la întoarcere (prima citire de după e punctul de plecare);
+  - pe altă pagină (Tranzacții, Azi) nu se aude nimic.
+- **Setarea:** Setările graficului → Alerte → „Sunet la închiderea unui trade” (implicit pornit).
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| Deschizi graficul | prima citire e punctul de plecare: trade-urile închise înainte nu sună |
+| Închidere parțială | nu sună (trade-ul continuă) |
+| Poziție întoarsă (⇅) | sună: trade-ul vechi s-a terminat |
+| Lichidare | sună (poziția s-a terminat) |
+| Bursa nu răspunde la o citire (eroare, date vechi) | citirea aceea nu se compară: o poziție lipsă din cauza erorii nu sună |
+| Un cont adăugat sau șters cât graficul e deschis | contul nou începe de la prima lui citire; cel șters nu sună |
+| Un cont cu date de la închiderea zilei (IBKR Flex) | nu se citește la 20 s; nu sună |
+| O monedă transferată în alt cont (retragere) | arată ca o vânzare: sună |
+| Prima atingere pe iPhone / iPad | sunetul e pregătit la prima atingere (Safari nu redă sunete înainte de o atingere); până atunci, nimic |
+| Sunetul oprit din setări | nu sună; citirile continuă pentru liniile de pe grafic |
+| Mai multe file cu graficul | sună doar fila care se vede |
+
+## FD-MACRORULES — ce este o știre macro (21 oct 2026)
+
+### Ce cere utilizatorul
+- **Categoria Macro** (lista de știri și scorul Macro) primește doar știri despre economie la nivel de țară sau de sistem financiar, după regulile utilizatorului. Nu știri despre companii individuale.
+- **Decizia utilizatorului:** o știre care nu respectă regulile ajunge la subiectul ei:
+  - o companie → Acțiuni;
+  - crypto → Crypto;
+  - geopolitică → Geopolitică;
+  - altfel → „Altele”, o categorie nouă, fără scor.
+
+### Regulile (de la utilizator)
+1. **Politica monetară și băncile centrale:**
+   - deciziile de dobândă (Fed, BCE, Banca Angliei, Banca Japoniei și celelalte bănci centrale);
+   - QE / QT;
+   - randamentele titlurilor de stat (2 ani, 10 ani…) și curba randamentelor;
+   - dobânzile ipotecare ca efect al lor.
+2. **Inflația:**
+   - CPI, PCE, PPI;
+   - șocurile de preț de la intrare: energia (țiței, gaze), produsele agricole.
+3. **Creșterea economică:**
+   - PIB;
+   - PMI / ISM;
+   - vânzările retail, încrederea consumatorilor;
+   - recesiunea, expansiunea, încetinirea.
+4. **Piața muncii:**
+   - locurile de muncă create (nonfarm payrolls);
+   - cererile de șomaj, rata șomajului;
+   - salariile (câștigul mediu orar).
+5. **Politica fiscală și datoria suverană:**
+   - deficitele și bugetele, stimulii, austeritatea;
+   - ratingurile suverane;
+   - licitațiile de titluri de stat;
+   - costul dobânzilor la datoria publică.
+6. **Comerțul și valutele:**
+   - balanța comercială, contul curent, importurile și exporturile;
+   - valutele (indicele dolarului, EUR/USD, USD/JPY…);
+   - tarifele, controlul exporturilor, lanțurile de aprovizionare (reshoring).
+
+**Temele dominante:**
+- randamentele reale și povara datoriilor suverane;
+- creșterea divergentă (serviciile din SUA, industria din Europa, imobiliarele din China);
+- investițiile în infrastructura AI și cererea de credit (emisiunile de obligațiuni corporative la nivel de piață);
+- volatilitatea mărfurilor și cea geopolitică: coridoarele maritime, primele de risc la petrol, transport, metale prețioase.
+
+### Cum se decide
+- **Fiecare arie contează o dată** (Brent și „crude” sunt aceeași temă): numărul de arii din titlu se compară cu semnele de companie din titlu.
+- **Titlul contează cel mai mult.**
+  - **Macro:** titlul vorbește despre una dintre temele de mai sus mai mult decât despre o companie.
+  - **Companie:** titlul numește o companie (Apple, Nvidia, Tesla…) sau folosește cuvintele unei companii (rezultate, venituri, profit, acțiunile companiei, CEO, IPO, fuziune…). Cu tot atâtea semne de companie cât de macro, știrea e despre companie.
+  - **Instituțiile care comentează economia** (Goldman Sachs, JPMorgan, Morgan Stanley, Moody's, S&P, Fitch, FMI…) nu fac o știre „despre o companie”: „Goldman vede Fed tăind dobânda în decembrie” e macro.
+  - **Piața în ansamblu** („acțiunile europene”, „Wall Street”, „S&P 500”) nu e o companie: „Acțiunile scad după un CPI peste așteptări” e macro.
+- **Fără nicio temă în titlu,** știrea e macro doar dacă rezumatul are cel puțin două teme diferite și titlul nu e despre o companie.
+- **Doar mișcarea pieței** („S&P 500 la un nou record”), fără o temă macro, nu e macro. Ajunge la Acțiuni (dacă e despre acțiuni) sau la „Altele”.
+
+### Unde se aplică
+- **Sursele Macro** (o singură categorie):
+  - macro: știrile care respectă regulile;
+  - celelalte trec la subiectul lor (Acțiuni / Crypto / Geopolitică, după cuvintele și numele din ele) sau la „Altele”.
+- **Sursele cu mai multe categorii** (FD-MULTICAT): Macro intră în alegere doar când regulile se potrivesc.
+  - O știre care ar ajunge Macro fără să le respecte trece, la fel, la subiectul ei sau la „Altele”.
+  - O știre care nu e despre nicio categorie a sursei rămâne ca până acum (prima categorie, fără scor), cu o excepție: dacă prima e Macro, merge și ea la subiectul ei sau la „Altele”.
+- **Sursele Crypto, Acțiuni și Geopolitică** nu se schimbă.
+- **„Altele”:**
+  - se vede în „Toate” și are filtrul ei pe pagina de știri, cu eticheta „Altele”;
+  - relevanța e 0: nu intră în niciun scor, în rezumatul AI sau în „Cum s-a calculat?”.
+
+### Subiectul unei știri care nu e macro
+- **Acțiuni:** o companie numită, cuvintele unei companii, forma ei juridică (Inc, Corp, plc, Bancorp…), o recomandare a unui analist (raised to Buy, price target…) sau un act corporativ (plasament privat, contract, FDA, lansare…).
+- **Crypto:** o monedă numită sau cuvintele crypto. „Mining” / „miners” / „wallets” nu mai contează: minele de aur nu sunt crypto (valabil și pentru sursele cu mai multe categorii).
+- **Geopolitică:** cuvintele ei.
+
+### Verificat pe știrile reale
+Pe 3 976 de știri din sursele Macro (ultimele 3 zile, 21 oct 2026), fără să se scrie nimic în bază:
+- 410 au rămas Macro (dobânzi, inflație, randamente, petrol, valute, bugete, FMI…);
+- 2 203 au trecut la Acțiuni (rezultate, recomandări, companii);
+- 62 la Geopolitică, 38 la Crypto;
+- 558 la Altele (proteste, sănătate, tehnologie fără o companie recunoscută).
+
+### Știrile deja salvate
+- La prima pornire după actualizare, toate știrile păstrate sunt reclasificate după aceste reguli.
+- Istoricul scorurilor se recalculează o dată pentru zilele ale căror știri sunt încă păstrate, ca în FD-IMPACT §3. Zilele mai vechi își păstrează valoarea.
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| „Apple says tariffs will cost $1.1 billion” | Acțiuni (companie + o singură temă: egalitate, câștigă compania) |
+| „Trump announces 25% tariffs on EU cars” | Macro |
+| „Exxon profit falls as oil prices slide” | Acțiuni |
+| „Oil jumps as OPEC+ cuts output” | Macro |
+| „European shares slip as ECB holds rates” | Macro (piața în ansamblu nu e o companie) |
+| „Goldman sees Fed cutting in December” | Macro (o instituție care comentează) |
+| „Nvidia hits $5 trillion as AI spending booms” | Acțiuni |
+| „AI data center boom drives record corporate bond issuance” | Macro (tema cererii de credit) |
+| „Bitcoin rises as dollar weakens” dintr-o sursă Macro | Macro (dolarul); dintr-o sursă Crypto rămâne Crypto |
+| „S&P 500 hits record” fără temă macro | Acțiuni |
+| O știre fără nicio temă (sport, sănătate…) dintr-o sursă Macro | „Altele”, fără scor |
+| Sursa schimbată din Macro în altă categorie | știrile ei urmează categoria nouă (ca până acum) |
+| O temă doar în rezumat | macro doar cu cel puțin două teme diferite și un titlu care nu e despre o companie |
+
+## FD-BOT — boți de tranzacționare în Grafice: Grid, DCA și Slingshot Premium (21 oct 2026)
+
+### Ce cere utilizatorul
+- Un buton **„Bot”** lângă „Tranzacționează”, pe grafic.
+- Botul pornește cu simbolul graficului, dar se pot alege și altele.
+- **Două familii, care nu se amestecă:**
+  - **Clasic:** setările obișnuite ale boților de pe piață (cercetare: research §14);
+  - **Premium:** metoda Sentiq. Semnalele Slingshot (long, short, take profit, stop loss) sunt declanșatorul. Scorul zilei, sentimentul ariei (crypto sau acțiuni), sentimentul general și știrile decid dacă intrarea are sens. Modelul AI al utilizatorului poate face o ultimă verificare. LMA nu se folosește.
+- **Limitele utilizatorului:**
+  - doar long, doar short sau ambele;
+  - suma maximă;
+  - levierul maxim;
+  - raportul risc / câștig al fiecărei tranzacții, sau SL / TP-ul Slingshot;
+  - perioada (de la – până la).
+
+### 1. Butonul și fereastra
+- **„Bot”** (iconița unui robot) stă imediat după „Tranzacționează”, în același rând. Lipsește pe un indice, ca „Tranzacționează”.
+- **Se vede și fără un cont de tranzacționare:** simularea nu are nevoie de cont.
+- **Deschide fereastra „Boți”:**
+  - lista boților utilizatorului, cu „Bot nou”;
+  - fără niciun bot, fereastra se deschide direct pe alegerea tipului.
+- **Bot nou:**
+  1. alegerea tipului: Clasic (Grid sau DCA) sau Premium (Slingshot);
+  2. formularul, completat cu simbolul și timeframe-ul graficului;
+  3. un rezumat în cuvinte („Ce va face botul”), capitalul folosit și avertismentele;
+  4. „Pornește botul” sau „Programează” (când începutul e în viitor).
+- **Pe telefon:** fereastra ocupă lățimea ecranului (ca formularul de ordin). Nimic nu iese din ecran pe orizontală.
+
+### 2. Execuția: Simulare sau Real
+- **Simulare** (implicit):
+  - nicio comandă nu pleacă spre o platformă;
+  - botul face exact ce ar face în real, la prețul de atunci, cu un comision simulat (implicit 0,1% la fiecare execuție);
+  - capitalul de pornire = suma maximă;
+  - merge pe orice simbol: crypto (spot sau futures) și acțiuni.
+- **Real:**
+  - **Ce cere:** un cont cu tranzacționarea pornită pentru piața aleasă, din pagina Tranzacții: crypto (spot sau futures) sau un broker de acțiuni (Trading 212, eToro, Alpaca; §10).
+  - **Cum pleacă ordinele:** la piață, prin același drum ca formularul de ordin (aceleași verificări, același jurnal din Tranzacții, aceeași cheie anti-dublură). Fiecare ordin are cheia lui, salvată înainte de trimitere: o repornire în timpul trimiterii nu face două ordine.
+  - **La pornire:** o bifă obligatorie: „Înțeleg că botul trimite ordine reale în contul X”.
+  - **Conturile demo** (testnet) au eticheta DEMO, ca peste tot.
+- **Acțiunile merg și în real** (FD-BOTSTOCKS, §10), la fiecare broker cum închide el: eToro după id-urile pozițiilor botului, Trading 212 și Alpaca prin vânzarea cantității botului.
+- **Execuția, contul și piața nu se schimbă** după pornire. Pentru altele: un bot nou („Duplică”).
+
+### 3. Ce e comun tuturor boților
+| Setare | Ce face | Implicit |
+|---|---|---|
+| Nume | apare în listă | „BTC/USDT · Grid” |
+| Simbol(uri) | Grid și DCA: unul; Premium: unul sau mai multe (cel mult 10) | simbolul graficului |
+| Piața | spot / futures (crypto); acțiuni | spot |
+| Suma maximă | cât poate avea botul angajat în orice moment: valoarea cumpărată pe spot, marja pe futures. Obligatorie | — |
+| Levier maxim | doar futures, 1× … maximul platformei | 3× |
+| Început | acum sau o dată și o oră | acum |
+| Sfârșit | o dată și o oră, sau fără sfârșit | fără |
+| La sfârșit / la oprire | Închide pozițiile · Termină tranzacțiile deschise (fără altele noi; nu la Grid) · Lasă pozițiile deschise | Termină tranzacțiile deschise (Grid: Închide pozițiile) |
+| Pierdere maximă pe zi | ajunsă (realizat + nerealizat de azi, în fusul utilizatorului): nicio intrare nouă până mâine; ieșirile continuă | 10% din suma maximă (se poate goli) |
+| Oprește la o pierdere de | ajunsă (realizat + nerealizat, de la pornire): botul închide tot și se oprește | gol |
+| Comision | în simulare se scade din fiecare execuție; în real estimează câștigul afișat (platforma ia comisionul ei) | 0,1% |
+
+**Stările unui bot:**
+- **Programat:** începutul e în viitor.
+- **Rulează.**
+- **Pauză:** pusă de utilizator. Nicio intrare nouă; ieșirile (SL, TP, grila care vinde) continuă.
+- **Problemă:** platforma a refuzat ceva ce botul nu poate rezolva singur (tranzacționarea oprită, cheia fără drept, rezultatul unui ordin necunoscut, o ieșire refuzată de 10 ori).
+  - Botul nu mai trimite niciun ordin, nici ieșiri: un ordin al cărui rezultat nu se știe poate a ajuns deja, iar o a doua închidere ar vinde ce nu mai e al lui.
+  - Prețurile și pozițiile din cont se urmăresc în continuare: o poziție închisă între timp apare „din afară”.
+  - Mesajul spune ce s-a întâmplat. „Reia” pornește din nou botul (și ieșirile).
+  - Prețul care nu se poate citi de 10 minute e tot o Problemă, dar trece singură când prețul revine.
+- **Se încheie:** închide pozițiile, sau așteaptă să se termine tranzacțiile deschise.
+- **Încheiat:** cu motivul. Botul nu se mai poate porni; „Duplică” face unul nou cu aceleași setări.
+
+**Limite:**
+- cel mult **10 boți activi** pe utilizator (orice stare în afară de Încheiat);
+- un singur bot **real** activ pe același cont, piață și simbol (doi s-ar încurca pe aceeași poziție).
+
+### 4. Grid (clasic)
+**Setări:**
+- **Limita de jos și de sus.** Implicit: minimul și maximul ultimelor 100 de lumânări ale graficului. Jos < sus.
+- **Grile:** 2–100 de intervale.
+- **Spațierea:** aritmetică (pas egal) sau geometrică (procent egal).
+- **Direcția:**
+  - spot: doar Long;
+  - futures, acțiunile în simulare și acțiunile la eToro: Long / Short / Neutru;
+  - acțiunile la Trading 212 și Alpaca: doar Long (§10).
+- **Investiția:** cât din suma maximă folosește (pe futures e marja; poziția = investiția × levier).
+- **Levierul:** futures.
+- **„Oprește sub” / „Oprește peste”** (opționale): un preț sub limita de jos / peste cea de sus. Atins, botul închide tot și se încheie.
+- **Prețul de pornire** (opțional): botul așteaptă până când prețul îl atinge.
+
+**Cum lucrează:**
+- **Intervalele:** liniile L0 < L1 < … < Ln împart intervalul în n intervale. Fiecare interval cumpără la linia lui de jos și vinde la cea de sus (unul „long”), sau invers (unul „short”).
+- **Cantitatea:** egală pe fiecare interval: investiția × levier / suma prețurilor de intrare ale tuturor intervalelor. Așa, toate intervalele pline la un loc nu depășesc investiția.
+- **La pornire:**
+  - **Long:** intervalele de deasupra prețului se cumpără la piață (au ce vinde când urcă prețul);
+  - **Short:** intervalele de sub preț se vând la piață;
+  - **Neutru:** nu cumpără nimic la pornire. Intervalele de sub preț sunt long, cele de deasupra short.
+  - Intervalul în care e prețul așteaptă (ca linia fără ordin de pe Binance).
+- **La fiecare verificare** (la 30 s; acțiunile: cât timp bursa e deschisă):
+  - un interval long gol se umple când prețul e la sau sub linia lui de jos;
+  - unul plin se golește când prețul e la sau peste linia lui de sus;
+  - short-ul în oglindă.
+  - Toate intervalele atinse se execută împreună, într-un singur ordin (cumpărările minus vânzările).
+- **În afara intervalului:** botul nu face nimic până revine prețul (sau până la „Oprește sub / peste”).
+- **Câștigul:**
+  - fiecare interval golit e o tranzacție încheiată: cantitatea × (vânzare − cumpărare) − comisioanele;
+  - intervalele pline intră în nerealizat.
+- **Rezumatul formularului:** prețurile liniilor, cantitatea pe grilă, câștigul pe grilă (în % după comisioane) și valoarea minimă a ordinului pe platformă.
+  - O grilă sub minimul platformei e o eroare: „Ordinul unei grile (4,1 USDT) e sub minimul KuCoin (5 USDT): mai puține grile sau o investiție mai mare.”
+  - Un câștig pe grilă mai mic decât comisioanele e o eroare.
+
+### 5. DCA (clasic)
+**Setări** (numele de la 3Commas, în română):
+- **Direcția:** Long / Short (short: pe futures, pe acțiunile în simulare și la eToro, §10).
+- **Ordinul de bază:** suma.
+- **Ordinele de siguranță:**
+  - câte (0–25);
+  - suma primului;
+  - multiplicatorul de volum (1–5);
+  - abaterea până la primul (0,1–50%);
+  - multiplicatorul de pas (0,5–5).
+- **Take profit:** % din prețul mediu.
+- **Stop loss** (opțional): % din prețul ordinului de bază.
+  - Acțiunea la SL: „Închide și începe alt ciclu” sau „Închide și oprește botul” (implicit).
+  - Un SL mai aproape decât ultimul ordin de siguranță e o eroare: ordinele de după el n-ar avea loc.
+- **Ciclurile:**
+  - „Repetă după take profit” (implicit da);
+  - câte cicluri cel mult (opțional);
+  - pauza între cicluri (minute).
+- **Levierul:** futures.
+
+**Cum lucrează:**
+- **Ordinul de bază:** un ciclu începe cu el, la piață, la prima verificare permisă.
+- **Ordinul de siguranță k** se execută când prețul ajunge la prețul de bază × (1 − abaterea k) (long). Abaterea k = abaterea 1 × (1 + m + m² + … + m^(k−1)), m = multiplicatorul de pas. Mărimea lui = primul × volumul^(k−1).
+- **Mai multe ordine atinse odată** (o cădere bruscă) se execută împreună.
+- **Take profit-ul** se recalculează din prețul mediu după fiecare ordin de siguranță.
+- **Capitalul necesar** = ordinul de bază + suma tuturor ordinelor de siguranță (marja, pe futures). Trebuie să încapă în suma maximă. Rezumatul arată tabelul ordinelor: abaterea, prețul la prețul de acum, suma și prețul mediu după fiecare.
+
+### 6. Premium: Slingshot + sentimentul Sentiq (+ AI)
+**Setări:**
+- **Simbolurile:** unul sau mai multe (crypto și acțiuni separat: un bot are o singură arie).
+- **Timeframe-ul:** al graficului.
+- **Semnalele:** setările Slingshot ale utilizatorului, aceleași ca pe grafic.
+- **Direcția:** Long / Short / Ambele. Pe spot nu se poate short (nimic de vândut), iar la Trading 212 și Alpaca nici: acolo, Short și Ambele lipsesc (§10).
+- **Mărimea unei tranzacții:**
+  - „Sumă fixă” (marja / valoarea pe tranzacție);
+  - sau „Risc %” din suma maximă: pierderea la SL = atât.
+  - Opțional: „Suma maximă pe tranzacție”.
+- **Ieșirea:**
+  - **Stop loss și take profit** (FD-BOTSLRR, FD-BOTPCT): „Slingshot” (SL-ul și TP-ul semnalului) sau „Risc / câștig” (SL-ul și TP-ul tău, în procente de la intrare, implicit 1% și 2%; raportul calculat, „1:2”);
+  - „Ieși la semnalul de take profit Slingshot” (implicit da);
+  - „Ieși când trendul se întoarce” (invalidarea Slingshot; implicit da);
+  - „La semnal opus: închide” (implicit da).
+- **Filtrul:**
+  - pragurile scorului pieței (FD-BOTDIR): „Scorul minim pentru long” și „Scorul maxim pentru short” (implicit 50 amândouă);
+  - „Nu intra împotriva ariei” (implicit da);
+  - „Evită deschiderea de tranzacții în perioada știrilor economice importante” (FD-NEWSWIN; înainte „Ferește știrile”): minute înainte de un eveniment cu impact mare din calendar, plus 15 după (implicit 60; 0 = oprit);
+  - **Avansat:** ponderile scorului.
+- **AI:**
+  - „Fără AI” (implicit) sau „AI confirmă” (cu modelul ales în Setări → AI);
+  - dacă AI-ul nu răspunde: „Nu intra” (implicit) sau „Intră după reguli”.
+- **Tranzacții deschise odată:** implicit câte simboluri are botul.
+- **Pauză după o pierdere:** minute; implicit 0.
+
+**Declanșatorul (pe lumânarea care tocmai s-a închis):**
+- **LONG** confirmat pe ea (nu provizoriu) → candidat long. **SHORT** confirmat → candidat short.
+- **Un semnal mai vechi** (botul a lipsit o lumânare: server oprit, pauză) nu mai e luat: „Semnal prea vechi”.
+- **Semnalul de take profit Slingshot** al laturii unei poziții deschise → ieșire, dacă opțiunea e pornită.
+- **Semnalul pe care a intrat botul invalidat de întoarcerea trendului** → ieșire, dacă opțiunea e pornită.
+  - Un semnal înlocuit de unul nou de aceeași latură nu închide poziția: ea rămâne cu nivelurile ei, fără ieșire și reintrare.
+- **SL-ul și TP-ul** se verifică la fiecare 30 s, la prețul de atunci.
+
+**Decizia, în ordinea verificărilor (prima care spune „nu” oprește intrarea; jurnalul spune care):**
+1. Direcția e permisă.
+2. Semnalul e proaspăt și confirmat.
+3. **Prețul n-a trecut deja de SL sau de TP-ul semnalului:** „Prețul a trecut deja de stop loss”. Cu „Slingshot”, nicio altă condiție pe niveluri: niciun R:R (FD-BOTSLRR).
+4. **Calendarul:** niciun eveniment USD cu impact mare în următoarele N minute sau în ultimele 15.
+5. **„Nu intra împotriva ariei”:** long cu aria sub 40 (negativă), short cu aria de la 60 (pozitivă) → nu.
+6. **Scorul pieței la prag (FD-BOTDIR):** long la scor ≥ minimul pentru long, short la scor ≤ maximul pentru short.
+7. **Locul:**
+   - mai puțin decât „tranzacții deschise odată”;
+   - simbolul fără o poziție a botului;
+   - nicio pauză după o pierdere în curs;
+   - pierderea pe zi neatinsă;
+   - suma disponibilă (suma maximă − cât e angajat) ajunge pentru minimul platformei.
+8. **AI** (dacă e pornit). AI-ul poate doar să oprească o intrare pe care regulile au aprobat-o, niciodată să pornească una refuzată.
+9. **În real:**
+    - destui bani liberi în cont;
+    - pe futures, nicio poziție pe simbol care să nu fie a botului.
+
+**Scorul pieței (0–100), din cinci părți (FD-BOTDIR).** Fiecare dă o înclinare a între −1 (spre scădere, favorizează short-ul) și +1 (spre creștere, favorizează long-ul). Până la FD-BOTDIR, a era acordul cu tranzacția (la short, semnul invers) și exista un singur scor minim:
+| Parte | Ce citește | a | Pondere implicită |
+|---|---|---|---|
+| Scorul zilei | indicele de azi, toate categoriile | (indice − 50) / 50 × încrederea (mare 1, medie 0,75, mică 0,5) | 20 |
+| Aria | indicele de azi al ariei (Crypto sau Acțiuni) | (indice − 50) / 50 × încrederea după numărul de știri (≥ 10: 1; 3–9: 0,75; 1–2: 0,5) | 30 |
+| Sentimentul general | media indicelui pe ultimele 7 zile | (medie − 50) / 50 | 15 |
+| Știrile simbolului | indicele știrilor despre simbol din ultimele 24 h, cu aceeași formulă ca indicele zilei | (indice − 50) / 50 × încrederea lui | 15 |
+| Slingshot | structura pieței (fără R:R, FD-BOTSLRR) | 0,4 × (ultima rupere de structură: în sus +1, în jos −1, niciuna 0) | 20 |
+
+- **Formula:** scor = 50 + 50 × Σ(pondere × a) / Σ ponderi.
+  - Se adună doar părțile care au date: fără știri despre simbol, partea lui lipsește din ambele sume.
+  - Indicele e al utilizatorului (cu scorurile AI-ului lui, unde există), în fusul lui orar.
+- **De ce pragurile implicite sunt 50:** semnalul Slingshot e motivul intrării. Scorul doar oprește intrările împotriva contextului.
+  - Un context neutru trece în ambele direcții (50; cu o rupere de structură în sus ≈ 54, în jos ≈ 46).
+  - Pentru mai puține intrări, mai sigure: minimul long mai mare (55–70), maximul short mai mic (30–45).
+
+**AI-ul („AI confirmă”):**
+- **Primește:**
+  - simbolul, latura și timeframe-ul;
+  - prețul și nivelurile (SL, TP, cu sursa lor; fără R:R, FD-BOTSLRR);
+  - trendul și structura;
+  - cele cinci părți ale scorului;
+  - cele mai importante 10 știri despre simbol din ultimele 24 h (cu scorul lor);
+  - motivele zilei (driverele indicelui);
+  - evenimentele cu impact mare din următoarele 24 h;
+  - ultimele 5 tranzacții ale botului.
+- **Răspunde:** „intră” / „nu intra”, o încredere 0–100, motivul (o frază, în română) și riscurile.
+- **În jurnal:** motivul și încrederea.
+- **Limite:** cel mult 30 de întrebări pe zi pentru un bot. Peste ele, ca și cum AI-ul n-ar răspunde.
+- **Costul** intră în consumul AI din Setări → AI (rândul „Boți”).
+
+**Mărimea:**
+- **Sumă fixă:** marja = suma; levierul = levierul maxim; valoarea = suma × levier (spot: valoarea = suma).
+- **Risc %:**
+  - pierderea dorită = suma maximă × risc %;
+  - valoarea = pierderea / distanța până la SL (în %);
+  - levierul = cel mai mic care încape în suma disponibilă, până la cel maxim;
+  - dacă nici cu levierul maxim nu încape, valoarea scade: riscul e mai mic decât cel cerut, iar jurnalul o spune.
+- **Lichidarea** (futures): SL-ul trebuie atins cu mult înainte de lichidare (distanța SL < 80% din distanța lichidării, ≈ 1/levier − 0,5%). Altfel levierul scade până e adevărat.
+- **Suma maximă pe tranzacție** (dacă e pusă) și suma disponibilă limitează oricum.
+
+**Ieșirea (la fiecare verificare):**
+- **SL / TP atins** → închide la piață.
+- **La închiderea unei lumânări:** semnalul de TP Slingshot, invalidarea prin trend sau semnalul opus → închide, după opțiuni.
+- **Semnalul opus** cu latura permisă și filtrul trecut: după închidere, botul intră pe latura nouă la aceeași verificare.
+- **În simulare, pe futures:** prețul de lichidare atins (≈ intrare × (1 ∓ 1/levier ± 0,5%)) → poziția se închide cu pierderea întregii marje.
+
+### 7. Ce se vede despre un bot
+- **Lista:**
+  - numele;
+  - strategia (Grid / DCA / Slingshot);
+  - SIMULARE / REAL (+ DEMO);
+  - starea;
+  - simbolurile;
+  - câștigul realizat și cel nerealizat;
+  - tranzacțiile încheiate și cât la sută au câștigat.
+- **Detaliile:**
+  - **Butoanele:** Pauză / Reia, Oprește, Editează, Duplică, Șterge (doar încheiat).
+  - **Cifrele:** suma angajată din suma maximă, câștigul realizat și cel nerealizat, tranzacțiile și rata de câștig.
+  - **Pozițiile deschise:** simbol, latură, cantitate, intrare, preț, SL / TP, nerealizat.
+  - **Grid:** liniile cu intervalele pline și cele goale.
+  - **DCA:** ciclul în curs, cu ordinele de siguranță executate și cele care urmează.
+  - **Tranzacțiile încheiate:** intrare, ieșire, câștig și motivul (TP, SL, semnal TP, invalidare, semnal opus, grilă, sfârșit, oprire, lichidare, din afară).
+  - **Jurnalul:** fiecare decizie, cu ora.
+    - Semnalele refuzate apar cu motivul și cu scorul defalcat pe cele cinci părți, plus răspunsul AI.
+    - Ordinele, cu rezultatul.
+    - Problemele.
+    - Se păstrează ultimele 1 000 de rânduri ale unui bot.
+- **Oprește:**
+  - întreabă ce face cu pozițiile: „Închide pozițiile” / „Lasă-le deschise”; DCA și Premium mai au „Termină tranzacțiile deschise”;
+  - închiderea o face botul la următoarea verificare (≤ 30 s); până atunci, starea e „Se încheie”.
+- **Editează** (un bot neîncheiat):
+  - **Oricând:** numele, sfârșitul și ce face la sfârșit, pierderea maximă pe zi, „Oprește la o pierdere de”, comisionul.
+  - **DCA și Premium:** suma maximă (nu sub cât e angajat). La o grilă, suma e investită la pornire: nu se schimbă.
+  - **Premium:** levierul maxim, direcția, filtrul, AI-ul, mărimea și ieșirea, pentru tranzacțiile care urmează; timeframe-ul semnalelor (FD-BOTTF).
+  - **Restul** (grila, ordinele DCA, simbolurile, execuția, contul) doar la un bot nou: „Duplică” deschide formularul cu aceleași setări.
+- **Pozițiile reale ale botului** apar și pe grafic, cu „Pozițiile mele”, și în Tranzacții. Ordinele lui sunt în jurnalul din Tranzacții.
+
+### 8. Cum rulează
+- **Pe server**, fără pagina deschisă: o verificare la 30 s, pe serverul care rulează job-urile (unul singur). Fiecare bot pe rând; o problemă la unul nu le oprește pe celelalte.
+- **Prețul:**
+  - crypto: ultima lumânare de 1 minut a sursei graficului (cea din Setări → Piață);
+  - acțiuni: cotația Nasdaq (cel mult o dată pe minut), doar cât bursa e deschisă.
+  - Botul real pe futures folosește același preț ca graficul (perechea spot): nivelurile Slingshot sunt calculate pe el.
+- **Semnalele Slingshot:**
+  - se calculează doar când s-a închis o lumânare a timeframe-ului botului;
+  - cu același istoric ca graficul, deci aceleași semnale ca pe grafic;
+  - acțiunile, cu cheia Twelve Data a utilizatorului (fără ea: 1d și 1w).
+- **În real, botul își verifică pozițiile** din portofoliul contului (citit cel mult o dată la 20 s):
+  - O poziție a botului care nu mai e acolo, sau e mai mică (lichidare, închisă de mână): botul o consideră închisă la prețul de atunci, cu motivul „din afară”, și scrie în jurnal.
+  - Pe spot: activul liber mai puțin decât ce a cumpărat botul → la fel.
+- **Comisioanele în real:** platforma le ia. Câștigul afișat e estimat din prețurile de la execuție și din comisionul din setări; extrasul platformei rămâne adevărul.
+- **Botul închide pozițiile el însuși, la piață:** nu pune ordine SL / TP pe platformă.
+  - Cu serverul oprit, botul nu poate închide nimic. Formularul o spune la „Real”.
+  - Pierderea pe zi, oprirea la o pierdere și levierul limitează riscul.
+
+### 9. Erori și situații limită
+| Situație | Comportament |
+|---|---|
+| Ordinul e sub minimul platformei | intrarea se sare, cu motivul în jurnal; botul continuă |
+| Bani insuficienți în cont | intrarea se sare („Disponibil 12 USDT; trebuie 40”) |
+| Platforma refuză o intrare (minim, fonduri, alt motiv) | nicio intrare nouă pe acel simbol 5 minute; jurnalul o spune o dată. Ieșirile se încearcă la fiecare verificare |
+| Prea multe ordine într-un minut (limita de 20) | se reîncearcă la verificarea următoare, cu aceeași cheie |
+| Platforma nu răspunde / eroare de rețea la trimitere | se reîncearcă cu aceeași cheie: nu face al doilea ordin |
+| Rezultatul unui ordin necunoscut (UNKNOWN_OUTCOME) | Problemă: „Verifică pozițiile în Tranzacții, apoi Reia” |
+| Tranzacționarea oprită pe cont / cheia fără drept | Problemă, cu mesajul platformei; niciun ordin până la „Reia” |
+| Contul șters | Încheiat, motivul „contul a fost șters”; pozițiile rămân pe platformă |
+| O poziție pe simbol care nu e a botului (futures) | rezumatul avertizează la creare; botul nu intră cât timp e acolo; jurnalul o spune o dată |
+| O poziție deschisă de mână pe simbol după intrarea botului (futures) | poziția netă nu mai e a botului: reconcilierea o poate socoti „din afară”. Rezumatul spune: nu deschide de mână poziții pe simbolul unui bot |
+| Prima verificare a unui bot Premium | ia doar semnalele de pe lumânările care se închid după pornire (cea închisă deja e doar notată) |
+| O vânzare a activului de mână (spot) | botul consideră poziția închisă „din afară” |
+| Lichidare pe platformă | poziția lipsește → închisă „din afară” |
+| Prețul nu se poate citi | verificarea se sare; după 10 minute fără preț: Problemă |
+| Slingshot fără destul istoric | nicio intrare; jurnalul spune o dată „istoric insuficient” |
+| Bursa închisă (acțiuni) | nicio acțiune; la deschidere, SL / TP sărite peste noapte se execută la prețul deschiderii |
+| Un salt peste mai multe linii / ordine de siguranță | toate cele atinse se execută într-un singur ordin |
+| Prețul iese din grilă | grila așteaptă; „Oprește sub / peste” închide |
+| Sfârșitul perioadei cu „Termină tranzacțiile” | „Se încheie” până se închide ultima; apoi Încheiat |
+| Început în trecut, la salvare | pornește acum |
+| Sfârșit înainte de început | eroare în formular |
+| Sfârșit în trecut, la editare | eroare în formular |
+| Pauză cu poziții deschise | SL / TP / grila care vinde continuă |
+| Pierderea pe zi atinsă | nicio intrare până la miezul nopții utilizatorului; jurnalul o spune o dată |
+| „Oprește la o pierdere de” atins | închide tot, Încheiat |
+| AI-ul fără cheie / fără credit / timeout | după opțiune (implicit: nu intră); motivul în jurnal |
+| Două semnale (long și short) pe aceeași lumânare | Slingshot 3.4 le ține separat; botul ia doar unul: cel al direcției permise, iar cu „Ambele”, întâi latura pe care o favorizează scorul pieței (FD-BOTDIR) |
+| Serverul repornit în timpul unei trimiteri | ordinul se cere din nou cu aceeași cheie: răspunsul e cel dintâi |
+| Doi utilizatori, același simbol | fiecare bot e al utilizatorului lui; nimic comun |
+| Utilizator dezactivat de admin | boții lui nu mai rulează (pozițiile rămân) |
+| Al 11-lea bot activ | refuzat: „Cel mult 10 boți activi” |
+| Un al doilea bot real pe același cont și simbol | refuzat |
+| Editarea sumei maxime sub cât e angajat | refuzată |
+| Un simbol crypto și unul de acțiuni în același bot Premium | refuzat: o singură arie |
+| Short pe spot, la Trading 212 sau la Alpaca | nu se oferă (§10) |
+| Simbol fără perpetuu pe futures (botul real) | refuzat la salvare: „KuCoin nu are BTC/EUR pe futures” |
+| Prețul de pornire al grilei deja atins la salvare | grila pornește imediat |
+| Lumânarea timeframe-ului 1m | permisă; semnalele la fiecare minut |
+
+### 10. Acțiuni în real (FD-BOTSTOCKS, 21 oct 2026)
+**Ce cere utilizatorul:** boții merg și în real pe acțiuni. Aplicația știe deja cum închide fiecare broker, deci botul face la fel.
+
+**Contul:** unul de acțiuni cu tranzacționarea pornită (Trading 212, eToro sau Alpaca; IBKR nu primește ordine). Simbolul e cel al graficului (AAPL), iar fiecare broker îl găsește ca în formularul de ordin.
+
+**Cum lucrează la fiecare broker** (ordine la piață, pe cantitate, prin același serviciu de tranzacționare):
+| Broker | Deschide | Închide | Short |
+|---|---|---|---|
+| Trading 212 | cumpără cantitatea (fracționat, unde se poate) | vinde cantitatea botului, cel mult cât e liber în cont | nu (contul nu are short) |
+| Alpaca | cumpără cantitatea (întreagă la acțiunile care nu se tranzacționează fracționat) | vinde cantitatea botului | nu: Alpaca ține o singură poziție netă pe simbol, iar un short al botului ar vinde acțiunile tale |
+| eToro | deschide o poziție (cumpără sau short) | închide pozițiile deschise de bot, după id-urile lor, toată cantitatea sau o parte | da; eToro cere stop loss la short, deci botul trimite stop loss-ul lui cu fiecare short |
+
+**Pozițiile eToro ale botului:**
+- La fiecare deschidere, botul notează pozițiile instrumentului dinainte și cele de după: cele noi sunt ale lui.
+- Dacă eToro nu le arată imediat (ordinul încă se procesează), le caută la verificările următoare.
+- Închide doar pozițiile lui; ale tale, pe același simbol, rămân neatinse.
+- O poziție a botului închisă pe eToro (de mână, la stop loss) apare „din afară”, ca la crypto.
+
+**Short-ul la eToro** cere un stop loss de la început:
+- Premium: stop loss-ul tranzacției;
+- DCA: stop loss-ul ciclului, obligatoriu pentru un DCA short;
+- Grid Short / Neutru: „Oprește peste”, obligatoriu.
+Fără el, formularul spune ce lipsește.
+
+**Programul:** botul acționează doar în sesiunea obișnuită (bursa deschisă, după Nasdaq). Cu bursa închisă nu trimite nimic; un SL / TP sărit peste noapte se execută la deschidere.
+
+**Banii:** sumele botului sunt în USD (prețurile Nasdaq). Un cont în altă monedă (Trading 212 în EUR) plătește în moneda lui: câștigul botului rămâne o estimare în USD.
+
+**Levierul:** pe acțiuni, botul nu folosește levier (1×).
+
+**Cazuri:**
+| Situație | Comportament |
+|---|---|
+| Ai deja acțiuni din simbol în cont | rămân ale tale: botul vinde doar cât a cumpărat el (la eToro: doar pozițiile lui) |
+| Le vinzi de mână pe ale botului (Trading 212, Alpaca) | ce lipsește din cantitatea botului e socotit „din afară” |
+| Cantitatea sub minimul brokerului / fracții la o acțiune nefracționabilă (Alpaca) | rotunjită în jos la pas; sub minim, intrarea e refuzată și botul mai încearcă după 5 minute |
+| Short pe Trading 212 sau Alpaca | nu se oferă |
+| Short la eToro fără stop loss (DCA fără SL, grilă fără „Oprește peste”) | eroare în formular |
+| Bursa închisă | nimic; la deschidere botul continuă |
+| eToro nu arată încă poziția nouă | o caută la verificările următoare; între timp nu închide nimic din ea |
+| O poziție eToro a botului nu mai există | socotită închisă „din afară” |
+| Alpaca refuză (de exemplu, regula pattern day trader) | refuzul platformei: intrarea așteaptă 5 minute, ieșirea se reîncearcă |
+
+## FIX-SLTPDUP — un SL / TP mutat pe grafic apare o dată, la nivelul nou (21 oct 2026)
+
+### Ce a raportat utilizatorul
+După ce mută stop loss-ul și / sau take profit-ul unui trade și confirmă, una dintre linii apare dublată pe grafic sau rămâne cea veche.
+
+### De ce
+- **Pe KuCoin futures, o mutare înseamnă două ordine:** plasează ordinul nou, apoi îl anulează pe cel vechi. Ambele reușesc (jurnalul din Tranzacții o arată).
+- **Bursa le listează cu câteva secunde întârziere:**
+  - cel vechi, anulat, mai apare un timp: de aici dublura;
+  - cel nou încă nu apare: de aici linia veche.
+- **Sentiq reținea lista citită imediat după confirmare 20 de secunde, iar graficul o recitea abia după un minut.**
+- **O citire pornită chiar înainte de confirmare** putea aduce lista veche și după ea.
+
+### Cum e acum
+- **Imediat după confirmare,** linia mutată stă la nivelul nou, chiar dacă bursa nu-l listează încă.
+  - Ordinul vechi nu se mai vede, chiar dacă bursa îl mai listează.
+  - Până apare ordinul nou, linia nu se poate trage și nu are ×. Așteaptă cel mult un minut.
+- **Un ordin anulat sau înlocuit** (mutare, ×, întoarcerea poziției) dispare de pe grafic și din Tranzacții imediat, nu când îl scoate bursa din listă.
+- **După orice acțiune de tranzacționare** (ordin, anulare, modificare, întoarcere), portofoliul contului se citește din nou la fiecare 3 secunde, timp de 30 de secunde: graficul și Tranzacții ajung din urmă bursa în câteva secunde.
+- **O citire pornită înainte de acțiune** nu mai e păstrată după ea.
+
+### Cazuri
+| Situație | Comportament |
+|---|---|
+| Bursa listează și ordinul vechi, și pe cel nou | o singură linie, a celui nou |
+| Bursa nu listează încă ordinul nou | linia rămâne la nivelul nou, fără × până apare |
+| Ordin modificat pe loc (același id, alt nivel) | linia trece la nivelul nou; gata când bursa îl arată |
+| Rezultat parțial (o schimbare a mers, alta nu) | doar schimbarea reușită rămâne la nivelul nou; cealaltă revine |
+| Ordinul vechi n-a putut fi anulat | rămâne vizibil (sunt amândouă), cum spune mesajul |
+| Bursa nu arată ordinul nou nici după un minut | linia revine la ce listează bursa |
+
+## FIX-COINSOUND — sunetul de monede doar pentru un trade încheiat cât graficul e urmărit (21 oct 2026)
+
+### Ce a raportat utilizatorul
+La deschiderea aplicației se aude sunetul de monede, deși nu s-a închis niciun trade.
+
+### De ce
+- **Sunetul compară două citiri ale portofoliului.** Le compara când pagina fusese „vizibilă” între ele.
+- **Aplicația poate sta oprită fără să devină „ascunsă”:** laptopul în sleep, aplicația de pe telefon ținută în fundal, fereastra lăsată în spatele altora. Citirile se opresc.
+- **La revenire, prima citire nouă era comparată cu una de acum câteva ore.** Un trade închis între timp (de exemplu, la stop loss) suna exact la deschidere.
+- **Verificat pe conturile reale:** citirile consecutive nu dau nicio alarmă falsă, iar botul n-a închis nimic.
+
+### Cum e acum
+- **Se compară doar două citiri consecutive, la cel mult 50 de secunde una de alta** (pagina citește la 20 s, iar după o acțiune la 3 s).
+  - Două citiri mai depărtate înseamnă că între ele graficul n-a fost urmărit: ce s-a închis atunci rămâne fără sunet, ca un trade închis cu fila ascunsă.
+- **Pregătirea sunetului la prima atingere** (cerută de Safari) se face cu sunetul oprit și volumul la zero: nu se aude nimic pe niciun browser.
+
+### Cazuri
+| Situație | Sunet |
+|---|---|
+| Un trade se închide cât graficul e deschis și urmărit | o dată, în cel mult ~20 s |
+| Laptopul a dormit / aplicația a stat în fundal, iar între timp s-a închis un trade | nu |
+| Fila ascunsă cât s-a închis | nu (ca până acum) |
+| Prima atingere de pe pagină | nu |
+| Serverul răspunde foarte târziu (peste 50 s între citiri) | nu: e tratat ca o pauză |
+
+> **Corectat de FIX-COINSOUND2.** Utilizatorul a raportat că sunetul se aude în continuare la orice tab nou cu graficul. Cauza de mai sus (citiri depărtate) e reală și regula de 50 s rămâne, dar nu era cauza sunetului de la deschidere.
+
+## FIX-COINSOUND2 — sunetul de la deschiderea în Safari; doar trade-urile graficului de pe ecran (22 oct 2026)
+
+### Ce a raportat utilizatorul
+- Sunetul de monede se aude la **orice deschidere de tab nou cu graficul**, local și pe server, cu sau fără trade-ul pe SOL.
+- **Cerință nouă:** sunetul doar pentru trade-urile din graficul la care se uită, nu pentru orice trade.
+
+### Cauza (confirmată)
+- **Utilizatorul folosește Safari** (macOS și iPhone; în Chrome, defectul nu apare).
+- Safari redă un sunet fără click doar după ce pagina l-a pornit o dată dintr-un click. De aceea, la primul click sau tastă pe pagină, Sentiq îl pornea pe mut și îl oprea imediat, apoi îi dădea drumul la volum.
+- **În Safari (WebKit), oprirea nu oprește clipul:** el merge mai departe până la capăt (1,1 s).
+  - Volumul repornit imediat după oprire făcea ca restul clipului să se audă.
+  - Rezultatul: sunetul de monede la primul click din fiecare tab nou, fără niciun trade închis.
+- **Verificat în WebKit, motorul Safari:** după click, evenimentele arată pauza, apoi „ended” la 1,1 s, cu sunetul pornit. Datele portofoliilor sunt stabile (7 minute de citiri reale, nicio închidere falsă).
+
+### Cum e acum
+- **Pregătirea la primul click rămâne pe mut până la capăt.** Doar sunetul unui trade încheiat pornește volumul.
+- **Doar trade-urile graficului de pe ecran**, aceleași pentru care graficul desenează liniile:
+  - **crypto** (de exemplu SOL/USDT): pozițiile pe orice pereche a monedei (SOL/USDT:USDT, SOL/USDC…) și deținerea de SOL, în conturile de la exchange-uri;
+  - **acțiuni** (de exemplu TSLA): pozițiile și deținerea TSLA, în conturile de la brokeri;
+  - **indici:** fără sunet (n-au trade-uri).
+- **Alt simbol pe același tab:** urmărirea pornește de la zero pentru simbolul nou, ca la deschiderea graficului. Conturile lui se citesc imediat.
+
+### Cazuri
+| Situație | Sunet |
+|---|---|
+| Primul click / prima tastă dintr-un tab nou (Safari, Chrome, iPhone) | nu |
+| Un trade pe simbolul din grafic se închide cât graficul se vede | o dată |
+| Un trade pe alt simbol se închide (de exemplu un bot pe SOL, iar tu te uiți la BTC) | nu |
+| Treci de pe BTC pe SOL, iar trade-ul SOL se închisese înainte | nu: ce s-a închis înainte de a vedea simbolul nu sună. Excepție: un trade închis cu câteva secunde înainte, pe care serverul încă nu-l citise de la platformă (o citește cel mult o dată la 20 s), poate suna la prima citire nouă, ca la deschiderea graficului |
+| Treci pe SOL, iar trade-ul SOL se închide după | o dată |
+| Sunetul unui trade pornește chiar în clipa pregătirii (aceeași secundă) | se aude întreg; pregătirea nu-l mai oprește |
+| Același simbol în două conturi, ambele închise în aceeași citire | o dată |
+
+## FD-COLORUNIFY — o culoare, o casetă, un efect, la toți indicatorii standard (21 oct 2026)
+
+### Ce cere utilizatorul
+- **Problema, la MA Ribbon:**
+  - culorile apar și în Intrări, și în Stil, cu casete diferite;
+  - în Stil, culoarea aleasă nu se aplică, doar grosimea;
+  - în Intrări, culoarea se aplică, dar nu se pot alege grosimea și tipul liniei.
+- **Cerința:** curățenie la **toți** indicatorii. Același selector de culoare, ca în TradingView, și orice casetă de culoare afișată chiar schimbă ce se desenează.
+
+### Ce s-a găsit (verificare automată pe toți cei 118 indicatori)
+| Caz | Indicatori | Ce era greșit |
+|---|---|---|
+| **A.** O culoare din Intrări este culoarea întregii linii | MA Ribbon (MA #1–#4) | două valori pentru același lucru: Intrări colora punctele liniei, Stil doar culoarea „de bază”, pe care punctele o acoperă |
+| **B.** O linie desenată în mai multe culori fixe, nedeclarate | MACD, Price Oscillator, Volume Oscillator (histograma, 4 culori); Awesome Oscillator, Bull Bear Power, Woodies CCI (histograma), Aroon Oscillator, Volatility Stop, Relative Volume at Time (2 culori); BBTrend (4); Chop Zone (9) | Stil avea o singură casetă, cu o culoare pe care linia n-o folosește (la MACD, albastrul `#2962FF`): alegerea nu schimba nimic |
+| **C.** O linie colorată printr-un calcul din culorile din Intrări | Technical Ratings (coloanele: gradient între Strong Sell, Neutral și Strong Buy) | caseta din Stil nu putea avea efect |
+| **D.** Liniile orizontale care, în Pine, urmează o culoare din Intrări | Trend Strength Index (Bullish / Bearish Band), Technical Ratings (Level) | rămâneau în culoarea implicită când schimbai culoarea în Intrări |
+
+Restul culorilor din Intrări (cele ale etichetelor, desenelor, cutiilor, tabelelor: Fibonacci, Pivot Points, ZigZag, Trading Sessions etc.) colorează elemente care nu au rând în Stil: nu se dublează nimic, rămân doar în Intrări. Toate cele 173 de linii celelalte din Stil sunt corecte.
+
+### Comportament
+
+**A. Culoarea din Intrări care este culoarea unei linii (MA Ribbon)**
+- **O singură valoare:** culoarea liniei.
+- **Aceeași casetă în ambele taburi:** culoare, opacitate, grosime 1–4 px, tipul liniei.
+  - În **Intrări**, pe rândul MA-ului: „MA #1 ☑ SMA close 20 [caseta liniei]”.
+  - În **Stil**, pe rândul liniei.
+- **Legate:** schimbi în oricare tab și celălalt arată imediat la fel.
+- „Valorile implicite” readuce culoarea, grosimea și tipul.
+
+**B. Liniile cu mai multe culori**
+- Stil arată **câte o casetă pentru fiecare culoare** a liniei, în ordinea din cod, ca în TradingView.
+  - Exemplu MACD, histograma: crește peste 0, scade peste 0, crește sub 0, scade sub 0.
+- Fiecare culoare aleasă se aplică barelor desenate în ea, cu opacitate cu tot.
+- Grosimea și tipul, unde linia le are, sunt comune liniei și se aleg din oricare casetă.
+
+**C. Linia colorată din Intrări printr-un calcul (Technical Ratings)**
+- În Stil, caseta arată culorile coloanelor (gradientul Strong Sell → Neutral → Strong Buy, cu valorile din Intrări de acum).
+- Panoul ei spune unde se schimbă: „Culorile se aleg în Intrări, la Table Settings: Buy, Neutral, Sell.” Nu oferă o paletă care n-ar avea efect.
+
+**D. Liniile orizontale care urmează o culoare din Intrări**
+- Implicit, urmează culoarea din Intrări, ca în Pine. Exemple:
+  - banda Bullish a TSI ia „Bullish Color” cu opacitate deplină;
+  - nivelurile Technical Ratings iau Buy / Sell la 50 %.
+- O culoare aleasă în Stil pentru linia orizontală câștigă, ca în TradingView și ca pragurile LMA (FD-STYLEUNIFY). „Valorile implicite” o șterge, iar linia urmează din nou Intrările.
+- Caseta din Stil arată culoarea desenată acum.
+
+**Legenda** (valorile de lângă numele indicatorului) folosește culorile alese, în toate cazurile.
+
+### Setări salvate înainte
+- **A.** O culoare aleasă înainte în Stil pentru o linie MA Ribbon:
+  - dacă nu schimbaseși culoarea în Intrări, ea era cea desenată, deci devine culoarea liniei;
+  - dacă o schimbaseși, se desena cea din Intrări, care rămâne.
+  - Aspectul de pe grafic nu se schimbă. La prima salvare se scrie forma nouă.
+- **B.** O culoare aleasă înainte în caseta unică a unei linii cu mai multe culori:
+  - se aplică în continuare culorii de bază, dacă linia o folosește (de exemplu verdele AO);
+  - altfel nu avea efect și nu are nici acum.
+
+### Edge cases
+| Situație | Comportament |
+|---|---|
+| MA ascuns (bifa MA #1 debifată) | caseta rămâne activă în ambele taburi (ca restul rândului), linia nu se desenează |
+| Culoare cu opacitate 0 % | linia e invizibilă, dar rămâne (ca în TradingView) |
+| O culoare din Intrări legată de mai multe linii (nu există acum, regula e generală) | în Intrări, grosimea și tipul se aplică tuturor liniilor ei; caseta arată valorile primei |
+| Linie cu mai multe culori, o culoare care apare doar cu alte intrări | are caseta ei oricum (ca în TradingView) |
+| Indicatorul re-adăugat din memorie (FD-STUDYMEMORY) | aceleași reguli; memoria se scrie în forma nouă la „Salvează” |
+| O versiune viitoare a unui indicator cu o legătură nouă sau o culoare nedeclarată | un test pe toți indicatorii pică până când e tratată (nicio casetă fără efect) |
+| Telefon (390 / 320 px) | caseta de linie are 72 px; rândul MA din Intrări se rupe pe două rânduri, fără depășire |
+
+## FIX-PANES — un indicator nou în panourile de jos nu mai strică scalele lor (22 oct 2026)
+
+### Ce a raportat utilizatorul
+Când adaugă un al doilea indicator în panourile de sub preț (de exemplu Stoch RSI sub LMA), afișajul se strică:
+- panoul LMA arată un „bloc”, cu scala greșită (−1 … 4);
+- Stoch RSI are scala 0 … 400;
+- desenele ies din panou.
+
+### Cauza (reprodusă)
+- **Utilizatorul are scala de preț logaritmică** (butonul „L”).
+- **Biblioteca graficului** (Lightweight Charts) copiază opțiunile puse pe scala panoului principal în opțiunile generale ale graficului: logaritmul, autoscala oprită după o tragere, marginile. Orice panou creat mai târziu pornește din ele.
+- **La adăugarea sau scoaterea unui indicator cu panou propriu**, Sentiq reface panourile de jos. Acestea primeau deci scala logaritmică a prețului: valorile negative sau din jurul lui 0 (LMA, oscilatorii) se desenau greșit.
+- **La deschiderea paginii totul era corect**, fiindcă panourile se creau înainte ca prețul să devină logaritmic. De aceea bug-ul apărea doar la adăugare și dispărea la reîncărcare.
+
+### Cum e acum
+- **Fiecare panou de jos pornește cu scala lui proprie**, aceeași ca la deschiderea paginii: normală, cu autoscală, cu marginile implicite.
+- **Scala prețului rămâne neschimbată:** logaritmică, cu autoscala pornită sau oprită, cu marginile alese.
+
+### Cazuri
+| Situație | Rezultat |
+|---|---|
+| Preț logaritmic, adaugi un indicator cu panou propriu | LMA și indicatorul nou au scale normale |
+| Scala prețului trasă cu mouse-ul („A” oprit), apoi adaugi un indicator | panourile de jos au autoscală |
+| Scoți un indicator dintre mai multe | cele rămase își păstrează scalele normale |
+| Ascunzi / arăți LMA (panoul refăcut) | scala LMA e normală |
+| Marginile graficului din setări (sus / jos) | se aplică prețului, ca până acum; panourile de jos au marginile lor implicite, ca la deschidere |
+| Telefon, iPad, ecran complet | la fel |
+
+## FD-BOTTF — timeframe-ul semnalelor se schimbă și la un bot Slingshot pornit (22 oct 2026)
+
+### Ce cere utilizatorul
+„Când editez un bot nu pot modifica time frame-ul. Aș vrea să pot face asta.”
+
+### Ce era
+- **La un bot nou**, formularul are „Timeframe-ul semnalelor”, doar la Slingshot Premium. Grid și DCA nu folosesc lumânări: lucrează pe prețul de acum.
+- **La Editează**, timeframe-ul apărea doar ca text („BTC/USDT · Spot · Simulare · 1h”). FD-BOT §7 îl lăsa doar la un bot nou, deci schimbarea cerea „Duplică”, adică un bot nou, fără pozițiile și istoricul celui vechi.
+
+### Cercetare
+- **În cod**, timeframe-ul unui bot Slingshot decide trei lucruri:
+  - din ce lumânări calculează motorul Slingshot (aceleași ca pe grafic);
+  - ce lumânare a citit ultima, pe fiecare simbol;
+  - semnalul pe care a intrat fiecare poziție deschisă, urmărit pe lumânările lui (invalidarea prin trend, SL / TP marcat de Slingshot pe lumânare).
+- **Pe piață:** n-am găsit o documentație oficială despre schimbarea timeframe-ului unui bot pornit (căutare: 3Commas, setările unui bot pornit). Platformele de boți aplică de obicei o setare schimbată tranzacțiilor care urmează. Asta e și regula Sentiq pentru celelalte setări Premium (FD-BOT §7).
+
+### Cum e acum
+- **Editează, la un bot Slingshot Premium neîncheiat:** câmpul „Timeframe-ul semnalelor”, cu aceleași valori ca la un bot nou (1m … 1w), pornind de la cel de acum.
+  - Textul de sub el: „Botul îl preia la următoarea verificare (≤ 30 s) și ia semnalele de pe lumânările care se închid după ea; pozițiile deschise își păstrează SL / TP-ul.”
+  - Rândul de sus („BTC/USDT · Spot · Simulare”) nu mai repetă timeframe-ul.
+- **La Grid și DCA nu apare:** nu folosesc lumânări. Serverul refuză o schimbare trimisă pentru ele: „Timeframe-ul contează doar la un bot Slingshot.”
+- **După „Salvează”:**
+  - lista și pagina botului arată timeframe-ul nou imediat;
+  - jurnalul scrie „Setările au fost schimbate.”, ca la orice editare.
+- **La următoarea verificare a botului (≤ 30 s), schimbarea intră în vigoare:**
+  - **Ca la pornire (FD-BOT §9):** lumânarea deja închisă pe timeframe-ul nou e doar notată. Semnalele se iau de pe lumânările care se închid după ea. Un semnal mai vechi de pe timeframe-ul nou nu deschide nimic.
+  - **Jurnalul:** „Timeframe-ul semnalelor e acum 4h (era 1h): botul ia semnalele de pe lumânările de 4h care se închid de acum.”
+  - **Pozițiile deschise rămân deschise:**
+    - își păstrează SL și TP (prețurile), verificate la fiecare verificare, ca până acum;
+    - semnalul de take profit Slingshot și semnalul opus vin de pe lumânările timeframe-ului nou, după opțiunile botului;
+    - semnalul pe care au intrat e pe timeframe-ul vechi, deci nu mai e urmărit: „Ieși când trendul se întoarce” și SL / TP-ul marcat de Slingshot pe lumânare nu se mai aplică lor.
+    - Jurnalul o spune: „Pozițiile deschise își păstrează SL / TP-ul; semnalul de 1h pe care au intrat nu se mai urmărește.”
+  - **AI-ul** („AI confirmă”) primește timeframe-ul nou.
+- **Restul nu se schimbă:** pauza după o pierdere, pierderea pe zi, întrebările AI de azi, câștigul, tranzacțiile încheiate.
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Același timeframe ales (nicio schimbare) | nimic nu se resetează; jurnalul are doar „Setările au fost schimbate.” |
+| 1h → 4h → 1h înainte ca botul să verifice | botul nu vede nicio schimbare: continuă pe 1h, fără nicio lumânare pierdută |
+| Două schimbări la câteva minute | fiecare, văzută de bot, o ia de la capăt: lumânarea închisă e notată, se așteaptă următoarea |
+| Bot pe pauză sau cu o problemă | timeframe-ul se schimbă; botul îl preia la următoarea verificare, iar semnalele vin de pe lumânările care se închid după ea (pe pauză nu intră oricum) |
+| Bot programat, încă nepornit | pornește direct pe timeframe-ul nou, cu regula de la pornire (FD-BOT §9) |
+| Bot „Se încheie” cu „Termină tranzacțiile” | se poate schimba; pozițiile se închid după regulile de mai sus |
+| Bot încheiat | nu se editează (ca până acum); „Duplică” |
+| Acțiuni fără cheia ta Twelve Data, timeframe sub 1d | „Salvează” refuză: „AAPL pe 1h cere cheia ta Twelve Data (Setări → Date acțiuni); fără ea, botul merge pe 1d și 1w.” Botul rămâne cum era |
+| Crypto: exchange-ul tău n-are timeframe-ul (8h pe Bybit / OKX / Bitget) | lumânările vin de la exchange-ul implicit, ca pe grafic (ca la un bot nou) |
+| Istoric prea scurt pe timeframe-ul nou | jurnalul o spune din nou, o dată, pentru timeframe-ul nou |
+| O intrare reală trimisă pe timeframe-ul vechi și încă în reîncercare | când trece, poziția e ca celelalte deschise: SL / TP-ul ei, fără urmărirea semnalului vechi |
+| Un semnal pe timeframe-ul nou cu aceeași oră ca semnalul unei poziții | nu e luat drept semnalul ei (urmărirea semnalului vechi s-a oprit) |
+| „Duplică” după schimbare | botul nou pornește cu timeframe-ul nou |
+| Graficul pe alt timeframe decât botul | botul nu urmează graficul; „Bot” de pe grafic propune timeframe-ul graficului doar la un bot nou |
+| Telefon (390 / 320 px) | câmpul ocupă un rând, fără depășire |
+
+## FD-BOTSLRR — cu „Slingshot”, botul intră cu SL-ul și TP-ul semnalului, fără niciun R:R (22 oct 2026)
+
+### Ce cere utilizatorul
+- „Tu aici, în setările botului, trebuia să pui așa: respect take profit-ul și stop loss-ul oferit de Slingshot sau setez tu risk reward ratio. Și eu am bifat Slingshot.”
+- „Nu mă interesează punctul de intrare, pentru că este evident că o lumânare mai târzie va oferi confirmarea semnalului. […] Respectăm ce spune Slingshot. Știi stop loss-ul, știi take profit-ul. Faci un trade cu aceste două.”
+- „Risk reward ratio este că nu vrei să respecți Slingshot-ul. Nu merg împreună niciodată.”
+- „Slingshot-ul este cel care calculează risk to reward ratio singur. De asta îți oferă nivelele de stop loss și take profit.”
+- „Trebuie să fie foarte clar acest lucru în formular. Trebuie să dai o explicație acolo, că se exclud și că nu merg împreună.”
+- „Risk reward ratio se afișează sub formă de fracție. Vreau să menționez întâi care este riscul pe care îl vreau și care este reward-ul. Adică gen 1 la 2: scrii 1:2. Nu ca un număr, chiar și el fie el decimal.”
+
+### Ce era (cauza, confirmată pe botul SOL/USDT, 22 oct, 12:13)
+- **„R:R minim la intrare”** (implicit 1), în FD-BOT §6, verificarea 4: cu TP-ul Slingshot, botul calcula raportul din **prețul de la citire** până la SL și TP. Sub minim, refuza.
+- **De ce nu se potrivește cu Slingshot:**
+  - semnalul se confirmă după eticheta lui (ieșirea din supravânzare / supracumpărare), deci prețul a plecat deja de la intrarea etichetei;
+  - pe SOL/USDT 1m, eticheta SHORT avea intrare 103,88, SL 103,97 și TP 103,55. La citire, prețul era 103,75, deci R:R 0,91: refuzat, deși Slingshot a atins apoi TP-ul.
+- **R:R-ul din prețul de acum mai intra în două locuri:**
+  - partea „Slingshot” a scorului: 0,6 × limitat(R:R − 1) + 0,4 × structura;
+  - întrebarea pentru AI. Pe 21 oct, AI-ul a trecut la riscuri „R:R scăzut de doar 1,07”.
+- **Formularul** avea două alegeri separate, „Stop loss: Slingshot / Procent” și „Take profit: Slingshot / Risc / câștig”. Se putea deci amesteca un SL procentual cu TP-ul Slingshot.
+
+### Cercetare
+- **În cod:** R:R-ul din prețul de acum apare doar în `decide` (verificarea și scorul), în `levelsFor` și în întrebarea AI. Mărimea („Risc %”) folosește doar distanța până la SL, deci nu e atinsă.
+- **În bază (22 oct):** un singur bot Premium, SOL/USDT, cu SL și TP pe Slingshot și „R:R minim” 1. Niciun bot nu are SL procentual cu TP Slingshot.
+- **Pe piață:** boții care pornesc din semnale externe (3Commas, cu semnale TradingView) folosesc fie nivelurile semnalului, fie pe ale botului (TP / SL proprii). N-am găsit un filtru suplimentar de R:R peste nivelurile semnalului.
+
+### Cum e acum
+- **Ieșirea are o singură alegere: „Stop loss și take profit”**, cu două variante:
+  - **„Slingshot”** (implicit): SL-ul și TP-ul sunt ale semnalului, exact ca pe grafic. Niciun alt câmp.
+  - **„Risc / câștig”** (înlocuit în aceeași zi de FD-BOTPCT: SL % și TP % de la intrare, raportul calculat): take profit-ul vine din raportul tău. Apar câmpurile:
+    - **„Raportul risc : câștig”:** două câmpuri, riscul întâi, cu „:” între ele, implicit „1 : 2”. Raportul rămâne cum l-ai scris (2:3 rămâne 2:3, nu devine 1,5). TP-ul e la câștig ÷ risc × distanța până la SL (1:2 → de două ori distanța).
+    - **„Stop loss”:** Slingshot (al semnalului) sau Procent (x% de la intrare).
+- **Explicația din formular**, sub alegere, pe toată lățimea, aceeași la ambele variante (nu se schimbă, deci nu mișcă pagina; textul de acum e în FD-BOTPCT):
+  > „Două variante care se exclud, nu merg împreună. Slingshot: botul intră cu stop loss-ul și take profit-ul semnalului, exact ca pe grafic. Slingshot își calculează singur raportul risc / câștig, deci botul nu pune niciun R:R peste el. Risc / câștig: nu respectă nivelurile Slingshot. Alegi stop loss-ul (al semnalului sau un procent) și raportul risc : câștig (de exemplu 1:2: take profit-ul e la de două ori distanța până la stop loss).”
+- **„R:R minim la intrare” nu mai există**, nici în formular, nici în motor.
+- **Decizia (FD-BOT §6), cu „Slingshot”:** semnalul confirmat pe lumânarea închisă intră cu SL-ul și TP-ul lui, oricât de departe ar fi prețul de intrarea etichetei.
+  - Singurul refuz legat de niveluri: prețul a trecut deja de SL („Prețul a trecut deja de stop loss.”) sau de TP („Prețul a atins deja take profit-ul.”). Atunci ordinul nu se poate pune: SL-ul ar fi de partea greșită a prețului, iar TP-ul ar fi deja atins.
+  - Celelalte verificări rămân la fel: direcția, calendarul, aria împotrivă, scorul minim, locul, AI-ul, banii și pozițiile din afară.
+- **Scorul nu mai citește niciun R:R.** Partea „Slingshot” e doar structura pieței (ultima rupere de structură până la lumânarea închisă):
+  - în direcția tranzacției: +0,4;
+  - împotrivă: −0,4;
+  - nicio rupere: 0.
+  - E exact cât cântărea structura până acum (0,4), iar R:R-ul e scos (ca și cum ar fi neutru). Ponderile tale își păstrează sensul.
+  - **În jurnal:** „Slingshot: structura în direcție / structura împotrivă / fără rupere de structură”, fără R:R.
+- **AI-ul („AI confirmă”)** primește prețul, SL-ul și TP-ul, cu sursa lor („ale semnalului Slingshot” sau „TP-ul la raportul risc : câștig al utilizatorului”), fără un R:R calculat din prețul de acum. Regula lui: nu judecă SL-ul, TP-ul sau raportul risc / câștig, pentru că le stabilește strategia. „Nivelurile nu au sens” nu mai e un motiv de refuz.
+- **„Verifică” (rezumatul de dinainte de pornire):** „SL și TP: ale semnalului Slingshot.” sau „SL: al semnalului; TP la raportul risc : câștig 1:2.” (cu x% în loc de „al semnalului” la Procent).
+- **Raportul se arată peste tot ca raport, riscul întâi** (1:2, 1:1,5, 2:3), niciodată ca un singur număr. Jurnalul și scorul nu mai arată niciun R:R.
+- **Textul de la „Filtrul Sentiq”:** scorul adună scorul zilei, aria, sentimentul pe 7 zile, știrile simbolului și structura pieței.
+- **Botul care rulează** (SOL/USDT) primește regula nouă la prima verificare după deploy, fără editare. „R:R minim”-ul din setările lui e ignorat, apoi scos la prima salvare.
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| „Slingshot”, prețul între SL și TP, raportul din prețul de acum oricât de mic (0,2) | intră cu SL-ul și TP-ul semnalului |
+| „Slingshot”, long cu prețul la sau sub SL (short: la sau peste) | nu intră: „Prețul a trecut deja de stop loss.” |
+| „Slingshot”, long cu prețul la sau peste TP (short: la sau sub) | nu intră: „Prețul a atins deja take profit-ul.” |
+| „Risc / câștig” (rândurile despre raport, până la „tab vechi”, sunt înlocuite de FD-BOTPCT) | TP = preț ± câștig ÷ risc × distanța până la SL |
+| Raportul scris 2:3 | rămâne 2:3 la Editează și în „Verifică”; TP-ul la 1,5 × distanța până la SL |
+| Raportul în afara limitelor (câștigul sub jumătate din risc sau peste de 10 ori riscul, de ex. 3:1 sau 1:11) | refuzat: „Raportul risc : câștig 3:1 iese din limite: câștigul e între jumătate din risc și de 10 ori riscul (de la 2:1 la 1:10).” (limitele de dinainte, 0,5–10) |
+| Un câmp al raportului gol | „Partea de risc a raportului: lipsește.” / „Partea de câștig a raportului: lipsește.” |
+| Cu „Slingshot”, raportul (ascuns) nu contează | nu se verifică și nu se folosește; golit sau greșit înainte de a alege „Slingshot”, nu oprește salvarea (rămâne cel valid, altfel 1:2). La fel procentul de SL ascuns cu SL-ul Slingshot (altfel 2%) |
+| Un bot vechi cu R:R-ul ca un singur număr (R = 2,5) | se citește ca 1:2,5; se salvează așa la prima salvare |
+| Un bot vechi cu „R:R minim” în setări | setarea e ignorată; dispare la prima salvare (Editează / Duplică) |
+| Un tab deschis cu versiunea veche (trimite R și R:R minim) | salvarea trece: R devine 1:R, R:R minim e ignorat; după reîncărcare, formularul nou |
+| Setări trimise cu SL procentual și TP Slingshot (API, un formular vechi deschis) | refuzate: „Cu Slingshot, stop loss-ul și take profit-ul sunt amândouă ale semnalului; pentru un SL procentual alege „Risc / câștig”.” |
+| Un bot salvat cu SL procentual și TP Slingshot | nu există în bază (verificat 22 oct); setările lui n-ar mai trece, iar botul ar arăta „Setările botului nu se mai pot citi” |
+| Trecerea din „Risc / câștig” în „Slingshot” în formular | SL-ul devine și el al semnalului; câmpurile de SL și R dispar |
+| Trecerea din „Slingshot” în „Risc / câștig” | apar „Stop loss” (Slingshot) și R (valoarea de dinainte, implicit 2) |
+| „Risc %” cu un SL foarte aproape de preț | mărimea vine tot din distanța până la SL, limitată de suma liberă, de levier și de lichidare (FD-BOT §6) |
+| Ambele semnale pe aceeași lumânare | se încearcă întâi cel cu scorul mai mare (ca până acum); scorul nu mai depinde de R:R |
+| Poziții deschise înainte de schimbare | neatinse: SL-ul și TP-ul lor rămân |
+| Rânduri vechi din jurnal | își păstrează textul de atunci (cu R:R) |
+| Simulare | aceleași reguli |
+| Scorul minim al botului | rămâne cum l-ai pus. Fără R:R, un context neutru fără rupere de structură face 50 |
+| Telefon (390 / 320 px) | alegerea ocupă un rând, câmpurile de la „Risc / câștig” sub ea, fără depășire |
+
+## FIX-INFOTIP — iconița (i) din setările indicatorilor arată explicația la hover și la click (22 oct 2026)
+
+### Ce a raportat utilizatorul
+„În niciun indicator, mouse hover pe acea iconiță de question mark sau click pe ea nu afișează ceva. Deci tu ai pus informații despre o setare dintr-un indicator fără să apară informația.”
+
+### Cauza (confirmată în cod)
+- **Ambele ferestre de setări** au iconița (i) lângă o setare cu explicație:
+  - indicatorii din listă (`StudySettings`, explicațiile Pine ale fiecărui input);
+  - Slingshot și LMA (`Charts.tsx`).
+- **Iconița era doar un `<span title="…">`:**
+  - **click:** nimic, pentru că nu avea niciun handler;
+  - **hover:** doar tooltip-ul nativ al browserului. În Safari pe Mac apare după o pauză lungă și doar cu fereastra activă. Pe iPhone și iPad nu există deloc (fără hover).
+
+### Cum e acum
+- **Iconița (i) e un buton.** Explicația apare într-o bulă:
+  - **cu mouse-ul:** cât timp cursorul e pe iconiță;
+  - **la click sau tap:** rămâne deschisă până la alt click / tap în afara ei, Esc sau un nou click pe iconiță;
+  - **din tastatură:** Tab pe iconiță, apoi Enter sau Space.
+- **Bula:**
+  - nu mută nimic din pagină (plutește deasupra);
+  - stă sub iconiță, sau deasupra când jos nu e loc;
+  - rămâne în fereastră, la 8 px de margini, cel mult 280 px lățime;
+  - are textul setării, exact ca în Pine.
+- **Click pe (i) dintr-o etichetă de checkbox:** nu bifează și nu debifează căsuța.
+- **Esc cu bula deschisă:** închide doar bula, nu și fereastra de setări. Un al doilea Esc închide fereastra.
+- **Cititoarele de ecran:** butonul se numește „Explicația setării” și e legat de bulă cât e deschisă.
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Hover, apoi cursorul pleacă | bula se închide |
+| Tap pe iPhone | bula se deschide; alt tap în afara ei o închide |
+| Tap pe altă iconiță (i) | bula veche se închide, se deschide cea nouă |
+| Iconița lângă marginea dreaptă, la 320 px | bula se mută spre stânga, ca să rămână în ecran |
+| Iconița în partea de jos a ferestrei | bula apare deasupra |
+| Fereastra de setări derulată cu bula deschisă | bula urmează iconița; dacă iconița iese din ecran, bula se închide |
+| Setare inactivă (gri, „nu se aplică”) | explicația se poate citi la fel |
+| Text lung | se rupe pe rânduri, în cel mult 280 px |
+| Setare fără explicație | nicio iconiță (ca până acum) |
+| Lista de ponderi / alte câmpuri fără explicație | neschimbate |
+
+## FD-BOTPCT — „Risc / câștig” = SL % și TP % de la intrare, raportul calculat (22 oct 2026)
+
+### Ce cere utilizatorul
+- „Eu știu că risk/reward stabilește ambele lucruri, și stop loss-ul, și take profit-ul, pentru că spui cât risc vreau să-mi asum, adică până unde se duce stop loss-ul și până unde se duce take profit-ul. Nu înțeleg de ce ai pus la stop loss opțiunea de procent.”
+- După explicație (un raport singur, 1:2, nu spune cât de departe e SL-ul) și trei variante propuse, varianta aleasă: **„SL % și TP % direct”**. Două câmpuri, cât la sută până la SL și cât la sută până la TP; raportul se calculează și se afișează ca 1:2.
+
+### Ce era (FD-BOTSLRR)
+- „Risc / câștig” avea:
+  - „Stop loss”: Slingshot (al semnalului) sau Procent;
+  - „Raportul risc : câștig” în două câmpuri; TP-ul ieșea din raport × distanța până la SL.
+- Varianta „SL: Slingshot” amesteca SL-ul semnalului cu raportul utilizatorului, deși regula lui e că Slingshot și risk/reward nu merg împreună.
+
+### Cercetare
+- **Pe piață:** boții obișnuiți (3Commas) au „Take profit %” și „Stop loss %” de la prețul de intrare. Exemplul lor: un stop de 10% la o intrare de 10 000 vinde la 9 000.
+- **În bază (22 oct):** un singur bot Premium, cu „Slingshot”. Niciun bot nu folosește „Risc / câștig”.
+
+### Cum e acum
+- **„Stop loss și take profit”:** „Slingshot” sau „Risc / câștig”, două variante care se exclud (FD-BOTSLRR).
+- **„Risc / câștig”** are doar procentele tale, fără nimic de la Slingshot:
+  - **„Stop loss (% de la intrare)”** (implicit 1);
+  - **„Take profit (% de la intrare)”** (implicit 2);
+  - sub ele, pe toată lățimea: „Raportul risc : câștig: 1:2 (calculat din cele două procente).” Raportul e scris cu riscul întâi, adus la 1 (1% și 1,5% → „1:1,5”; 1,5% și 2% → „1:1,33”). Cu un procent gol sau greșit: „—”.
+- **Explicația din formular**, fixă:
+  > „Două variante care se exclud, nu merg împreună. Slingshot: botul intră cu stop loss-ul și take profit-ul semnalului, exact ca pe grafic. Slingshot își calculează singur raportul risc / câștig, deci botul nu pune niciun R:R peste el. Risc / câștig: nu respectă nivelurile Slingshot. Alegi tu până unde merge stop loss-ul și până unde merge take profit-ul, în procente de la intrare; raportul risc : câștig se calculează din ele (de exemplu 1% și 2% dau 1:2).”
+- **Nivelurile unei intrări cu „Risc / câștig”:**
+  - long la 100 cu 1% / 2%: SL 99, TP 102;
+  - short la 100: SL 101, TP 98.
+- **Ieșirile marcate de Slingshot pe lumânare** (SL / TP-ul semnalului atins) se aplică doar la „Slingshot”, ca până acum. Semnalul de TP Slingshot, întoarcerea trendului și semnalul opus rămân opțiunile lor.
+- **„Verifică”:** „SL și TP: ale semnalului Slingshot.” sau „SL 1% și TP 2% de la intrare (risc : câștig 1:2).”
+- **AI-ul** primește sursa nivelurilor: „ale semnalului Slingshot” sau „procentele utilizatorului de la intrare”.
+- **„Risc %”** (mărimea) folosește în continuare distanța până la SL.
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| 1% și 2% | SL 1%, TP 2% de la intrare; raportul 1:2 |
+| 2% și 3% | raportul „1:1,5” |
+| TP mai aproape decât SL (2% și 1%) | permis până la 2:1 („1:0,5”) |
+| Raportul în afara limitelor (TP sub jumătate din SL sau peste de 10 ori SL-ul) | refuzat: „Raportul risc : câștig 1:20 iese din limite: take profit-ul e între jumătate și de 10 ori distanța stop loss-ului (de la 2:1 la 1:10).” |
+| SL în afara 0,1–50% sau TP în afara 0,1–500% | refuzat, cu limita („Stop loss-ul: cel mult 50”) |
+| Short cu TP de 100% sau mai mult | nu intră: „Take profit-ul ar fi la un preț sub zero.” |
+| Un procent gol | „Stop loss-ul: lipsește.” / „Take profit-ul: lipsește.”; raportul arată „—” |
+| Cu „Slingshot”, procentele (ascunse) | nu se folosesc; golite sau greșite, nu opresc salvarea (rămân cele valide, altfel 1% și 2%) |
+| Botul SOL (Slingshot, salvat cu SL 2% și R 2) | neschimbat: SL / TP-ul semnalului. Procentele ascunse devin 2% și 4% (la trecerea pe „Risc / câștig” arată 1:2) |
+| Setări salvate cu „Risc / câștig” și SL procentual (x%, raport R) | SL x%, TP x% × R: aceleași niveluri |
+| Setări salvate cu „Risc / câștig” și SL-ul semnalului | nu există în bază (verificat); s-ar citi ca SL-ul procentului salvat și TP-ul × R, deci SL-ul nu mai vine de la Slingshot |
+| Un tab cu o versiune veche (trimite SL / TP / R / raport) | salvarea trece, convertită ca mai sus; după reîncărcare, formularul nou |
+| Simulare / real, spot / futures / acțiuni | aceleași niveluri; pe futures, SL-ul trebuie să rămână înaintea lichidării (FD-BOT §6) |
+| Telefon (390 / 320 px) | câmpurile unul sub altul, raportul sub ele, fără depășire |
+
+## FIX-BROTLI — conținutul extern se descarcă fără decompresie Brotli, până la Node.js 24.22.1 pe Azure (22 oct 2026)
+
+### Ce cere utilizatorul
+„Au apărut patch-uri pentru Node.js, foarte importante pentru securitate. Trebuie să facem noi update sau Microsoft?” Varianta aleasă dintre cele propuse: o protecție în cod, până când Microsoft trece imaginea pe Node 24.22.1.
+
+### Situația (verificată 22 oct)
+- **Avizul Node.js din 21 oct 2026:** zece vulnerabilități, reparate în 22.23.4, 24.22.1 și 26.12.1. Cea mai gravă e CVE-2026-111497: o scriere în afara memoriei în decodorul Brotli, care permite rularea de cod de la distanță.
+- **Azure:** imaginea `appsvc/node:24-lts_20260904`, cu Node **24.20.0**. Cu „24-lts”, Microsoft alege și aplică singur patch-urile, fără o dată garantată.
+- **Expunerea Sentiq:**
+  - descarcă fluxuri de știri (inclusiv surse adăugate de utilizatori), pagini, calendarul economic și contextul piețelor de pe site-uri externe;
+  - `fetch`-ul din Node cere `br` și decomprimă automat răspunsurile Brotli;
+  - decodorul pornește pe măsură ce sosesc datele, înainte ca Sentiq să citească corpul răspunsului, deci verificarea antetului după `fetch` nu ajunge;
+  - o sursă rău intenționată sau compromisă ar putea trimite exact datele care declanșează breșa.
+
+### Cum e acum
+- **Descărcarea conținutului extern** (știri, pagini, sitemap-uri, calendar, componența indicilor, contextul piețelor) folosește un transport propriu, fără decompresia automată a lui `fetch`:
+  - cere doar `gzip, deflate`;
+  - decomprimă gzip și deflate, care nu sunt afectate;
+  - un răspuns Brotli (sau zstd) e refuzat înainte de orice decodare, chiar dacă serverul îl trimite fără să i se ceară. Sursa arată eroarea: „Serverul a trimis conținut comprimat Brotli (br); Sentiq nu-l decomprimă (FIX-BROTLI).”
+- **Restul descărcării rămâne la fel:**
+  - limita de timp și limita de mărime;
+  - cererile condiționate (ETag / Last-Modified);
+  - redirecționările (cel mult 20);
+  - proxy-ul din mediu, unde e pornit.
+- **Ce rămâne pe `fetch`, neschimbat:** API-urile serviciilor cunoscute, la care un atac ar cere compromiterea serviciului:
+  - brokerii și ordinele (bani reali: nicio schimbare pe calea de tranzacționare);
+  - bursele (ccxt), AI-ul, e-mailul (Resend);
+  - Twelve Data, Nasdaq, CNBC, TradingView.
+  - Riscul rămas dispare odată cu Node 24.22.1 pe Azure.
+- **Ce nu acoperă:** celelalte vulnerabilități din aviz rămân pe ambele căi până la Node 24.22.1:
+  - verificarea numelui din certificatul TLS când adresa arată ca un IP;
+  - `dns.resolve`;
+  - socket-urile keep-alive.
+  - Sentiq se conectează prin nume de domeniu și nu folosește `dns.resolve`, deci ele îl ating mai puțin decât breșa Brotli.
+- **Protecția rămâne și după actualizare.** Serverele trimit Brotli doar dacă li se cere, deci nu costă nimic.
+- **Verificat pe cele 48 de surse de știri active din baza reală:** aceleași răspunsuri ca prin `fetch` (47 merg cu ambele, una pică la amândouă). Niciuna n-a trimis Brotli necerut.
+- **Mac-ul:** Node se actualizează local (comanda e în raport); Sentiq cere Node 24 sau mai nou.
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Server care respectă cererea (cele mai multe) | trimite gzip, deflate sau nimic; descărcarea merge ca înainte |
+| Server care trimite totuși `br` (sau `gzip, br`, `zstd`) | refuzat înainte de decodare, cu mesajul din FD; sursa încearcă din nou la următoarea citire |
+| `br` pe un răspuns de redirecționare (3xx) | corpul nu se citește; redirecționarea e urmată |
+| `Content-Encoding: identity` sau o valoare necunoscută (servere greșit configurate, de ex. `utf-8`) | corpul se ia așa cum vine, ca la `fetch` |
+| deflate cu sau fără antet zlib | ambele se decomprimă |
+| gzip trunchiat | se ia cât s-a putut decomprima, ca la `fetch` |
+| „Bombă” gzip (mic comprimat, uriaș decomprimat) | limita de mărime se aplică la ce iese decomprimat; peste ea: „Răspuns prea mare” |
+| 304 Not Modified, 204 | fără corp, ca înainte |
+| Redirecționare relativă, 301 / 302 / 303 după POST, 307 / 308 | ca la `fetch`: adresa rezolvată, POST → GET la 301 / 302 / 303, metoda păstrată la 307 / 308 |
+| Redirecționare spre alt site | antetul `Authorization` nu se trimite mai departe, ca la `fetch` |
+| Peste 20 de redirecționări | eroare: „Prea multe redirecționări” |
+| Limita de timp, la antete sau la un corp care se oprește la jumătate | „Niciun răspuns în N s”, ca înainte |
+| Adresă care nu e http(s) | eroare de rețea, ca la `fetch` |
+| Proxy (`NODE_USE_ENV_PROXY`, local în sandbox) | folosit, ca la `fetch` |
+| Testele | cârligul `setFetchImpl` înlocuiește în continuare ambele transporturi |
+
+## FD-BOTDIR — scorul pieței: un prag pentru long, altul pentru short (26 oct 2026)
+
+### Ce cere utilizatorul
+- „Scorul sub care botul nu mai intră în tranzacții este luat în calcul greșit. Un scor mic favorizează short-urile, un scor mare favorizează long-urile, iar noi acum avem o singură valoare […] Trebuie să avem scoruri diferite pe direcții diferite ale Slingshot-ului.”
+
+### Ce era (FD-BOT §6)
+- **Scorul era al tranzacției, nu al pieței.** Fiecare parte dădea acordul cu latura semnalului: pentru un short, știrile negative urcau scorul.
+  - Un singur „Scorul minim” M era deci, pe scara pieței, „long de la M în sus, short de la 100 − M în jos”. Cu M = 39 (botul SOL): long de la 39, short până la 61.
+- **Formularul nu spunea asta.** „Scorul (0–100, 50 neutru)” arăta ca indicele de sentiment, unde mic = negativ. De aici concluzia firească: un short, cu piața negativă, are scor mic și e oprit de minim.
+- **Verificat pe baza reală (26 oct), botul SOL** (`SOL/USDT`, futures, real, „Ambele”, scorul minim 39 din 24 oct 21:16 UTC):
+  - din 23 oct 21:11 UTC rulează pe 2h. Pe cele 29 de lumânări de 2h închise de atunci, Slingshot n-a confirmat niciun semnal, nici long, nici short (refăcut lumânare cu lumânare, cu setările utilizatorului);
+  - jurnalul n-are nicio intrare refuzată după 23 oct 16:00 UTC. Atunci: „LONG: scorul 43,2 e sub minim (45)” (pe 15m);
+  - ultimul short (22 oct 22:15 UTC) a intrat cu scorul 51,9;
+  - pe 2h, ultimul semnal e un SHORT confirmat pe 23 oct 18:00 UTC, înainte de trecerea botului pe 2h. Pe 1h au fost două SHORT pe 25 oct, dar botul nu e pe 1h.
+  - Deci, în cele trei zile, niciun short n-a fost refuzat pentru scor. Cererea rămâne: fiecare direcție cu pragul ei, pe scara pe care o citește utilizatorul.
+
+### Cercetare
+- Boții care filtrează cu sentiment folosesc o singură scară (de ex. Fear & Greed, sau un scor −1…+1). Long-urile au un prag de piață pozitivă, short-urile unul de piață negativă, de obicei cu o zonă neutră între ele (TradersPost: long doar peste un scor; exemplul Interactive Brokers: prag ±0,1 în jurul neutrului).
+- Scara Sentiq (0–100, 50 neutru, peste 60 pozitiv, sub 40 negativ) e deja cea a indicilor din aplicație.
+
+### Cum e acum
+- **Scorul pieței (0–100, 50 neutru):** aceleași cinci părți și aceleași ponderi, dar fiecare spune încotro înclină piața, nu dacă e de acord cu tranzacția:
+  - scorul zilei, aria, sentimentul pe 7 zile, știrile simbolului: (indice − 50) / 50 × încrederea, ca înainte pentru un long;
+  - Slingshot: 0,4 × (ultima rupere de structură: în sus +1, în jos −1, niciuna 0);
+  - scor = 50 + 50 × Σ(pondere × înclinare) / Σ ponderi (doar părțile cu date).
+  - **Un scor mare favorizează long-urile, unul mic short-urile.** Același context dă același scor, oricare ar fi latura semnalului.
+- **Două praguri** în locul „Scorului minim”:
+  - **„Scorul minim pentru long”** (implicit 50): un long intră doar la scor ≥ el;
+  - **„Scorul maxim pentru short”** (implicit 50): un short intră doar la scor ≤ el.
+  - Întregi, 0–100. Formularul arată doar pragurile direcțiilor pe care le face botul. Un prag ascuns nu oprește salvarea: rămâne cel valid, altfel 50.
+- **Explicația din formular**, fixă:
+  > „Semnalul Slingshot e motivul intrării. Scorul pieței (0–100, 50 neutru) adună scorul zilei, aria, sentimentul pe 7 zile, știrile simbolului și structura pieței: un scor mare favorizează long-urile, unul mic short-urile. De aceea fiecare direcție are pragul ei.”
+- **Sub praguri, o propoziție după valorile scrise:**
+  - (direcția e cea arătată în formular: pe spot, la Trading 212 și la Alpaca, doar long)
+  - Ambele, long ≤ short: „Long de la scorul 45 în sus, short de la 55 în jos: între 45 și 55 pot intra amândouă.” (la valori egale: „la 50 pot intra amândouă”);
+  - Ambele, long > short: „Long de la scorul 55 în sus, short de la 45 în jos: peste 45 și sub 55, botul nu intră.”;
+  - doar long: „Long de la scorul 50 în sus.”; doar short: „Short de la scorul 50 în jos.”;
+  - un prag gol sau greșit: „—” în locul lui.
+- **Jurnalul:**
+  - refuz long: „LONG: scorul pieței 43,2 e sub minimul pentru long (45).”;
+  - refuz short: „SHORT: scorul pieței 64,1 e peste maximul pentru short (45).”;
+  - intrare: „… scor 30,6.” ca înainte.
+  - Detaliul: „Scorul pieței 30,6 (short până la 45)” sau „(long de la 55)”; la fiecare parte, „spre long 0,12” sau „spre short 0,12” (verde, respectiv roșu, peste 0,05), sau „neutru” (ce se rotunjește la 0,00).
+  - Intrările mai vechi rămân cum au fost scrise: „Scorul tranzacției 51,9 (minim 45; calculul de dinainte de pragurile pe direcții: peste 50 în favoarea tranzacției)” și „acord”.
+- **„Verifică”:**
+  - „… long și short de pe 2h: long când scorul pieței e cel puțin 39, short când e cel mult 61.”;
+  - doar long: „… când scorul pieței e cel puțin 50”; doar short: „… cel mult 50”;
+  - cu „AI confirmă”, încă o propoziție: „AI-ul confirmă fiecare intrare.”
+  - **Avertisment** când pragul unei direcții pe care o face botul nu poate fi atins cu ponderile alese (scorul cel mai mare posibil, cu toate părțile la capăt: 50 + 50 × (Σ ponderi ale indicilor + 0,4 × ponderea Slingshot) / Σ ponderi; implicit 94):
+    - „Cu ponderile alese, scorul pieței ajunge cel mult la 94: cu minimul 95, botul nu intră niciodată long.”;
+    - „Cu ponderile alese, scorul pieței coboară cel mult până la 6: cu maximul 5, botul nu intră niciodată short.”
+- **AI-ul** primește: „Scorul pieței (0–100, 50 neutru; peste 50 favorizează long-ul, sub 50 short-ul): 30.6. Un SHORT intră până la 45.” și părțile.
+- **Setările salvate înainte** (un „Scorul minim” M) se citesc ca long de la M, short până la 100 − M. Aceleași intrări ca înainte. Botul SOL: long de la 39, short până la 61. Următoarea salvare le scrie în forma nouă.
+- **Două semnale pe aceeași lumânare, cu „Ambele”:** se încearcă întâi latura pe care o favorizează piața (scor > 50: long; < 50: short; la 50, ordinea Slingshot). Intră doar una, ca înainte.
+- **Neschimbate:** „Nu intra împotriva ariei”, calendarul, AI-ul, ponderile, ordinea verificărilor (scorul e tot pasul 6).
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Piață negativă (scor 30), semnal SHORT, maxim short 45 | intră |
+| Piață negativă (scor 30), semnal LONG, minim long 45 | „LONG: scorul pieței 30 e sub minimul pentru long (45).” |
+| Scorul exact la prag (long 45 la minim 45; short 45 la maxim 45) | intră (pragurile includ valoarea) |
+| Long ≤ short (zonă comună) | în zona comună, oricare semnal poate intra |
+| Long > short (zonă neutră) | strict între ele, niciun semnal nu intră |
+| Prag 0 la long / 100 la short | filtrul nu mai oprește acea direcție |
+| Prag de neatins cu ponderile alese (long 95 cu ponderile implicite) | salvarea merge; „Verifică” avertizează că direcția nu intră niciodată |
+| Fără date de sentiment (doar structura) | 70 (rupere în sus), 30 (în jos), 50 (niciuna), ca înainte pentru un long |
+| Botul face doar long (sau spot, Trading 212, Alpaca) | doar pragul long se arată și contează; cel short, ascuns, se păstrează |
+| Botul face doar short | doar pragul short se arată și contează |
+| Prag ascuns gol sau greșit | nu oprește salvarea: rămâne valid sau 50 |
+| Prag gol sau greșit, arătat | „Scorul minim pentru long: lipsește.” / „…: nu e un număr.”; limitele: „Scorul maxim pentru short: cel mult 100”, „…: un număr întreg” |
+| Setări vechi cu „Scorul minim” M | long M, short 100 − M: aceleași intrări (la o egalitate exactă de rotunjire, x,x5, diferența e de 0,1 puncte) |
+| Un tab cu versiunea veche (trimite „Scorul minim”) | salvarea trece, convertită ca mai sus |
+| Setări cu ambele forme | contează pragurile noi; „Scorul minim” se ignoră |
+| Editarea pragurilor la un bot pornit | se aplică de la semnalul următor |
+| Două semnale pe aceeași lumânare, ambele peste prag | întâi latura favorizată de piață; a doua: „botul a intrat deja pe semnalul celălalt.” |
+| Intrări vechi în jurnal | rămân cu „Scorul tranzacției” și „acord”, cum s-au calculat |
+| AI-ul | primește scorul pieței și pragul laturii; poate doar să oprească o intrare |
+| Simulare / real, crypto / acțiuni | aceleași praguri |
+| Telefon (390 / 320 px) | pragurile unul sub altul, propoziția sub ele, fără depășire |
+
+## FD-NEWSWIN — setarea „Ferește știrile (min înainte)” poartă numele a ceea ce face (26 oct 2026)
+
+### Ce cere utilizatorul
+- „Redenumește setarea asta ca să fie exact ceea ce ai explicat tu aici. Poți să o numești «evită deschiderea de tranzacții în perioada știrilor importante economice», pentru că titlul pe care l-ai pus tu nu spune nimic.”
+
+### Ce face setarea (neschimbat, FD-BOT §6, pasul 4)
+- La un semnal, botul nu intră dacă în calendar e un eveniment USD cu impact mare în următoarele N minute sau în ultimele 15. Contează doar evenimentele cu oră, nu cele care țin toată ziua.
+- Pozițiile deschise nu sunt atinse: SL, TP și celelalte ieșiri merg normal.
+- Semnalul refuzat nu se reia după eveniment.
+- N implicit 60; 0 = oprit; cel mult 720.
+
+### Cum e acum
+- **Numele:** „Evită deschiderea de tranzacții în perioada știrilor economice importante” (ordinea firească a cuvintelor: „știrilor economice importante”).
+- **Sub câmp, ce înseamnă numărul:**
+  > „Minutele dinaintea unei știri economice cu impact mare pentru dolar (și încă 15 după ea) în care botul nu deschide tranzacții. Pozițiile deschise merg normal. 0: oprit.”
+- **Așezarea:**
+  - numele e lung, deci setarea are un rând al ei;
+  - câmpul are lățimea unei coloane, ca celelalte;
+  - „Pauză după o pierdere (min)” trece pe rândul următor.
+- **Erorile** numesc numărul: „Minutele dinaintea știrilor economice importante: lipsește.” / „…: cel mult 720” / „…: un număr întreg”.
+- **Neschimbate:** valorile salvate (`newsWindowMin`), comportamentul și mesajul din jurnal („eveniment cu impact mare peste 40 min: …”).
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Boți existenți (botul SOL: 60) | aceeași valoare, același comportament; doar numele din formular se schimbă |
+| 0 | oprit: botul intră indiferent de calendar (explicația o spune) |
+| Gol / text / zecimal / peste 720 | eroarea cu „Minutele dinaintea știrilor economice importante” |
+| Editarea unui bot pornit | același câmp, același nume |
+| Desktop (1440) | numele pe un rând, câmpul cât o coloană, explicația sub el |
+| Telefon (390 / 320) | numele pe mai multe rânduri, câmpul pe toată lățimea, fără depășire |
+
+## FIX-PINESYNC — Slingshot 3.4 în TradingView: numele și prețurile ca în Sentiq (26 oct 2026)
+
+### Ce cere utilizatorul
+- „Vreau să adaug indicatorul Slingshot și în TradingView. Vreau să aibă ultimele modificări.”
+- După compararea etichetelor (captura Sentiq cu setările utilizatorului față de apelurile `label.new` / `table.cell` din Pine), utilizatorul a ales: **stop loss-ul rămâne cum e**, adică eticheta semnalului „eșuată” (triunghi) plus eticheta „STOP LOSS”, iar X doar pentru invalidat. **Se aliniază doar diferențele găsite.**
+
+### Comparația (26 oct 2026)
+- **La fel în Sentiq și în Pine:**
+  - etichetele LONG / SHORT / TAKE PROFIT / STOP LOSS (texte, triunghiuri, poziții), cu stările „în formare”, „valid”, „eșuat” și „invalidat” (X);
+  - nivelurile „TAKE PROFIT / STOP LOSS” cu prețul;
+  - tabelul („TAKE PROFIT (SHORT)” / „STOP LOSS (SHORT)”);
+  - liniile și textele Market Structure;
+  - cele 79 de intrări din Pine, cu aceleași valori implicite. Sentiq are în plus grosimea și tipul liniilor celor două EMA, pe care TradingView le pune în tab-ul Stil (FD-STYLEUNIFY).
+- **Diferite:**
+  - **numele:** TradingView „[Dusty Investments] Slingshot System 3.4” / „[DI] SS 3.4”, Sentiq „[DE] Slingshot System 3.4” / „[DE] Slingshot 3.4”;
+  - **prețurile** din etichetele nivelurilor și din tabel: TradingView `#.##` (cel mult două zecimale, deci 0 la monedele mici), Sentiq precizia pieței.
+
+### Cum e acum (fișierul `Sling Shot System/sling-shot-system-3.4.pine`)
+- **Numele:** titlul „[DE] Slingshot System 3.4”, numele scurt (legenda) „[DE] Slingshot 3.4”, ca în Sentiq (FD-DENAMES).
+- **Prețurile** din cele patru etichete de nivel și din tabel: `format.mintick`, adică precizia tick-ului simbolului din TradingView, ca precizia pieței din Sentiq.
+- **Neschimbate:** etichetele și forma lor, culorile, mărimile, alertele, intrările, logica. `sling-shot-system.pine` (3.3) rămâne neatins.
+
+### Cazuri limită
+| Situație | Comportament |
+|---|---|
+| Monedă cu preț mic (de ex. 0,00001234) | prețul cu zecimalele tick-ului, nu „0” |
+| SOL pe KuCoin (tick 0,01) / BTC (tick 0,1) | două zecimale / una, ca în Sentiq (unde BTC apare 80.562,6) |
+| Simbol cu tick care nu e putere a lui 10 (de ex. 0,25 la futures) | rotunjit la tick, cum îl arată scala TradingView |
+| Separatorul zecimal | punct în TradingView, virgulă în caseta Sentiq (formatul fiecărei aplicații, neschimbat) |
+| Zerourile de la final | cum le scrie TradingView cu `format.mintick` (nu pot verifica aici; Sentiq le scrie mereu) |
+| Indicatorul vechi deja pe un grafic TradingView | scriptul nou se adaugă ca indicator separat; alertele create pe cel vechi rămân pe el și se refac pe cel nou |
+| Compilarea | TradingView o face la salvare; aici nu există compilator Pine. Schimbările folosesc doar `format.mintick` (o constantă din Pine v5) și numele |

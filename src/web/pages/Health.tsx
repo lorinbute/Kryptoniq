@@ -22,6 +22,7 @@ const JOB_RO: Record<string, string> = {
   'market.context': 'Context piață',
   'stocks.market': 'Bursa SUA și indici',
   scanner: 'Scanner Slingshot',
+  bots: 'Boți de tranzacționare',
   maintenance: 'Întreținere',
 };
 const MODEL_RO: Record<string, string> = { idle: 'neîncărcat', loading: 'se descarcă / se încarcă', ready: 'gata', failed: 'indisponibil' };
@@ -34,7 +35,7 @@ export default function HealthPage() {
   const h = q.data;
   const m = h.sentiment.model;
   return (
-    <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-3.5">
+    <div className="flex w-full flex-col gap-3.5">
       <h1 className="page-title">Stare sistem</h1>
       <Panel title="Sentiment și date" icon={Database}>
         <dl className="grid gap-x-8 gap-y-2 text-[13px] sm:grid-cols-2 lg:grid-cols-4">

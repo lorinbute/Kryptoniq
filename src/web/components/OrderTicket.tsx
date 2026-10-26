@@ -14,6 +14,7 @@ import { closeRows, pnlPct, rowUnitsProblem } from './close-picker.ts';
 import { fmtMoney, fmtPct } from '../format.ts';
 import { Modal } from './Modal.tsx';
 import { ProviderLogo } from './ProviderLogo.tsx';
+import { settlePortfolio } from '../portfolio-settle.ts';
 
 export const TRADING_KEY = ['trading'] as const;
 export const TRADING_LOG_KEY = ['trading', 'log'] as const;
@@ -99,7 +100,7 @@ function ReadOnly({ label, children }: { label: string; children: React.ReactNod
   );
 }
 
-function DemoBadge({ env }: { env: string }) {
+export function DemoBadge({ env }: { env: string }) {
   if (!isDemoEnv(env)) return null;
   return <span className="rounded-md bg-warn/15 px-1.5 py-0.5 text-[11px] font-semibold tracking-wide text-warn">DEMO</span>;
 }
@@ -210,6 +211,8 @@ export function OrderTicket({ seed, onClose }: { seed: TicketSeed; onClose: () =
 
   // FD-ETOROROWS: eToro positions as rows, each with its own "Vinde" and an optional number of units to sell.
   const posRows = useMemo(() => (seed.close && ins?.positions ? closeRows(ins.positions, seed.close.positionIds) : null), [ins?.positions, seed.close]);
+  // FD-HEDGEALL: a short is closed by buying it back, not sold: its rows say "Închide".
+  const shortsOnly = !!posRows?.length && posRows.every((r) => !r.isBuy);
   const [rowUnits, setRowUnits] = useState<Record<string, string>>({});
 
   const ticketBody = (): Omit<Ticket, 'idemKey'> => ({
@@ -279,7 +282,7 @@ export function OrderTicket({ seed, onClose }: { seed: TicketSeed; onClose: () =
     },
     onError: onTradingError,
     onSettled: () => {
-      void qc.invalidateQueries({ queryKey: ['portfolio', account?.accountId] });
+      settlePortfolio(qc, account?.accountId);
       void qc.invalidateQueries({ queryKey: TRADING_LOG_KEY });
     },
   });
@@ -377,11 +380,15 @@ export function OrderTicket({ seed, onClose }: { seed: TicketSeed; onClose: () =
   if (step === 'confirm' && preview) {
     const p = preview;
     const long = p.ticket.side === 'buy';
+    // FD-KUCOINHEDGE: in hedge mode a reduce-only order closes one of the two positions, named.
+    const hedgeOrder = futures && p.positionMode === 'hedge';
     // A reduce-only order closes (all or part of) the position: said so, not "Short" / "Long".
     const sideRo = p.ticket.close
       ? 'Închidere'
       : p.ticket.reduceOnly
-        ? `Închidere (${long ? 'cumpărare' : 'vânzare'})`
+        ? hedgeOrder
+          ? `Închide ${long ? 'short' : 'long'}`
+          : `Închidere (${long ? 'cumpărare' : 'vânzare'})`
         : futures
           ? long
             ? 'Long'
@@ -395,6 +402,7 @@ export function OrderTicket({ seed, onClose }: { seed: TicketSeed; onClose: () =
       ['Cont', `${account.label}${isDemoEnv(p.env) ? ' (DEMO)' : ''}`],
       ['Instrument', p.displaySymbol],
       ['Direcție', <span className={long && !p.ticket.close ? 'text-bull' : 'text-bear'}>{sideRo}</span>],
+      ...(hedgeOrder ? [['Mod poziții', 'hedge (long și short separate)'] as [string, React.ReactNode]] : []),
       ['Tip', ORDER_KIND_RO[p.ticket.kind]],
       ['Cantitate', `${plain(p.amount)} ${base}${p.contracts !== null && p.contracts !== p.amount ? ` (${plain(p.contracts)} contracte)` : ''}`],
     ];
@@ -472,7 +480,15 @@ export function OrderTicket({ seed, onClose }: { seed: TicketSeed; onClose: () =
     );
   }
 
-  const sideLabels: [OrderSide, string][] = futures ? [['buy', 'Long'], ['sell', 'Short']] : platform.etoro ? [['buy', 'Cumpără'], ['sell', 'Short']] : [['buy', 'Cumpără'], ['sell', 'Vinde']];
+  // FD-KUCOINHEDGE: in hedge mode a buy opens the long and a sell the short; reduce-only, each closes the other side.
+  const hedge = futures && ins?.positionMode === 'hedge';
+  const sideLabels: [OrderSide, string][] = futures
+    ? hedge && reduceOnly
+      ? [['buy', 'Închide short'], ['sell', 'Închide long']]
+      : [['buy', 'Long'], ['sell', 'Short']]
+    : platform.etoro
+      ? [['buy', 'Cumpără'], ['sell', 'Short']]
+      : [['buy', 'Cumpără'], ['sell', 'Vinde']];
   const needsPrice = ['limit', 'stop_limit', 'limit_ioc'].includes(kind);
   const needsTrigger = ['stop', 'stop_limit', 'mit'].includes(kind);
   return (
@@ -576,6 +592,26 @@ export function OrderTicket({ seed, onClose }: { seed: TicketSeed; onClose: () =
                 · Poziție: <span className={ins.position.side === 'long' ? 'text-bull' : 'text-bear'}>{ins.position.side}</span> <span className="num">{plain(ins.position.amount)}</span>
               </>
             )}
+            {ins.hedgePositions && (
+              // FD-KUCOINHEDGE, FD-HEDGEALL: the account's hedge mode (eToro: positions always apart), then the long and
+              // the short open on the instrument.
+              <>
+                {' '}
+                · {futures ? 'Mod hedge' : 'Poziții separate'}
+                {ins.hedgePositions?.long && (
+                  <>
+                    {' '}
+                    · <span className="text-bull">long</span> <span className="num">{plain(ins.hedgePositions.long.amount)}</span>
+                  </>
+                )}
+                {ins.hedgePositions?.short && (
+                  <>
+                    {' '}
+                    · <span className="text-bear">short</span> <span className="num">{plain(ins.hedgePositions.short.amount)}</span>
+                  </>
+                )}
+              </>
+            )}
           </p>
         )}
         {seed.close && posRows ? (
@@ -594,7 +630,7 @@ export function OrderTicket({ seed, onClose }: { seed: TicketSeed; onClose: () =
                       <th className="px-3 py-2 text-right font-normal">Preț intrare</th>
                       <th className="px-3 py-2 text-right font-normal">Investit</th>
                       <th className="px-3 py-2 text-right font-normal">Profit / pierdere</th>
-                      <th className="px-3 py-2 font-normal">De vândut</th>
+                      <th className="px-3 py-2 font-normal">{shortsOnly ? 'De închis' : 'De vândut'}</th>
                       <th className="px-3 py-2" aria-label="Acțiune" />
                     </tr>
                   </thead>
@@ -620,16 +656,16 @@ export function OrderTicket({ seed, onClose }: { seed: TicketSeed; onClose: () =
                               onChange={(e) => setRowUnits((u) => ({ ...u, [r.id]: e.target.value }))}
                               inputMode="decimal"
                               placeholder="toate"
-                              aria-label={`Unități de vândut din poziția din ${openedDay(r)}`}
+                              aria-label={`Unități de ${shortsOnly ? 'închis' : 'vândut'} din poziția din ${openedDay(r)}`}
                               aria-invalid={problem !== null}
-                              title={problem ? `De vândut: ${problem}` : 'Gol = toată poziția'}
+                              title={problem ? `De ${shortsOnly ? 'închis' : 'vândut'}: ${problem}` : 'Gol = toată poziția'}
                               className={clsx('num w-24', problem && 'border-bear')}
                             />
                           </td>
                           <td className="px-3 py-2 text-right">
                             <button type="button" className="btn btn-danger h-8 px-3 text-[12.5px]" disabled={problem !== null || check.isPending} onClick={() => check.mutate(rowBody(r))}>
                               {busy && <Loader2 size={14} className="animate-spin" aria-hidden />}
-                              Vinde
+                              {shortsOnly ? 'Închide' : 'Vinde'}
                             </button>
                           </td>
                         </tr>
@@ -639,7 +675,7 @@ export function OrderTicket({ seed, onClose }: { seed: TicketSeed; onClose: () =
                 </table>
               </div>
             )}
-            <p className="text-[12px] text-faint">„De vândut” gol = toată poziția. Fiecare vânzare are o confirmare.</p>
+            <p className="text-[12px] text-faint">{shortsOnly ? '„De închis” gol = toată poziția. Fiecare închidere are o confirmare.' : '„De vândut” gol = toată poziția. Fiecare vânzare are o confirmare.'}</p>
           </div>
         ) : seed.close ? (
           <Field
@@ -654,7 +690,10 @@ export function OrderTicket({ seed, onClose }: { seed: TicketSeed; onClose: () =
               {closing ? (
                 // Closing a position: the side is the one that reduces it.
                 <ReadOnly label="Direcție">
-                  <span className={side === 'buy' ? 'text-bull' : 'text-bear'}>{sideLabels.find(([v]) => v === side)?.[1]} (închide poziția)</span>
+                  <span className={side === 'buy' ? 'text-bull' : 'text-bear'}>
+                    {sideLabels.find(([v]) => v === side)?.[1]}
+                    {hedge ? '' : ' (închide poziția)'}
+                  </span>
                 </ReadOnly>
               ) : (
                 <Field label="Direcție">

@@ -3,19 +3,37 @@ import { readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { refreshContext } from '../market/context.ts';
 import type { AppContext } from '../context.ts';
-import { retagCoins, retagRecent } from '../news/ingest.ts';
+import { retagCoins, retagRecent, upgradeClassification } from '../news/ingest.ts';
 import { MEMBERS_JOB, membersSignature, RETAG_JOB } from '../news/index-members.ts';
 import { fetchDueSources } from '../news/fetcher.ts';
 import { EARN_JOB, FF_JOB, TV_JOB } from '../calendar/service.ts';
+import { fetchTvEarnings } from '../calendar/sources.ts';
 import { ECON_JOB, feedingEconomy } from '../economy/service.ts';
 import { refreshStockContext } from '../market/stock-context.ts';
 import { syncStockSources } from '../news/sources.ts';
 import { readJobData, writeJobData } from './scheduler.ts';
-import { MAINTENANCE_JOB } from '../sentiment/daily.ts';
+import { DAILY_JOB, MAINTENANCE_JOB } from '../sentiment/daily.ts';
 import { TD_PLAN_JOB } from '../market/stocks.ts';
+import { BOT_TICK_MS } from '../../shared/bot.ts';
+
+export const BOTS_JOB = 'bots';
 
 const MIN = 60_000;
 const LOG_RETENTION_DAYS = 30;
+/** FD-AISLOW §3: no AI scoring round starts after this, so the one in progress (up to 3 minutes) ends within the job's 10. */
+export const AI_RUN_BUDGET_MS = 5 * MIN;
+export const AI_MAX_ROUNDS = 40;
+
+/** The AI scoring rounds of one run: until one scores nothing, the budget is spent or the run is stopped. */
+export async function aiRounds(round: () => Promise<number>, signal: AbortSignal, now: () => number = Date.now): Promise<number> {
+  const started = now();
+  let rounds = 0;
+  while (rounds < AI_MAX_ROUNDS && !signal.aborted && now() - started < AI_RUN_BUDGET_MS) {
+    rounds++;
+    if ((await round()) === 0) break;
+  }
+  return rounds;
+}
 
 /** Deletes daily log files (sentiq-YYYY-MM-DD.log, or kryptoniq-… from before the rename) older than `before`. */
 export function pruneLogs(dir: string, before: number): number {
@@ -71,17 +89,14 @@ export function registerJobs(ctx: AppContext): void {
     },
   });
 
-  // FD-AIKEYS: the users' own AI scores the last days' news, each with their key.
+  // FD-AIKEYS: the users' own AI scores the last days' news, each with their key (FD-AISLOW §3: rounds of one batch each).
   scheduler.add({
     name: 'sentiment.ai',
     everyMs: 60_000,
     runOnStart: true,
     timeoutMs: 10 * MIN,
     run: async (signal) => {
-      for (let i = 0; i < 20 && !signal.aborted; i++) {
-        const n = await ctx.sentiment.scoreUsers(signal);
-        if (n === 0) break;
-      }
+      await aiRounds(() => ctx.sentiment.scoreUsers(signal), signal);
     },
   });
 
@@ -90,7 +105,9 @@ export function registerJobs(ctx: AppContext): void {
     everyMs: 2 * MIN,
     runOnStart: true,
     run: async () => {
-      // Once after an update that changes how news weigh (FD-IMPACT §3); then the regular refresh.
+      // Once after an update that changes how news are classified (FD-MACRORULES), then once after one that changes how
+      // they weigh (FD-IMPACT §3: the history recomputed from them); then the regular refresh.
+      if (await upgradeClassification(db, await ctx.coins.get(), await ctx.coins.classifier(), DAILY_JOB)) log.info('news: stored news classified again with the macro rules');
       if (await ctx.daily.upgradeHistory()) log.info('sentiment: daily history recomputed with the new weighing');
       await ctx.daily.refresh();
     },
@@ -203,7 +220,8 @@ export function registerJobs(ctx: AppContext): void {
     run: async () => {
       // Every user's stocks, once (FD-USERS §2): each user then sees only the results of their own.
       const symbols = (await db.all<{ coin: string }>("SELECT DISTINCT coin FROM watchlist WHERE kind = N'stock' ORDER BY coin")).map((r) => r.coin);
-      await ctx.calendar.refreshEarnings(symbols, (day) => ctx.stocks.nasdaq.earnings(day));
+      // FD-EARNTV: with the dates the companies confirmed, from TradingView.
+      await ctx.calendar.refreshEarnings(symbols, (day) => ctx.stocks.nasdaq.earnings(day), undefined, (s) => fetchTvEarnings(s));
     },
   });
 
@@ -228,6 +246,17 @@ export function registerJobs(ctx: AppContext): void {
     run: async () => {
       const errors = await refreshStockContext(db, ctx.stocks);
       if (errors.length) throw new Error(errors.join('; '));
+    },
+  });
+
+  // FD-BOT §8: the trading bots, every 30 s (only here: one instance runs the jobs).
+  scheduler.add({
+    name: BOTS_JOB,
+    everyMs: BOT_TICK_MS,
+    firstDelayMs: 30_000,
+    timeoutMs: 4 * MIN,
+    run: async (signal) => {
+      await ctx.botEngine.run(signal);
     },
   });
 

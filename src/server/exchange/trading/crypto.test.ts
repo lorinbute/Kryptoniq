@@ -48,7 +48,7 @@ function marketOf(m: FakeMarket) {
 const decimals = (step: number) => Math.max(0, Math.ceil(-Math.log10(step) - 1e-9));
 
 /** A ccxt-like client: markets, a price, balances, and what Sentiq asked it to do. */
-function fakeClient(id: string, list: FakeMarket[], o: { last?: number; free?: Record<string, number>; hedged?: boolean; positionMode?: boolean; createError?: Error; posMode?: string } = {}) {
+function fakeClient(id: string, list: FakeMarket[], o: { last?: number; free?: Record<string, number>; hedged?: boolean; positionMode?: boolean; createError?: Error; posMode?: string; positions?: object[]; uta?: boolean } = {}) {
   const calls: { fn: string; args: unknown[] }[] = [];
   const markets = Object.fromEntries(list.map((m) => [m.symbol, marketOf(m)]));
   const ex = {
@@ -75,7 +75,7 @@ function fakeClient(id: string, list: FakeMarket[], o: { last?: number; free?: R
       return { free: o.free ?? { USDT: 1000, BTC: 0.5 } };
     },
     async fetchPositions() {
-      return [];
+      return o.positions ?? [];
     },
     async fetchPositionMode() {
       calls.push({ fn: 'fetchPositionMode', args: [] });
@@ -100,7 +100,7 @@ function fakeClient(id: string, list: FakeMarket[], o: { last?: number; free?: R
       calls.push({ fn: 'cancelOrder', args });
     },
     async isUTAEnabled() {
-      return false;
+      return o.uta ?? false;
     },
   };
   return { ex: ex as unknown as Exchange, calls };
@@ -157,7 +157,7 @@ describe('checking an order (FD-TRADING §2)', () => {
 });
 
 describe('sending an order (FD-TRADING §3)', () => {
-  it('KuCoin futures: leverage with the order when isolated, set before when cross; TP / SL attached; one-way only', async () => {
+  it('KuCoin futures: leverage with the order when isolated, set before when cross; TP / SL attached', async () => {
     const fut = fakeClient('kucoinfutures', [BTC_PERP], { last: 60_000, positionMode: true });
     const spot = fakeClient('kucoin', [BTC_SPOT]);
     const t = new CcxtTrader('kucoin', { spot: spot.ex, futures: fut.ex }, silentLogger);
@@ -188,11 +188,104 @@ describe('sending an order (FD-TRADING §3)', () => {
     };
     const td = new CcxtTrader('kucoin', { spot: down.ex, futures: fut.ex }, silentLogger);
     await expect(td.instrument('futures', 'BTC/USDT:USDT')).rejects.toMatchObject({ code: 'REJECTED' });
-    // Hedge mode is refused before anything is sent.
-    const hedged = fakeClient('kucoinfutures', [BTC_PERP], { positionMode: true, hedged: true });
-    const t2 = new CcxtTrader('kucoin', { spot: spot.ex, futures: hedged.ex }, silentLogger);
-    await expect(t2.place(await t2.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01 })))).rejects.toMatchObject({ code: 'HEDGE_MODE' });
-    expect(hedged.calls.some((c) => c.fn === 'createOrder')).toBe(false);
+    // Another exchange in hedge mode (FD-HEDGEALL): the order names its position too, and so do Binance's TP / SL after
+    // the entry (ccxt: positionSide, without reduce-only).
+    const hedged = fakeClient('binance', [BTC_SPOT, BTC_PERP], { last: 100, positionMode: true, hedged: true });
+    const t2 = new CcxtTrader('binance', { spot: hedged.ex, futures: null }, silentLogger);
+    const hp = await t2.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01, stopLoss: 95 }));
+    expect(hp).toMatchObject({ positionMode: 'hedge', errors: [] });
+    await t2.place(hp);
+    expect(createArgs(hedged.calls)[5]).toMatchObject({ hedged: true });
+    expect(createArgs(hedged.calls, 1)[5]).toEqual({ stopLossPrice: 95, reduceOnly: true, hedged: true });
+  });
+
+  it('KuCoin futures in hedge mode (FD-KUCOINHEDGE): the long and the short apart, the position named with each order', async () => {
+    const both = [
+      { symbol: 'BTC/USDT:USDT', contracts: 10, side: 'long', entryPrice: 59_000, info: { positionSide: 'LONG' } },
+      // KuCoin names the side: it is taken over the size's sign.
+      { symbol: 'BTC/USDT:USDT', contracts: 20, side: 'long', entryPrice: 61_000, info: { positionSide: 'SHORT' } },
+      { symbol: 'ETH/USDT:USDT', contracts: 5, side: 'short', entryPrice: 3_000, info: { positionSide: 'SHORT' } },
+    ];
+    const fut = fakeClient('kucoinfutures', [BTC_PERP], { last: 60_000, positionMode: true, hedged: true, positions: both });
+    const spot = fakeClient('kucoin', [BTC_SPOT]);
+    const t = new CcxtTrader('kucoin', { spot: spot.ex, futures: fut.ex }, silentLogger);
+    // The warnings about the position (not the market order's general note).
+    const own = (w: string[]) => w.filter((x) => !x.startsWith('Un ordin la piață'));
+    expect(await t.instrument('futures', 'BTC/USDT:USDT')).toMatchObject({
+      positionMode: 'hedge',
+      position: null,
+      hedgePositions: { long: { side: 'long', amount: 0.01, entryPrice: 59_000 }, short: { side: 'short', amount: 0.02, entryPrice: 61_000 } },
+    });
+    // A short with a long open: a separate short, said so; it goes out with the position named (ccxt: SHORT).
+    const p = await t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'sell', amount: 0.005, leverage: 2, marginMode: 'isolated' }));
+    expect(p).toMatchObject({ positionMode: 'hedge', errors: [] });
+    expect(p.warnings.join(' ')).toContain('«Short» deschide un short separat, iar long-ul de 0.01 BTC rămâne deschis. Ca să-l închizi, bifează reduce-only («Închide long»).');
+    await t.place(p);
+    expect(createArgs(fut.calls)[5]).toMatchObject({ hedged: true, marginMode: 'isolated', leverage: 2 });
+    // Closing the long (a reduce-only sell), more than it holds: KuCoin would cancel it, said so.
+    const c = await t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'sell', amount: 0.015, reduceOnly: true, marginMode: 'isolated' }));
+    expect(own(c.warnings)).toEqual(['Închizi 0.015 BTC, iar poziția are 0.01 BTC: KuCoin anulează un ordin reduce-only mai mare decât poziția.']);
+    await t.place(c);
+    expect(createArgs(fut.calls, 1)[5]).toMatchObject({ hedged: true, reduceOnly: true, marginMode: 'isolated' });
+    expect(createArgs(fut.calls, 1)[5]).not.toHaveProperty('leverage');
+    // The mode was read once (kept 10 minutes).
+    expect(fut.calls.filter((x) => x.fn === 'fetchPositionMode')).toHaveLength(1);
+
+    // Only a long open: closing the short has nothing to close; a buy opens a long beside nothing (no warning).
+    const one = fakeClient('kucoinfutures', [BTC_PERP], { last: 60_000, positionMode: true, hedged: true, positions: [both[0]!] });
+    const t1 = new CcxtTrader('kucoin', { spot: spot.ex, futures: one.ex }, silentLogger);
+    expect(own((await t1.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'buy', amount: 0.01, reduceOnly: true }))).warnings)).toEqual([
+      'Nu e niciun short deschis pe BTC/USDT:USDT: «Închide short» nu are ce închide.',
+    ]);
+    expect(own((await t1.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'buy', amount: 0.01, leverage: 2 }))).warnings)).toEqual([]);
+
+    // One-way, as before: one position, the mode said; a reduce-only larger than the position warned (KuCoin).
+    const ow = fakeClient('kucoinfutures', [BTC_PERP], { last: 60_000, positionMode: true, positions: [{ ...both[0]!, info: { positionSide: 'BOTH' } }] });
+    const tw = new CcxtTrader('kucoin', { spot: spot.ex, futures: ow.ex }, silentLogger);
+    expect(await tw.instrument('futures', 'BTC/USDT:USDT')).toMatchObject({ positionMode: 'one-way', position: { side: 'long', amount: 0.01 } });
+    expect(await tw.instrument('futures', 'BTC/USDT:USDT')).not.toHaveProperty('hedgePositions');
+    const w = await tw.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'sell', amount: 0.02, reduceOnly: true }));
+    expect(w.positionMode).toBe('one-way');
+    expect(own(w.warnings)).toEqual(['Închizi 0.02 BTC, iar poziția are 0.01 BTC: KuCoin anulează un ordin reduce-only mai mare decât poziția.']);
+    // (A reduce-only buy does not close a long: no size compared.)
+    expect(own((await tw.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'buy', amount: 0.02, reduceOnly: true }))).warnings)).toEqual([]);
+    await tw.place(w);
+    expect(createArgs(ow.calls)[5]).not.toHaveProperty('hedged');
+  });
+
+  it('KuCoin hedge mode: the unified account is refused at the check; a mode changed since it was read is said, and read again', async () => {
+    const uta = fakeClient('kucoin', [BTC_SPOT, BTC_PERP], { last: 60_000, positionMode: true, hedged: true, uta: true });
+    const tu = new CcxtTrader('kucoin', { spot: uta.ex, futures: null }, silentLogger);
+    const p = await tu.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01, marginMode: 'cross' }));
+    expect(p.errors).toEqual([expect.stringMatching(/^Pe contul unificat KuCoin \(UTA\), API-ul KuCoin primește ordine futures doar în modul one-way/)]);
+    await expect(tu.place(p)).rejects.toMatchObject({ code: 'HEDGE_MODE', message: expect.stringMatching(/contul unificat KuCoin/) });
+    expect(uta.calls.some((c) => c.fn === 'createOrder')).toBe(false);
+
+    // Read as one-way, switched to hedge on KuCoin meanwhile: refused there (330012); the mode is read again next time.
+    const msg = 'kucoinfutures {"msg":"Your order is in One-Way Mode, while your account is set to Hedge Mode. Update your settings so they match and try again.","code":"330012"}';
+    const fut = fakeClient('kucoinfutures', [BTC_PERP], { last: 60_000, positionMode: true, createError: new ccxt.InvalidOrder(msg) });
+    const t = new CcxtTrader('kucoin', { spot: fakeClient('kucoin', [BTC_SPOT]).ex, futures: fut.ex }, silentLogger);
+    const q = await t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01 }));
+    await expect(t.place(q)).rejects.toMatchObject({ code: 'REJECTED', message: 'Modul pozițiilor (one-way / hedge) s-a schimbat pe KuCoin: ordinul n-a fost primit. Trimite-l din nou.' });
+    const reads = fut.calls.filter((c) => c.fn === 'fetchPositionMode').length;
+    await t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01 }));
+    expect(fut.calls.filter((c) => c.fn === 'fetchPositionMode')).toHaveLength(reads + 1);
+    // The unified account refused for the mode (it read as one-way): its own explanation, not "send it again".
+    const um = fakeClient('kucoin', [BTC_SPOT, BTC_PERP], { last: 60_000, positionMode: true, uta: true, createError: new ccxt.InvalidOrder(msg) });
+    const tum = new CcxtTrader('kucoin', { spot: um.ex, futures: null }, silentLogger);
+    await expect(tum.place(await tum.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01, marginMode: 'cross' })))).rejects.toMatchObject({ code: 'HEDGE_MODE', message: expect.stringMatching(/contul unificat KuCoin/) });
+    // Any exchange (FD-HEDGEALL): Binance's -4061, its name in the words, the mode read again.
+    const bmsg = 'binance {"code":-4061,"msg":"Order\'s position side does not match user\'s setting."}';
+    const bn = fakeClient('binance', [BTC_SPOT, BTC_PERP], { last: 100, positionMode: true, createError: new ccxt.InvalidOrder(bmsg) });
+    const tb = new CcxtTrader('binance', { spot: bn.ex, futures: null }, silentLogger);
+    await expect(tb.place(await tb.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01 })))).rejects.toMatchObject({ code: 'REJECTED', message: 'Modul pozițiilor (one-way / hedge) s-a schimbat pe Binance: ordinul n-a fost primit. Trimite-l din nou.' });
+    const breads = bn.calls.filter((c) => c.fn === 'fetchPositionMode').length;
+    await tb.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01 }));
+    expect(bn.calls.filter((c) => c.fn === 'fetchPositionMode')).toHaveLength(breads + 1);
+    // An answer lost after sending stays "unknown", whatever its words.
+    const lost = fakeClient('kucoinfutures', [BTC_PERP], { last: 60_000, positionMode: true, createError: new ccxt.RequestTimeout('kucoinfutures POST /api/v1/orders hedge mode timed out') });
+    const tl = new CcxtTrader('kucoin', { spot: fakeClient('kucoin', [BTC_SPOT]).ex, futures: lost.ex }, silentLogger);
+    await expect(tl.place(await tl.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01 })))).rejects.toMatchObject({ code: 'UNKNOWN_OUTCOME' });
   });
 
   it('a reduce-only close changes neither leverage nor margin (it only names the margin mode where asked)', async () => {
@@ -228,16 +321,20 @@ describe('sending an order (FD-TRADING §3)', () => {
     ]);
   });
 
-  it("Bitget: the account's position mode is read (hedge refused, one-way named), classic or unified; OKX names the margin per order", async () => {
+  it("Bitget: the account's position mode is read (one-way named, hedge sent as hedge), classic or unified; OKX names the margin per order", async () => {
     const bg = fakeClient('bitget', [BTC_SPOT, BTC_PERP], { last: 100 });
     const tb = new CcxtTrader('bitget', { spot: bg.ex, futures: null }, silentLogger);
     await tb.place(await tb.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01, leverage: 2, marginMode: 'isolated' })));
     expect(bg.calls.find((x) => x.fn === 'posMode')?.args[0]).toEqual({ symbol: 'BTCUSDTUSDT', productType: 'USDT-FUTURES', marginCoin: 'USDT' });
     expect(createArgs(bg.calls)[5]).toMatchObject({ oneWayMode: true, marginMode: 'isolated' });
     expect(bg.calls.find((x) => x.fn === 'setLeverage')?.args).toEqual([2, 'BTC/USDT:USDT', { marginMode: 'isolated' }]);
-    const hedge = fakeClient('bitget', [BTC_SPOT, BTC_PERP], { posMode: 'hedge_mode' });
+    // Hedge (FD-HEDGEALL): no one-way flag (it would override), the side named on an isolated leverage.
+    const hedge = fakeClient('bitget', [BTC_SPOT, BTC_PERP], { last: 100, posMode: 'hedge_mode' });
     const th = new CcxtTrader('bitget', { spot: hedge.ex, futures: null }, silentLogger);
-    await expect(th.place(await th.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01 })))).rejects.toMatchObject({ code: 'HEDGE_MODE' });
+    await th.place(await th.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'sell', amount: 0.01, leverage: 3, marginMode: 'isolated', stopLoss: 110 })));
+    expect(createArgs(hedge.calls)[5]).toMatchObject({ hedged: true, marginMode: 'isolated' });
+    expect(createArgs(hedge.calls)[5]).not.toHaveProperty('oneWayMode');
+    expect(hedge.calls.find((x) => x.fn === 'setLeverage')?.args).toEqual([3, 'BTC/USDT:USDT', { marginMode: 'isolated', holdSide: 'short' }]);
     // The unified account (the v3 settings answer): cross named "crossed", leverage without a mode, no one-way flag, the
     // hold mode read from the settings; no stop orders and no isolated margin from Sentiq.
     const unified = (holdMode: string) => {
@@ -258,7 +355,9 @@ describe('sending an order (FD-TRADING §3)', () => {
     await u.t.place(await u.t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'sell', amount: 0.01, reduceOnly: true, marginMode: 'isolated' })));
     expect(createArgs(u.calls, 1)[5]).toMatchObject({ reduceOnly: true, marginMode: 'isolated' });
     const uh = unified('hedge_mode');
-    await expect(uh.t.place(await uh.t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01, marginMode: 'cross' })))).rejects.toMatchObject({ code: 'HEDGE_MODE' });
+    await uh.t.place(await uh.t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01, marginMode: 'cross' })));
+    expect(createArgs(uh.calls)[5]).toMatchObject({ hedged: true, marginMode: 'crossed' });
+    expect(createArgs(uh.calls)[5]).not.toHaveProperty('oneWayMode');
     // The settings cannot be read for a network failure: an error, not a guess that the account is classic.
     const down = fakeClient('bitget', [BTC_SPOT, BTC_PERP], { last: 100 });
     Object.assign(down.ex, {
@@ -380,6 +479,78 @@ const ccxtMarket = (o: { id: string; symbol: string; base: string; quote: string
 });
 
 describe('what the real ccxt sends (FD-TRADING, ccxt 4.5)', () => {
+  it('FD-ORDEREDIT, Bybit: the position stop loss through trading-stop, a conditional stop amended with its trigger', async () => {
+    const perp = ccxtMarket({ id: 'BTCUSDT', symbol: 'BTC/USDT:USDT', base: 'BTC', quote: 'USDT', swap: true, contractSize: 1, amount: 0.001, price: 0.1, info: { category: 'linear' } });
+    const order = (id: string, stopOrderType: string, trigger: string) => ({ orderId: id, orderLinkId: '', symbol: 'BTCUSDT', side: 'Sell', orderType: 'Market', price: '0', qty: '0.01', triggerPrice: trigger, triggerDirection: 2, stopOrderType, reduceOnly: true, orderStatus: 'Untriggered', createdTime: '1700000000000', updatedTime: '1700000000000', positionIdx: 0, takeProfit: '', stopLoss: '', tpslMode: 'Full' });
+    const answer = (url: string) => {
+      if (url.includes('order/realtime')) return { retCode: 0, retMsg: 'OK', result: { category: 'linear', list: [order('p1', 'StopLoss', '57000'), order('c1', 'Stop', '56000')] } };
+      if (url.includes('position/list')) return { retCode: 0, retMsg: 'OK', result: { category: 'linear', list: [{ symbol: 'BTCUSDT', side: 'Buy', size: '0.01', avgPrice: '59000', positionIdx: 0, tradeMode: 0, markPrice: '60000', leverage: '5' }] } };
+      if (url.includes('tickers')) return { retCode: 0, result: { category: 'linear', list: [{ symbol: 'BTCUSDT', lastPrice: '60000', bid1Price: '59999', ask1Price: '60001' }] } };
+      if (url.includes('order/amend')) return { retCode: 0, retMsg: 'OK', result: { orderId: 'c1', orderLinkId: '' } };
+      return { retCode: 0, retMsg: 'OK', result: {} };
+    };
+    const c = realClient(ccxt.bybit as never, { apiKey: 'k1234567', secret: 's1234567' }, [perp], answer, { enableUnifiedAccount: true, enableUnifiedMargin: false });
+    const t = new CcxtTrader('bybit', { spot: c.ex, futures: null }, silentLogger);
+    const go = async (changes: Parameters<CcxtTrader['normalizeModify']>[0]['changes']) => {
+      const plan = await t.normalizeModify({ accountId: 1, idemKey: KEY, market: 'futures', symbol: 'BTC/USDT:USDT', position: { side: 'long' }, changes });
+      expect(plan.preview.errors).toEqual([]);
+      return t.modify(plan);
+    };
+    await go([{ what: 'sl', orderId: 'p1', level: 58_000 }]);
+    await go([{ what: 'sl', orderId: 'c1', level: 57_500 }]);
+    const writes = c.sent.filter((x) => x.method === 'POST');
+    expect(writes[0]).toMatchObject({ url: expect.stringContaining('/v5/position/trading-stop'), body: { category: 'linear', symbol: 'BTCUSDT', tpslMode: 'Full', positionIdx: 0, stopLoss: '58000' } });
+    expect(writes[1]).toMatchObject({ url: expect.stringContaining('/v5/order/amend'), body: { category: 'linear', symbol: 'BTCUSDT', orderId: 'c1', triggerPrice: '57500' } });
+    expect(writes).toHaveLength(2);
+  });
+
+  it('FD-ORDEREDIT, OKX: the TP / SL algo orders read by their kinds, one leg of an oco amended', async () => {
+    const perp = ccxtMarket({ id: 'BTC-USDT-SWAP', symbol: 'BTC/USDT:USDT', base: 'BTC', quote: 'USDT', swap: true, contractSize: 0.01, amount: 1, price: 0.1, info: { instType: 'SWAP' } });
+    const answer = (url: string) => {
+      if (url.includes('orders-algo-pending') && url.includes('conditional')) {
+        return { code: '0', msg: '', data: [{ algoId: 'a1', instId: 'BTC-USDT-SWAP', instType: 'SWAP', ordType: 'oco', side: 'sell', posSide: 'net', sz: '10', slTriggerPx: '57000', slOrdPx: '-1', tpTriggerPx: '65000', tpOrdPx: '-1', reduceOnly: 'true', state: 'live', cTime: '1700000000000' }] };
+      }
+      if (url.includes('orders-algo-pending') || url.includes('orders-pending')) return { code: '0', msg: '', data: [] };
+      if (url.includes('account/positions')) return { code: '0', msg: '', data: [{ instId: 'BTC-USDT-SWAP', instType: 'SWAP', pos: '10', posSide: 'net', avgPx: '59000', mgnMode: 'cross', lever: '5', markPx: '60000' }] };
+      if (url.includes('account/config')) return { code: '0', msg: '', data: [{ posMode: 'net_mode' }] };
+      if (url.includes('market/ticker')) return { code: '0', msg: '', data: [{ instId: 'BTC-USDT-SWAP', last: '60000', bidPx: '59999', askPx: '60001' }] };
+      if (url.includes('amend-algos')) return { code: '0', msg: '', data: [{ algoId: 'a1', sCode: '0', sMsg: '' }] };
+      return { code: '0', msg: '', data: [] };
+    };
+    const c = realClient(ccxt.okx as never, { apiKey: 'k1234567', secret: 's1234567', password: 'p1234567' }, [perp], answer);
+    const t = new CcxtTrader('okx', { spot: c.ex, futures: null }, silentLogger);
+    const plan = await t.normalizeModify({ accountId: 1, idemKey: KEY, market: 'futures', symbol: 'BTC/USDT:USDT', position: { side: 'long' }, changes: [{ what: 'sl', orderId: 'a1', level: 58_000 }] });
+    expect(plan.preview).toMatchObject({ errors: [], steps: [{ how: 'amend', before: { stopLoss: 57_000, takeProfit: 65_000 }, after: { stopLoss: 58_000, takeProfit: 65_000 } }] });
+    await t.modify(plan);
+    const writes = c.sent.filter((x) => x.method === 'POST');
+    expect(writes).toEqual([expect.objectContaining({ url: expect.stringContaining('/api/v5/trade/amend-algos'), body: { instId: 'BTC-USDT-SWAP', algoId: 'a1', newSlTriggerPx: '58000', newSlOrdPx: '-1' } })]);
+  });
+
+  it('FD-ORDEREDIT, KuCoin futures: a stop loss moved: read from the stop orders, the new one (stop down, reduce-only) first, then the old one cancelled', async () => {
+    const perp = ccxtMarket({ id: 'XBTUSDTM', symbol: 'BTC/USDT:USDT', base: 'BTC', quote: 'USDT', swap: true, contractSize: 0.001, amount: 1, price: 0.1, min: 1 });
+    const answer = (url: string, method: string) => {
+      if (url.includes('getPositionMode')) return { code: '200000', data: { positionMode: 0 } };
+      if (method === 'DELETE') return { code: '200000', data: { cancelledOrderIds: ['sl1'] } };
+      if (url.includes('stopOrders')) {
+        return { code: '200000', data: { currentPage: 1, pageSize: 50, totalNum: 1, totalPage: 1, items: [{ id: 'sl1', symbol: 'XBTUSDTM', type: 'market', side: 'sell', size: 10, stop: 'down', stopPriceType: 'TP', stopPrice: '57000', reduceOnly: true, status: 'open', isActive: true, marginMode: 'ISOLATED', leverage: '5', createdAt: 1_700_000_000_000, settleCurrency: 'USDT' }] } };
+      }
+      if (url.includes('/api/v1/positions')) return { code: '200000', data: [{ symbol: 'XBTUSDTM', currentQty: 10, avgEntryPrice: '59000', isOpen: true, crossMode: false, marginMode: 'ISOLATED', realLeverage: 5, markPrice: '60000', positionSide: 'BOTH', settleCurrency: 'USDT' }] };
+      if (method === 'POST' && url.includes('/api/v1/orders')) return { code: '200000', data: { orderId: 'kf-new' } };
+      if (url.includes('/api/v1/orders')) return { code: '200000', data: { currentPage: 1, pageSize: 50, totalNum: 0, totalPage: 0, items: [] } };
+      return { code: '200000', data: { price: '60000', bestBidPrice: '59999', bestAskPrice: '60001', symbol: 'XBTUSDTM' } };
+    };
+    const fut = realClient(ccxt.kucoinfutures as never, { apiKey: 'k1234567', secret: 's1234567', password: 'p1234567' }, [perp], answer, { uta: false });
+    const spot = realClient(ccxt.kucoin as never, { apiKey: 'k1234567', secret: 's1234567', password: 'p1234567' }, [], answer, { uta: false });
+    const t = new CcxtTrader('kucoin', { spot: spot.ex, futures: fut.ex }, silentLogger);
+    const plan = await t.normalizeModify({ accountId: 1, idemKey: KEY, market: 'futures', symbol: 'BTC/USDT:USDT', position: { side: 'long' }, changes: [{ what: 'sl', orderId: 'sl1', level: 58_000 }] });
+    expect(plan.preview).toMatchObject({ errors: [], steps: [{ how: 'place-then-cancel', before: { triggerPrice: 57_000 }, after: { triggerPrice: 58_000 } }] });
+    expect((await t.modify(plan)).status).toBe('done');
+    const writes = fut.sent.filter((x) => x.method !== 'GET');
+    expect(writes[0]?.body).toMatchObject({ side: 'sell', symbol: 'XBTUSDTM', type: 'market', size: 10, stop: 'down', stopPrice: '58000', reduceOnly: true, marginMode: 'ISOLATED' });
+    expect(writes[1]).toMatchObject({ method: 'DELETE', url: expect.stringContaining('sl1') });
+    expect(writes).toHaveLength(2);
+  });
+
   it('KuCoin futures: lots, leverage, isolated margin and the client id in the order; one-way checked first', async () => {
     const perp = ccxtMarket({ id: 'XBTUSDTM', symbol: 'BTC/USDT:USDT', base: 'BTC', quote: 'USDT', swap: true, contractSize: 0.001, amount: 1, price: 0.1, min: 1 });
     const answer = (url: string) => {
@@ -408,6 +579,35 @@ describe('what the real ccxt sends (FD-TRADING, ccxt 4.5)', () => {
     await t.place(await t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.005, leverage: 2, stopLoss: 58_000, takeProfit: 64_000 })));
     const order = fut.sent.find((s) => s.method === 'POST' && s.url.includes('st-orders'));
     expect(order?.body).toMatchObject({ type: 'market', size: 5, leverage: 2, triggerStopDownPrice: '58000', triggerStopUpPrice: '64000' });
+  });
+
+  it('KuCoin futures in hedge mode (FD-KUCOINHEDGE): each order names its position, the TP / SL one too', async () => {
+    const perp = ccxtMarket({ id: 'XBTUSDTM', symbol: 'BTC/USDT:USDT', base: 'BTC', quote: 'USDT', swap: true, contractSize: 0.001, amount: 1, price: 0.1, min: 1 });
+    const answer = (url: string) => {
+      if (url.includes('getPositionMode')) return { code: '200000', data: { positionMode: 1 } };
+      if (url.includes('st-orders')) return { code: '200000', data: { orderId: 'kf-st' } };
+      if (url.includes('/orders')) return { code: '200000', data: { orderId: 'kf-h' } };
+      return { code: '200000', data: { price: '60000' } };
+    };
+    const fut = realClient(ccxt.kucoinfutures as never, { apiKey: 'k1234567', secret: 's1234567', password: 'p1234567' }, [perp], answer, { uta: false });
+    const spot = realClient(ccxt.kucoin as never, { apiKey: 'k1234567', secret: 's1234567', password: 'p1234567' }, [], answer, { uta: false });
+    const t = new CcxtTrader('kucoin', { spot: spot.ex, futures: fut.ex }, silentLogger);
+    const send = async (o: Partial<OrderTicket>) => t.place(await t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.005, marginMode: 'isolated', ...o })));
+    await send({ side: 'buy', leverage: 3 });
+    await send({ side: 'sell', leverage: 3 });
+    await send({ side: 'sell', reduceOnly: true });
+    await send({ side: 'buy', reduceOnly: true });
+    await send({ side: 'sell', leverage: 2, stopLoss: 62_000, takeProfit: 55_000 });
+    const orders = fut.sent.filter((x) => x.method === 'POST' && /\/api\/v1\/(st-)?orders$/.test(x.url)).map((x) => x.body);
+    expect(orders.map((b) => [b?.side, b?.reduceOnly ?? false, b?.positionSide])).toEqual([
+      ['buy', false, 'LONG'],
+      ['sell', false, 'SHORT'],
+      ['sell', true, 'LONG'],
+      ['buy', true, 'SHORT'],
+      ['sell', false, 'SHORT'],
+    ]);
+    expect(orders[4]).toMatchObject({ triggerStopUpPrice: '55000', triggerStopDownPrice: '62000', leverage: 2, marginMode: 'ISOLATED' });
+    expect(fut.sent.filter((x) => x.url.includes('getPositionMode'))).toHaveLength(1);
   });
 
   it("KuCoin spot: a buy stop is a stop order of kind 'entry'", async () => {
@@ -457,6 +657,120 @@ describe('what the real ccxt sends (FD-TRADING, ccxt 4.5)', () => {
     expect(order?.body).toMatchObject({ category: 'USDT-FUTURES', symbol: 'BTCUSDT', side: 'buy', orderType: 'limit', qty: '0.01', price: '60000', marginMode: 'crossed', clientOid: clientIdOf(KEY) });
     expect(order?.body).not.toHaveProperty('oneWayMode');
     expect(c.sent.findIndex((s) => s.url.includes('set-leverage'))).toBeLessThan(c.sent.indexOf(order!));
+  });
+
+  it('hedge mode on Binance (FD-HEDGEALL): the position side on the entry and on the TP / SL after it, never reduce-only', async () => {
+    const perp = ccxtMarket({ id: 'BTCUSDT', symbol: 'BTC/USDT:USDT', base: 'BTC', quote: 'USDT', swap: true, contractSize: 1, amount: 0.001, price: 0.1, info: { orderTypes: ['LIMIT', 'MARKET', 'STOP', 'STOP_MARKET', 'TAKE_PROFIT', 'TAKE_PROFIT_MARKET'] } });
+    const answer = (url: string, method: string) => {
+      if (url.includes('positionSide/dual')) return { dualSidePosition: true };
+      if (method === 'POST' && /\/(order|algoOrder)\b/.test(url)) return { orderId: 77, algoId: 78, status: 'NEW', symbol: 'BTCUSDT' };
+      if (url.includes('ticker')) return { symbol: 'BTCUSDT', lastPrice: '60000', bidPrice: '59999', askPrice: '60001' };
+      return {};
+    };
+    const c = realClient(ccxt.binance as never, { apiKey: 'k1234567', secret: 's1234567' }, [perp], answer);
+    const t = new CcxtTrader('binance', { spot: c.ex, futures: null }, silentLogger);
+    const p = await t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'sell', amount: 0.01, leverage: 2, marginMode: 'isolated', stopLoss: 62_000, takeProfit: 55_000 }));
+    expect(p).toMatchObject({ positionMode: 'hedge', errors: [] });
+    const r = await t.place(p);
+    expect(r.followUps.map((f) => f.ok)).toEqual([true, true]);
+    const orders = c.sent.filter((s) => s.method === 'POST' && /\/(order|algoOrder)\b/.test(s.url)).map((s) => s.body ?? {});
+    expect(orders.map((b) => [b.side, b.positionSide, 'reduceOnly' in b])).toEqual([
+      ['SELL', 'SHORT', false],
+      ['BUY', 'SHORT', false],
+      ['BUY', 'SHORT', false],
+    ]);
+    // Closing the short (reduce-only buy): the short named, no reduce-only.
+    await t.place(await t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'buy', amount: 0.01, reduceOnly: true, idemKey: KEY.replace('0f', '3f') })));
+    const close = c.sent.filter((s) => s.method === 'POST' && /\/order\b/.test(s.url)).at(-1)?.body ?? {};
+    expect([close.side, close.positionSide, 'reduceOnly' in close]).toEqual(['BUY', 'SHORT', false]);
+  });
+
+  it('hedge mode on Bybit (FD-HEDGEALL): read per pair from its position list; positionIdx 1 / 2, reduce-only on the side closed', async () => {
+    const perp = ccxtMarket({ id: 'BTCUSDT', symbol: 'BTC/USDT:USDT', base: 'BTC', quote: 'USDT', swap: true, contractSize: 1, amount: 0.001, price: 0.1, info: { category: 'linear' } });
+    let list = [{ symbol: 'BTCUSDT', positionIdx: 1, size: '0', side: '' }, { symbol: 'BTCUSDT', positionIdx: 2, size: '0', side: '' }];
+    const answer = (url: string) => {
+      if (url.includes('position/list')) return { retCode: 0, retMsg: 'OK', result: { category: 'linear', list } };
+      if (url.includes('order/create')) return { retCode: 0, retMsg: 'OK', result: { orderId: 'by-h', orderLinkId: '' } };
+      if (url.includes('set-leverage')) return { retCode: 0, retMsg: 'OK', result: {} };
+      if (url.includes('tickers')) return { retCode: 0, result: { category: 'linear', list: [{ symbol: 'BTCUSDT', lastPrice: '60000', bid1Price: '59999', ask1Price: '60001' }] } };
+      return { retCode: 0, result: {} };
+    };
+    const c = realClient(ccxt.bybit as never, { apiKey: 'k1234567', secret: 's1234567' }, [perp], answer, { enableUnifiedAccount: true, enableUnifiedMargin: false });
+    const t = new CcxtTrader('bybit', { spot: c.ex, futures: null }, silentLogger);
+    const send = async (o: Partial<OrderTicket>, n: number) => t.place(await t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01, idemKey: KEY.replace('0f', `${n}f`), ...o })));
+    expect(await t.instrument('futures', 'BTC/USDT:USDT')).toMatchObject({ positionMode: 'hedge' });
+    await send({ side: 'buy', leverage: 2, stopLoss: 58_000 }, 1);
+    await send({ side: 'sell', leverage: 2 }, 2);
+    await send({ side: 'sell', reduceOnly: true }, 3);
+    const orders = c.sent.filter((s) => s.url.includes('order/create')).map((s) => s.body ?? {});
+    expect(orders.map((b) => [b.side, b.positionIdx, b.reduceOnly ?? null])).toEqual([
+      ['Buy', 1, null],
+      ['Sell', 2, null],
+      ['Sell', 1, null],
+    ]);
+    expect(orders[0]).toMatchObject({ stopLoss: '58000' });
+    // One-way (positionIdx 0): no position named; an empty list says nothing (sent one-way).
+    list = [{ symbol: 'BTCUSDT', positionIdx: 0, size: '0', side: '' }];
+    const ow = new CcxtTrader('bybit', { spot: c.ex, futures: null }, silentLogger);
+    expect(await ow.instrument('futures', 'BTC/USDT:USDT')).toMatchObject({ positionMode: 'one-way' });
+    list = [];
+    const none = new CcxtTrader('bybit', { spot: c.ex, futures: null }, silentLogger);
+    expect(await none.instrument('futures', 'BTC/USDT:USDT')).not.toHaveProperty('positionMode');
+    await none.place(await none.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', amount: 0.01, idemKey: KEY.replace('0f', '9f') })));
+    expect(c.sent.filter((s) => s.url.includes('order/create')).at(-1)?.body).not.toHaveProperty('positionIdx');
+  });
+
+  it('hedge mode on OKX (FD-HEDGEALL): posSide on the order and on an isolated leverage; reduce-only closes its side', async () => {
+    const perp = ccxtMarket({ id: 'BTC-USDT-SWAP', symbol: 'BTC/USDT:USDT', base: 'BTC', quote: 'USDT', swap: true, contractSize: 0.01, amount: 1, price: 0.1 });
+    const answer = (url: string) => {
+      if (url.includes('account/config')) return { code: '0', data: [{ posMode: 'long_short_mode', acctLv: '2' }] };
+      if (/trade\/(order|batch-orders)/.test(url)) return { code: '0', data: [{ ordId: 'ok-1', sCode: '0', sMsg: '' }] };
+      if (url.includes('set-leverage')) return { code: '0', data: [{}] };
+      if (url.includes('ticker')) return { code: '0', data: [{ instId: 'BTC-USDT-SWAP', last: '60000', bidPx: '59999', askPx: '60001' }] };
+      return { code: '0', data: [] };
+    };
+    const c = realClient(ccxt.okx as never, { apiKey: 'k1234567', secret: 's1234567', password: 'p1234567' }, [perp], answer);
+    const t = new CcxtTrader('okx', { spot: c.ex, futures: null }, silentLogger);
+    await t.place(await t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'sell', amount: 0.05, leverage: 4, marginMode: 'isolated', stopLoss: 62_000 })));
+    await t.place(await t.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'buy', amount: 0.05, reduceOnly: true, marginMode: 'isolated', idemKey: KEY.replace('0f', '4f') })));
+    expect(c.sent.find((s) => s.url.includes('set-leverage'))?.body).toMatchObject({ lever: 4, mgnMode: 'isolated', instId: 'BTC-USDT-SWAP', posSide: 'short' });
+    // (ccxt sends OKX orders through the batch endpoint: one order in a list.)
+    const orders = c.sent.filter((s) => /trade\/(order|batch-orders)/.test(s.url)).map((s) => (Array.isArray(s.body) ? s.body[0] : s.body) ?? {});
+    expect(orders.map((b) => [b.side, b.posSide, b.tdMode, b.reduceOnly ?? null])).toEqual([
+      ['sell', 'short', 'isolated', null],
+      ['buy', 'short', 'isolated', null],
+    ]);
+  });
+
+  it('hedge mode on Bitget, classic and unified (FD-HEDGEALL): open / close on the classic one, posSide on the unified one', async () => {
+    const perp = ccxtMarket({ id: 'BTCUSDT', symbol: 'BTC/USDT:USDT', base: 'BTC', quote: 'USDT', swap: true, contractSize: 1, amount: 0.0001, price: 0.1 });
+    const answer = (unified: boolean) => (url: string) => {
+      if (url.includes('/api/v3/account/settings')) return unified ? { code: '00000', data: { accountMode: 'unified', holdMode: 'hedge_mode' } } : { code: '40084', msg: 'not unified' };
+      if (url.includes('/api/v2/mix/account/account')) return { code: '00000', data: { posMode: 'hedge_mode', marginCoin: 'USDT' } };
+      if (url.includes('set-leverage')) return { code: '00000', data: 'success' };
+      if (url.includes('place-order')) return { code: '00000', data: { orderId: 'bg-h', clientOid: clientIdOf(KEY) } };
+      return { code: '00000', data: [] };
+    };
+    const classic = realClient(ccxt.bitget as never, { apiKey: 'k1234567', secret: 's1234567', password: 'p1234567' }, [perp], answer(false));
+    const tc = new CcxtTrader('bitget', { spot: classic.ex, futures: null }, silentLogger);
+    await tc.place(await tc.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'buy', amount: 0.01, leverage: 5, marginMode: 'isolated' })));
+    await tc.place(await tc.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'sell', amount: 0.01, reduceOnly: true, marginMode: 'isolated', idemKey: KEY.replace('0f', '5f') })));
+    expect(classic.sent.find((s) => s.url.includes('set-leverage'))?.body).toMatchObject({ symbol: 'BTCUSDT', leverage: '5', holdSide: 'long' });
+    const co = classic.sent.filter((s) => s.url.includes('place-order')).map((s) => s.body ?? {});
+    // Closing a long in hedge mode is a "buy" that closes (Bitget names the position's direction).
+    expect(co.map((b) => [b.side, b.tradeSide, b.reduceOnly ?? null])).toEqual([
+      ['buy', 'Open', null],
+      ['buy', 'Close', null],
+    ]);
+    const unified = realClient(ccxt.bitget as never, { apiKey: 'k1234567', secret: 's1234567', password: 'p1234567' }, [perp], answer(true));
+    const tu = new CcxtTrader('bitget', { spot: unified.ex, futures: null }, silentLogger);
+    await tu.place(await tu.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'sell', amount: 0.01, marginMode: 'cross' })));
+    await tu.place(await tu.normalize(ticket({ market: 'futures', symbol: 'BTC/USDT:USDT', side: 'buy', amount: 0.01, reduceOnly: true, marginMode: 'cross', idemKey: KEY.replace('0f', '6f') })));
+    const uo = unified.sent.filter((s) => s.url.includes('place-order')).map((s) => s.body ?? {});
+    expect(uo.map((b) => [b.side, b.posSide])).toEqual([
+      ['sell', 'short'],
+      ['buy', 'short'],
+    ]);
   });
 
   it('Bitget unified account: a spot market buy names the quote sum the check showed (v3 reads `qty` in USDT there)', async () => {

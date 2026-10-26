@@ -1,4 +1,5 @@
-// Reordering the favourites by dragging (FD-CHARTFAV §2): the chips above the chart and the rows in Settings.
+// Reordering a watch list by dragging (FD-CHARTFAV §2; one list at a time since FD-WATCHLISTS): the chart's symbol panel
+// and the Liste de urmărire page.
 // Mouse: drag after 6 px (a plain click still opens the chart). Touch: hold 250 ms, then drag (scrolling still works).
 // Keyboard: Alt + arrow on an item moves it one place (dnd-kit's keyboard sensor would take Enter / Space from the chip).
 import { useCallback, useRef, useState, type ReactNode } from 'react';
@@ -16,7 +17,7 @@ import {
 import { rectSortingStrategy, SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { errorMessage } from '../api.ts';
-import { useReorderWatchlist } from '../hooks.ts';
+import type { ListReorder } from '../hooks.ts';
 import { moveItem } from '../reorder.ts';
 
 /** A row moves only up or down. */
@@ -32,11 +33,23 @@ export interface FavoriteOrder {
 }
 
 /**
- * The drag area. `ids` is the whole favourites list in its current order; `children` gets the helpers.
- * `layout`: 'wrap' for the chips (several rows), 'rows' for the table.
+ * The drag area. `ids` is the whole list in its current order; `reorder` saves a new one (`useReorderList`); `children`
+ * gets the helpers. `layout`: 'wrap' for the chips (several rows), 'rows' for the table. `label`: what a screen reader
+ * hears for an id (a list's name rather than its number); the id itself by default (a symbol).
  */
-export function FavoritesDnd({ ids, layout, children }: { ids: string[]; layout: 'wrap' | 'rows'; children: (order: FavoriteOrder) => ReactNode }) {
-  const reorder = useReorderWatchlist();
+export function FavoritesDnd({
+  ids,
+  layout,
+  reorder,
+  label = (id) => id,
+  children,
+}: {
+  ids: string[];
+  layout: 'wrap' | 'rows';
+  reorder: ListReorder;
+  label?: (id: string) => string;
+  children: (order: FavoriteOrder) => ReactNode;
+}) {
   const [live, setLive] = useState('');
   const dragEndedAt = useRef(0);
   // The latest order, also between a move and the next render (several quick Alt + → presses add up).
@@ -57,9 +70,9 @@ export function FavoritesDnd({ ids, layout, children }: { ids: string[]; layout:
       const next = moveItem(list, from, to);
       latest.current = next;
       reorder.save(next);
-      setLive(`${id}: poziția ${to + 1} din ${next.length}`);
+      setLive(`${label(id)}: poziția ${to + 1} din ${next.length}`);
     },
-    [reorder],
+    [reorder, label],
   );
   const move = useCallback((id: string, delta: number) => commit(id, (list) => list.indexOf(id) + delta), [commit]);
   const onDragEnd = (e: DragEndEvent) => {
@@ -76,10 +89,10 @@ export function FavoritesDnd({ ids, layout, children }: { ids: string[]; layout:
     move(id, e.key === back ? -1 : 1);
   };
   const announcements: Announcements = {
-    onDragStart: ({ active }) => `Ai luat ${active.id}, poziția ${ids.indexOf(String(active.id)) + 1} din ${ids.length}.`,
-    onDragOver: ({ active, over }) => (over ? `${active.id} deasupra poziției ${ids.indexOf(String(over.id)) + 1}.` : `${active.id} nu e deasupra listei.`),
-    onDragEnd: ({ active, over }) => (over ? `${active.id} lăsat pe poziția ${ids.indexOf(String(over.id)) + 1}.` : `${active.id} a rămas pe loc.`),
-    onDragCancel: ({ active }) => `Mutarea lui ${active.id} a fost anulată.`,
+    onDragStart: ({ active }) => `Ai luat ${label(String(active.id))}, poziția ${ids.indexOf(String(active.id)) + 1} din ${ids.length}.`,
+    onDragOver: ({ active, over }) => (over ? `${label(String(active.id))} deasupra poziției ${ids.indexOf(String(over.id)) + 1}.` : `${label(String(active.id))} nu e deasupra listei.`),
+    onDragEnd: ({ active, over }) => (over ? `${label(String(active.id))} lăsat pe poziția ${ids.indexOf(String(over.id)) + 1}.` : `${label(String(active.id))} a rămas pe loc.`),
+    onDragCancel: ({ active }) => `Mutarea lui ${label(String(active.id))} a fost anulată.`,
   };
   return (
     <DndContext
@@ -90,7 +103,7 @@ export function FavoritesDnd({ ids, layout, children }: { ids: string[]; layout:
       modifiers={layout === 'rows' ? [verticalOnly] : undefined}
       accessibility={{
         announcements,
-        screenReaderInstructions: { draggable: 'Ca să muți un favorit: trage-l cu mouse-ul sau ține-l apăsat pe ecranul tactil. Cu tastatura: Alt și săgețile.' },
+        screenReaderInstructions: { draggable: 'Ca să muți un simbol: trage-l cu mouse-ul sau ține-l apăsat pe ecranul tactil. Cu tastatura: Alt și săgețile.' },
       }}
     >
       <SortableContext items={ids} strategy={layout === 'rows' ? verticalListSortingStrategy : rectSortingStrategy}>
@@ -110,7 +123,7 @@ export function FavoritesDnd({ ids, layout, children }: { ids: string[]; layout:
 
 /** One draggable favourite; `children` gets what to spread on the element (and on its handle). */
 export function SortableFavorite({ id, children }: { id: string; children: (s: ReturnType<typeof useSortable> & { style: React.CSSProperties }) => ReactNode }) {
-  const s = useSortable({ id, attributes: { roleDescription: 'favorit care se poate muta' } });
+  const s = useSortable({ id, attributes: { roleDescription: 'simbol care se poate muta' } });
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(s.transform),
     transition: s.transition,

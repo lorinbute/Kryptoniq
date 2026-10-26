@@ -1,6 +1,7 @@
 import { AI_PROVIDERS, type AiProvider } from '../shared/ai.ts';
 import { CHART_SYMBOL_RE, settingsSchema, type AiKeyView, type Settings, type SettingsView } from '../shared/settings.ts';
 import { salvageChartLines } from '../shared/hlines.ts';
+import { salvageChartStyle } from '../shared/chart-style.ts';
 import { isFavoriteId, STUDY_MAX, studyMemoryEntrySchema, studySchema, type FavoriteId, type Study, type StudyMemoryEntry } from '../shared/studies.ts';
 import { salvageOrderTicket } from '../shared/trading.ts';
 import { isValidTimeZone, systemTimeZone } from '../shared/time.ts';
@@ -80,7 +81,7 @@ export function checkAiKeyShape(key: string): void {
 export const isDevMail = (r: { apiKey: string | null; from: string }) => !r.apiKey || /(^|<)onboarding@resend\.dev>?$/i.test(r.from.trim());
 
 /** Settings each user has for themselves (FD-USERS §2); the rest are global and only the admin changes them. */
-export const USER_KEYS = ['timezone', 'market', 'scanner', 'calendar', 'indicator', 'lma', 'charts', 'ai', 'studies', 'studyFavorites', 'studyMemory', 'orderTicket', 'stockNews', 'chartLines', 'hlineTemplate'] as const;
+export const USER_KEYS = ['timezone', 'market', 'scanner', 'calendar', 'indicator', 'lma', 'charts', 'ai', 'studies', 'studyFavorites', 'studyMemory', 'orderTicket', 'stockNews', 'chartLines', 'hlineTemplate', 'chartStyle'] as const;
 type UserKey = (typeof USER_KEYS)[number];
 const isUserKey = (k: string): k is UserKey => (USER_KEYS as readonly string[]).includes(k);
 
@@ -215,6 +216,7 @@ export class SettingsService {
       else if (key === 'studyMemory') out.studyMemory = salvageStudyMemory(stored.studyMemory);
       else if (key === 'orderTicket') out.orderTicket = salvageOrderTicket(stored.orderTicket);
       else if (key === 'chartLines') out.chartLines = salvageChartLines(stored.chartLines, CHART_SYMBOL_RE);
+      else if (key === 'chartStyle') out.chartStyle = salvageChartStyle(stored.chartStyle);
     }
     return out as Settings;
   }
@@ -224,6 +226,7 @@ export class SettingsService {
     const res = settingsSchema.safeParse(merged);
     if (!res.success) throw new ValidationError(`Setări invalide: ${formatIssues(res.error.issues)}`, res.error.issues);
     if (!isValidTimeZone(res.data.timezone)) throw new ValidationError(`Fus orar necunoscut: ${res.data.timezone}`);
+    if (res.data.chartStyle.timezone !== null && !isValidTimeZone(res.data.chartStyle.timezone)) throw new ValidationError(`Fus orar necunoscut pentru grafic: ${res.data.chartStyle.timezone}`);
     if (res.data.indicator.lenFastEma <= 0 || res.data.indicator.lenSlowEma <= 0) throw new ValidationError('Perioadele EMA trebuie să fie pozitive');
     return res.data;
   }
@@ -334,6 +337,8 @@ export class SettingsService {
     const res = settingsSchema.safeParse(candidate);
     let out = res.success ? res.data : this.salvage(candidate);
     if (!isValidTimeZone(out.timezone)) out = { ...out, timezone: systemTimeZone() };
+    // FD-CHARTSETTINGS: a chart zone this server no longer knows: the account's (it would refuse every later save).
+    if (out.chartStyle.timezone !== null && !isValidTimeZone(out.chartStyle.timezone)) out = { ...out, chartStyle: { ...out.chartStyle, timezone: null } };
     return out;
   }
 

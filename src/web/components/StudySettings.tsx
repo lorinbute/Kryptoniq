@@ -3,76 +3,27 @@
 // "Stil" tab with its lines and horizontal lines. "Salvează" applies and remembers; "Valorile implicite" fills the form.
 import { useEffect, useId, useState } from 'react';
 import { clsx } from 'clsx';
-import { Info } from 'lucide-react';
-import type { InputConfig } from 'oakscriptjs';
-import { LINE_STYLE_IDS, type LineStyleId, type Study } from '../../shared/studies.ts';
+import type { IndicatorResult, InputConfig, PlotConfig } from 'oakscriptjs';
+import type { LineStyleId, Study } from '../../shared/studies.ts';
 import { TIMEFRAMES } from '../../shared/time.ts';
 import { errorMessage } from '../api.ts';
 import { changedInputs, inputProblem, pineTf, sanitizeInputs, SOURCES } from '../indicators/compute.ts';
 import type { StudyModule } from '../indicators/catalog.ts';
 import type { StudyRuntime } from '../indicators/runtime.ts';
-import { hlineShown, lineKind, plotWidth, styleHlines, stylePlots, widthChoices } from '../indicators/style.ts';
+import { hlineDefault, hlineShown, lineKind, plotWidth, styleFills, styleHlines, stylePlots } from '../indicators/style.ts';
+import { colorKey, INPUT_COLORED, INPUT_LINES, lineInput, linkStyle } from '../indicators/color-links.ts';
+import { ColorPicker } from './ColorPicker.tsx';
+import { InfoTip } from './InfoTip.tsx';
 
-/** FD-STUDYUX §3: a line's kind and its three widths, as the Style tab names them. */
-const LINE_STYLE_RO: Record<LineStyleId, string> = { solid: 'Continuă', dashed: 'Liniuțe', dotted: 'Puncte' };
-const WIDTH_RO = ['Implicită', 'Groasă', 'Foarte groasă'] as const;
+/** FD-STYLEUNIFY: a line's style as the script declares it (TradingView's names), solid when it declares none. */
+const styleId = (v: unknown): LineStyleId => (v === 'dashed' || v === 'dotted' ? v : 'solid');
 
-function LineStyleField({ label, value, onChange }: { label: string; value: LineStyleId; onChange: (v: LineStyleId) => void }) {
-  return (
-    <select aria-label={`${label}: tip`} value={value} onChange={(e) => onChange(e.target.value as LineStyleId)} className="w-[104px]">
-      {LINE_STYLE_IDS.map((id) => (
-        <option key={id} value={id}>
-          {LINE_STYLE_RO[id]}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-/** A width saved in pixels before the three choices (1–4 px) stays listed until another is picked. */
-function LineWidthField({ label, drawn, value, onChange }: { label: string; drawn: number; value: number | undefined; onChange: (v: number) => void }) {
-  const choices = widthChoices(drawn);
-  const current = value ?? choices[0];
-  return (
-    <select aria-label={`${label}: grosime`} value={String(current)} onChange={(e) => onChange(Number(e.target.value))} className="w-[128px]">
-      {!choices.includes(current) && <option value={current}>{current} px</option>}
-      {choices.map((w, i) => (
-        <option key={w} value={w}>
-          {WIDTH_RO[i]}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-type Draft = Record<string, unknown>;
 type PlotStyle = NonNullable<Study['plots']>[string];
 type HlineStyle = NonNullable<Study['hlines']>[string];
+type FillStyle = NonNullable<Study['fills']>[string];
 
 /** The timeframes an input can take: the chart's, Sentiq's, the month (from daily bars). */
 const TF_OPTIONS: { value: string; label: string }[] = [{ value: '', label: 'Grafic' }, ...TIMEFRAMES.map((t) => ({ value: pineTf(t), label: t })), { value: '1M', label: '1M' }];
-
-/** #RRGGBB of a colour (the colour picker has no alpha); `alpha`: its "AA" suffix, kept on a change. */
-function hexOf(c: string): { hex: string; alpha: string } {
-  const s = c.trim();
-  const m8 = /^#([0-9a-f]{6})([0-9a-f]{2})$/i.exec(s);
-  if (m8) return { hex: `#${m8[1]}`, alpha: m8[2] ?? '' };
-  if (/^#[0-9a-f]{6}$/i.test(s)) return { hex: s, alpha: '' };
-  const m3 = /^#([0-9a-f])([0-9a-f])([0-9a-f])([0-9a-f])?$/i.exec(s);
-  if (m3) return { hex: `#${m3[1]}${m3[1]}${m3[2]}${m3[2]}${m3[3]}${m3[3]}`, alpha: m3[4] ? `${m3[4]}${m3[4]}` : '' };
-  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(s);
-  if (rgb) {
-    const h = (n: string | undefined) => Math.min(255, Number(n ?? 0)).toString(16).padStart(2, '0');
-    const a = rgb[4] !== undefined ? Math.round(Math.min(1, Number(rgb[4])) * 255).toString(16).padStart(2, '0') : '';
-    return { hex: `#${h(rgb[1])}${h(rgb[2])}${h(rgb[3])}`, alpha: a };
-  }
-  return { hex: '#000000', alpha: '' };
-}
-
-function ColorField({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
-  const { hex, alpha } = hexOf(value);
-  return <input type="color" aria-label={label} value={hex} onChange={(e) => onChange(`${e.target.value.toUpperCase()}${alpha.toUpperCase()}`)} className="h-8 w-12 shrink-0 p-1" />;
-}
 
 /** Consecutive inputs of one group (Pine `group`), and in it the rows of inputs that share `inline`. */
 function groupsOf(inputs: readonly InputConfig[]): { title: string | null; rows: InputConfig[][] }[] {
@@ -91,21 +42,41 @@ function groupsOf(inputs: readonly InputConfig[]): { title: string | null; rows:
   return out;
 }
 
-export function StudySettings({ name, mod, runtime, study, onSave }: { name: string; mod: StudyModule; runtime: StudyRuntime; study: Study; onSave: (next: Study) => Promise<unknown> }) {
+export function StudySettings({
+  name,
+  mod,
+  runtime,
+  study,
+  result,
+  onSave,
+}: {
+  name: string;
+  mod: StudyModule;
+  runtime: StudyRuntime;
+  study: Study;
+  /** Its current result: the fills it draws now are listed with the declared ones (FD-FILLS). */
+  result: IndicatorResult | null;
+  onSave: (next: Study) => Promise<unknown>;
+}) {
   const formId = useId();
   const [tab, setTab] = useState<'inputs' | 'style'>('inputs');
-  const initial = () => ({ inputs: sanitizeInputs(mod, study.inputs), plots: { ...(study.plots ?? {}) }, hlines: { ...(study.hlines ?? {}) } });
+  // FD-COLORUNIFY: in the linked form (a line's colour chosen before in Stil, where it is now its input's).
+  const initial = () => {
+    const st = linkStyle(study);
+    return { inputs: sanitizeInputs(mod, st.inputs), plots: { ...(st.plots ?? {}) }, hlines: { ...(st.hlines ?? {}) }, fills: { ...(st.fills ?? {}) } };
+  };
   const [draft, setDraft] = useState(initial);
   const [invalid, setInvalid] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | { error: unknown }>('idle');
   // A save elsewhere (another tab, the defaults of another instance) resets the form only when the saved values change.
-  const savedKey = JSON.stringify([study.uid, study.inputs, study.plots, study.hlines]);
+  const savedKey = JSON.stringify([study.uid, study.inputs, study.plots, study.hlines, study.fills]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setDraft(initial()), [savedKey]);
 
   const setInput = (id: string, v: unknown) => setDraft((d) => ({ ...d, inputs: { ...d.inputs, [id]: v } }));
   const setPlot = (id: string, patch: Partial<PlotStyle>) => setDraft((d) => ({ ...d, plots: { ...d.plots, [id]: { ...d.plots[id], ...patch } } }));
   const setHline = (id: string, patch: Partial<HlineStyle>) => setDraft((d) => ({ ...d, hlines: { ...d.hlines, [id]: { ...d.hlines[id], ...patch } } }));
+  const setFill = (key: string, patch: Partial<FillStyle>) => setDraft((d) => ({ ...d, fills: { ...d.fills, [key]: { ...d.fills[key], ...patch } } }));
   const active = (cfg: InputConfig) => {
     try {
       return runtime.isInputActive(cfg, draft.inputs, mod.inputConfig);
@@ -113,12 +84,20 @@ export function StudySettings({ name, mod, runtime, study, onSave }: { name: str
       return true;
     }
   };
-  const tip = (t?: string) =>
-    t ? (
-      <span className="inline-flex shrink-0 cursor-help text-faint" title={t} aria-hidden>
-        <Info size={13} />
-      </span>
-    ) : null;
+  /**
+   * FD-COLORUNIFY: a line's width and style in its box, written to every plot in `ids` (a colour input that colours
+   * several lines sets them all; the box shows the first one's).
+   */
+  const lineBox = (def: PlotConfig, ids: readonly string[]) => {
+    const o = draft.plots[def.id] ?? {};
+    const all = (patch: Partial<PlotStyle>) => setDraft((d) => ({ ...d, plots: { ...d.plots, ...Object.fromEntries(ids.map((pid) => [pid, { ...d.plots[pid], ...patch }])) } }));
+    return {
+      ...(lineKind(def) ? { lineWidth: o.width ?? plotWidth(def), onLineWidth: (w: number) => all({ width: w }) } : {}),
+      ...(lineKind(def) === 'line' ? { lineStyle: o.style ?? styleId(def.linestyle), onLineStyle: (st: LineStyleId) => all({ style: st }) } : {}),
+    };
+  };
+  // FIX-INFOTIP: the Pine tooltip behind an (i), on hover and on a click or a tap.
+  const tip = (t?: string) => (t ? <InfoTip text={t} /> : null);
 
   const field = (cfg: InputConfig, inRow: boolean) => {
     const id = `${formId}-${cfg.id}`;
@@ -136,8 +115,13 @@ export function StudySettings({ name, mod, runtime, study, onSave }: { name: str
     }
     let control;
     const options = cfg.options?.length ? cfg.options.map((o) => ({ value: o, label: o })) : cfg.type === 'source' ? SOURCES.map((s) => ({ value: s, label: s })) : cfg.type === 'timeframe' ? TF_OPTIONS : null;
-    if (cfg.type === 'color') control = <ColorField label={label} value={String(v ?? '#000000')} onChange={(c) => setInput(cfg.id, c)} />;
-    else if (options)
+    if (cfg.type === 'color') {
+      // FD-COLORUNIFY: the colour of whole lines (MA Ribbon) is the same box as theirs in Stil: width and style too.
+      const ids = INPUT_LINES[study.id]?.[cfg.id] ?? [];
+      const line = ids.length ? mod.plotConfig.find((p) => p.id === ids[0]) : undefined;
+      const boxName = label.trim() || line?.title || cfg.inline || cfg.id;
+      control = <ColorPicker label={line ? `${boxName}: linie` : boxName} value={String(v ?? '#000000')} onChange={(c) => setInput(cfg.id, c)} {...(line ? lineBox(line, ids) : {})} />;
+    } else if (options)
       control = (
         <select id={id} value={String(v ?? '')} disabled={off} title={cfg.tooltip} onChange={(e) => setInput(cfg.id, e.target.value)} className="w-40">
           {/* A saved value no longer in the list stays visible until changed. */}
@@ -223,8 +207,10 @@ export function StudySettings({ name, mod, runtime, study, onSave }: { name: str
     const next: Study = { uid: study.uid, id: study.id, visible: study.visible, inputs: changedInputs(mod, draft.inputs) };
     const plots = clean(draft.plots);
     const hlines = clean(draft.hlines);
+    const fills = clean(draft.fills);
     if (plots) next.plots = plots;
     if (hlines) next.hlines = hlines;
+    if (fills) next.fills = fills;
     if (study.height !== undefined) next.height = study.height;
     setStatus('saving');
     try {
@@ -237,6 +223,7 @@ export function StudySettings({ name, mod, runtime, study, onSave }: { name: str
 
   const plots = stylePlots(mod);
   const hlines = styleHlines(mod);
+  const fills = styleFills(mod, result);
   return (
     <form
       noValidate
@@ -280,30 +267,48 @@ export function StudySettings({ name, mod, runtime, study, onSave }: { name: str
         )
       ) : (
         <div className="flex flex-col gap-2.5">
-          {plots.length === 0 && hlines.length === 0 && <p className="text-[13px] text-faint">Nimic de stilizat.</p>}
+          {plots.length === 0 && hlines.length === 0 && fills.length === 0 && <p className="text-[13px] text-faint">Nimic de stilizat.</p>}
           {plots.map((def) => {
             const o = draft.plots[def.id] ?? {};
             const shown = o.visible ?? !(def.display === 'none' || (typeof def.visible === 'boolean' && !def.visible) || (typeof def.visible === 'string' && draft.inputs[def.visible] === false));
             const palette = def.palette?.length ? def.palette : null;
+            const title = def.title || def.id;
+            // FD-COLORUNIFY: a line whose colour is an input (MA Ribbon) edits that input, as its box in Intrări does.
+            const input = lineInput(study.id, def.id);
+            const colored = INPUT_COLORED[study.id]?.[def.id];
+            let boxes;
+            if (input)
+              boxes = <ColorPicker label={`${title}: linie`} value={String(draft.inputs[input] ?? def.color ?? '#2962FF')} onChange={(v) => setInput(input, v)} {...lineBox(def, [def.id])} />;
+            else if (colored)
+              // Coloured from the inputs by a calculation: the box shows those colours and says where they are chosen.
+              boxes = (
+                <ColorPicker
+                  label={`${title}: culori`}
+                  value={`linear-gradient(to right, ${colored.inputs.map((i) => String(draft.inputs[i] ?? '#787B86')).join(', ')})`}
+                  colorNote={colored.note}
+                  {...lineBox(def, [def.id])}
+                />
+              );
+            else
+              // FD-STYLEUNIFY: one box per colour, with the line's width (a line, a histogram…) and style (a line); a plot
+              // of several colours has one box each, sharing the width and the style. A colour chosen before for the
+              // plot's own colour shows in its palette box until that box is used (FD-COLORUNIFY B).
+              boxes = (palette ?? [null]).map((c) => (
+                <ColorPicker
+                  key={c ?? 'color'}
+                  label={c ? `${title}: culoarea ${c}` : `${title}: culoare`}
+                  value={c ? (o.palette?.[c] ?? (o.color && def.color && colorKey(def.color) === colorKey(c) ? o.color : c)) : (o.color ?? def.color ?? '#2962FF')}
+                  onChange={(v) => setPlot(def.id, c ? { palette: { ...o.palette, [c]: v } } : { color: v })}
+                  {...lineBox(def, [def.id])}
+                />
+              ));
             return (
               <div key={def.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-[13px]">
                 <label className="flex min-w-0 items-center gap-2.5">
                   <input type="checkbox" checked={shown} onChange={(e) => setPlot(def.id, { visible: e.target.checked })} />
-                  <span className="text-muted">{def.title || def.id}</span>
+                  <span className="text-muted">{title}</span>
                 </label>
-                <span className="flex flex-wrap items-center gap-2">
-                  {palette ? (
-                    palette.map((c) => (
-                      <ColorField key={c} label={`${def.title}: culoarea ${c}`} value={o.palette?.[c] ?? c} onChange={(v) => setPlot(def.id, { palette: { ...o.palette, [c]: v } })} />
-                    ))
-                  ) : (
-                    <ColorField label={`${def.title}: culoare`} value={o.color ?? def.color} onChange={(v) => setPlot(def.id, { color: v })} />
-                  )}
-                  {lineKind(def) === 'line' && (
-                    <LineStyleField label={def.title || def.id} value={o.style ?? def.linestyle ?? 'solid'} onChange={(v) => setPlot(def.id, { style: v })} />
-                  )}
-                  {lineKind(def) && <LineWidthField label={def.title || def.id} drawn={plotWidth(def)} value={o.width} onChange={(v) => setPlot(def.id, { width: v })} />}
-                </span>
+                <span className="flex flex-wrap items-center gap-2">{boxes}</span>
               </div>
             );
           })}
@@ -330,13 +335,39 @@ export function StudySettings({ name, mod, runtime, study, onSave }: { name: str
                   </label>
                 </div>
                 <span className="flex flex-wrap items-center gap-2">
-                  <ColorField label={`${h.title ?? h.id}: culoare`} value={o.color ?? h.color ?? '#787B86'} onChange={(v) => setHline(h.id, { color: v })} />
-                  <LineStyleField label={h.title ?? h.id} value={o.style ?? h.linestyle ?? 'solid'} onChange={(v) => setHline(h.id, { style: v })} />
-                  <LineWidthField label={h.title ?? h.id} drawn={h.linewidth ?? 1} value={o.width} onChange={(v) => setHline(h.id, { width: v })} />
+                  <ColorPicker
+                    label={`${h.title ?? h.id}: culoare`}
+                    value={o.color ?? hlineDefault(mod, h, result)}
+                    onChange={(v) => setHline(h.id, { color: v })}
+                    lineWidth={o.width ?? h.linewidth ?? 1}
+                    onLineWidth={(w) => setHline(h.id, { width: w })}
+                    lineStyle={o.style ?? styleId(h.linestyle)}
+                    onLineStyle={(st) => setHline(h.id, { style: st })}
+                  />
                 </span>
               </div>
             );
           })}
+          {fills.length > 0 && (
+            // FD-FILLS: each fill shown or hidden; a single-coloured one also gets its colour, with its opacity.
+            <fieldset className="mt-2 flex flex-col gap-2.5">
+              <legend className="mb-2 text-[13px] font-semibold text-accent">Umpleri</legend>
+              {fills.map((f) => {
+                const o = draft.fills[f.key] ?? {};
+                return (
+                  <div key={f.key} className="flex items-center justify-between gap-3 text-[13px]">
+                    <label className="flex min-w-0 items-center gap-2.5">
+                      <input type="checkbox" className="shrink-0" checked={o.visible ?? true} onChange={(e) => setFill(f.key, { visible: e.target.checked })} />
+                      <span className="truncate text-muted" title={f.title}>
+                        {f.title}
+                      </span>
+                    </label>
+                    {f.color !== null && <ColorPicker label={`${f.title}: culoare`} value={o.color ?? f.color} onChange={(v) => setFill(f.key, { color: v })} />}
+                  </div>
+                );
+              })}
+            </fieldset>
+          )}
         </div>
       )}
       {invalid && <div className="mt-3 text-[13px] text-bear">{invalid}</div>}
@@ -351,7 +382,7 @@ export function StudySettings({ name, mod, runtime, study, onSave }: { name: str
           className="btn"
           onClick={() => {
             setInvalid(null);
-            setDraft({ inputs: { ...mod.defaultInputs }, plots: {}, hlines: {} });
+            setDraft({ inputs: { ...mod.defaultInputs }, plots: {}, hlines: {}, fills: {} });
           }}
         >
           Valorile implicite

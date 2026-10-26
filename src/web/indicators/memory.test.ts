@@ -3,11 +3,11 @@ import { describe, expect, it } from 'vitest';
 import type { Study } from '../../shared/studies.ts';
 import { fromMemory, memoryOf, rememberStudy } from './memory.ts';
 
-const rsi: Study = { uid: 'rsi0000001', id: 'rsi', inputs: { length: 21 }, visible: false, plots: { plot0: { style: 'dotted', width: 3 } }, hlines: { hline_upper: { visible: false } }, height: 0.4 };
+const rsi: Study = { uid: 'rsi0000001', id: 'rsi', inputs: { length: 21 }, visible: false, plots: { plot0: { style: 'dotted', width: 3 } }, hlines: { hline_upper: { visible: false } }, fills: { fill_band: { color: '#7E57C240' } }, height: 0.4 };
 
 describe('the last settings of an indicator', () => {
   it('keep everything but the copy and whether it was shown', () => {
-    expect(memoryOf(rsi)).toEqual({ id: 'rsi', inputs: { length: 21 }, plots: { plot0: { style: 'dotted', width: 3 } }, hlines: { hline_upper: { visible: false } }, height: 0.4 });
+    expect(memoryOf(rsi)).toEqual({ id: 'rsi', inputs: { length: 21 }, plots: { plot0: { style: 'dotted', width: 3 } }, hlines: { hline_upper: { visible: false } }, fills: { fill_band: { color: '#7E57C240' } }, height: 0.4 });
     expect(memoryOf({ uid: 'ema0000001', id: 'ema', inputs: {}, visible: true })).toEqual({ id: 'ema', inputs: {} });
   });
 

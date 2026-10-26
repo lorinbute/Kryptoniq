@@ -137,3 +137,10 @@ export function fmtBytes(n: number): string {
   // The database's maximum size (FD-AZURE §5): 2 GB, 250 GB.
   return `${Number((n / 1024 ** 3).toFixed(1))} GB`;
 }
+
+/** A count in Romanian: "1 desen", "3 desene", "20 de desene", "101 desene" (with "de" from 20 on, unless it ends in 01–19). */
+export function countRo(n: number, one: string, many: string): string {
+  if (n === 1) return `1 ${one}`;
+  const r = n % 100;
+  return `${n} ${n < 20 || (r >= 1 && r <= 19) ? '' : 'de '}${many}`;
+}

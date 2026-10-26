@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { IndicatorResult } from 'oakscriptjs';
 import { clsx } from 'clsx';
 import type { ZodType } from 'zod';
-import { ArrowRightLeft, Bell, Info, ListChecks, Maximize2, Minimize2, Search, SlidersHorizontal, X } from 'lucide-react';
-import type { AccountView, CandlesResult, Portfolio, StockQuoteRow, StockSearchHit, SymbolInfo } from '../../shared/api-types.ts';
-import { DEFAULT_SLINGSHOT_PARAMS, SLINGSHOT_SHORT_TITLE, SLINGSHOT_TITLE, SLINGSHOT_VERSION, slingshotParamsSchema, type SlingshotParams } from '../../shared/indicator/params.ts';
+import { ArrowDownUp, ArrowRightLeft, Bell, Bot, ListChecks, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, RotateCcw, Settings as Cog, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import type { AccountView, CandlesResult, Portfolio, StockQuoteRow } from '../../shared/api-types.ts';
+import { DEFAULT_SLINGSHOT_PARAMS, SIGNAL_SIZE_NAMES, SLINGSHOT_SHORT_TITLE, SLINGSHOT_TITLE, SLINGSHOT_VERSION, slingshotParamsSchema, type SlingshotParams } from '../../shared/indicator/params.ts';
 import {
   DEFAULT_LMA_PARAMS,
   effectiveLmaParams,
-  LINE_STYLES,
   LMA_MA_TYPES,
   LMA_PRESET_VALUES,
   LMA_PRESETS,
@@ -22,33 +22,58 @@ import {
 import { rgbaCss, runLma } from '../../shared/indicator/lma.ts';
 import { htfCandleCount, runSlingshot, type SlingshotAlert, type SlingshotSignal } from '../../shared/indicator/slingshot.ts';
 import { TIMEFRAMES, tfSeconds, type Timeframe } from '../../shared/time.ts';
+import type { ModifyStepPlan } from '../../shared/trading.ts';
 import { CHART_SYMBOL_RE, type Settings, type SettingsView } from '../../shared/settings.ts';
 import { STUDY_MAX, type FavoriteId, type Study, type StudyId, type StudyMemoryEntry } from '../../shared/studies.ts';
+import { DEFAULT_CHART_STYLE, type ChartLineStyle, type ChartStyle } from '../../shared/chart-style.ts';
 import { api, errorMessage, qs } from '../api.ts';
-import { CandleChart, DEFAULT_PANE_FACTOR, lmaHlines, type PriceLineSpec, type StudyDraw } from '../chart/CandleChart.tsx';
-import { useFullscreen } from '../chart/fullscreen.ts';
-import { PNL_COLORS, PNL_COLORS_LIGHT, pnlLines } from '../chart/pnl.ts';
+import { CandleChart, DEFAULT_PANE_FACTOR, type PriceLineSpec, type StudyDraw } from '../chart/CandleChart.tsx';
+import { lmaHlines, lmaScriptLineColors } from '../chart/lma-lines.ts';
+import { modalOpen, useFullscreen } from '../chart/fullscreen.ts';
+import { useTradeEndSound } from '../chart/useTradeEndSound.ts';
+import { clampWidth, readPrefs, WATCHLIST_DEFAULT, WATCHLIST_MAX, WATCHLIST_MIN, writePrefs, type WatchlistPrefs } from '../chart/watchlist-prefs.ts';
+import { ListDrawer, Watchlist } from '../components/Watchlist.tsx';
+import { OfflineBanner } from '../components/OfflineBanner.tsx';
+import { useMediaQuery } from '../media.ts';
+import { PNL_COLORS, PNL_COLORS_LIGHT, tradeLinesOf } from '../chart/pnl.ts';
+import { anchorOf, draftGroups, draftTicket, isDraggable, lineActionOf, lineCloses, liveDrafts, sentLevels, withDrafts, withSent, type AccountLine, type Drafts, type SentLevel } from '../chart/trade-drafts.ts';
+import { chartLineOf, labelText, lineColor, TRADE_COLORS, TRADE_COLORS_LIGHT } from '../chart/trade-labels.ts';
+import { LineActionDialog, type LineAction } from '../components/LineActionDialog.tsx';
+import { entryBasisOf, stepImpact } from '../components/modify-seeds.ts';
+import { BOX, TradeDraftBar } from '../components/TradeDraftBar.tsx';
+import { canReverse, ReverseDialog } from '../components/ReverseDialog.tsx';
 import { useTheme } from '../theme.ts';
 import { saveSettingsPatch, type SettingsPatch } from '../chart/prefs.ts';
 import { premiumState } from '../chart/premium.ts';
-import { fmtAgo, fmtDateTime, fmtPct, fmtPrice } from '../format.ts';
-import { chartPathOf, indexChartPath, nearestTimeframe, rememberedPath, stockChartPath } from '../chart/paths.ts';
-import { INDEX_DELAY_NOTE, INDEX_TIMEFRAMES, INDICES, indexById, indexId, plainSymbol, searchIndices } from '../../shared/indices.ts';
+import { countRo, fmtAgo, fmtDateTime, fmtPct, fmtPrice } from '../format.ts';
+import { chartPrecision, chartTimeZone, prevDayCloses } from '../chart/chart-look.ts';
+import { ChartMenu, type ChartMenuItem } from '../components/ChartMenu.tsx';
+import { ChartSettingsDialog } from '../components/ChartSettingsDialog.tsx';
+import { ChartStatusLine, statusLineOn } from '../components/ChartStatusLine.tsx';
+import { isMac } from '../components/CommandPalette.tsx';
+import { chartPathOf, nearestTimeframe, rememberedPath } from '../chart/paths.ts';
+import { INDEX_DELAY_NOTE, INDEX_TIMEFRAMES, INDICES, indexById, indexId, plainSymbol } from '../../shared/indices.ts';
 import { useMarketSource, useSettings, useStocksInfo, useTz, useWatchlist } from '../hooks.ts';
-import { ErrorNote, Loading, Panel, Warning } from '../components/ui.tsx';
-import { FavoritesDnd, SortableFavorite } from '../components/SortableFavorites.tsx';
+import { ErrorNote, Loading, Panel, Toast, Warning, type ToastMessage } from '../components/ui.tsx';
 import { OrderTicket, useTradingCaps, type TicketSeed } from '../components/OrderTicket.tsx';
+import { BotsDialog } from '../components/bots/BotsDialog.tsx';
+import { portfolioInterval } from '../portfolio-settle.ts';
+import type { BotSeed } from '../components/bots/bot-form.ts';
 import { IndicatorPicker, PremiumBadge, type PremiumItem, type PremiumKey } from '../components/IndicatorPicker.tsx';
 import { StudySettings } from '../components/StudySettings.tsx';
-import { LegendButtons, LegendRow, StudyLegendRow } from '../components/StudyLegend.tsx';
+import { LEGEND_INPUTS, LEGEND_TITLE, LEGEND_VALUES, LegendButtons, LegendRow, StudyLegendRow } from '../components/StudyLegend.tsx';
 import { studyMeta } from '../indicators/catalog-meta.ts';
 import { legendParams, sanitizeInputs, type ChartInfo } from '../indicators/compute.ts';
 import { useStudyRuntime, type StudyRuntime } from '../indicators/runtime.ts';
 import { legendNumbers, styledEntry } from '../indicators/style.ts';
+import { linkStyle } from '../indicators/color-links.ts';
 import { useStudies } from '../indicators/useStudies.ts';
 import { fromMemory, memoryOf, rememberStudy } from '../indicators/memory.ts';
+import { ColorPicker } from '../components/ColorPicker.tsx';
+import { InfoTip } from '../components/InfoTip.tsx';
 import { AlertIcon, CoinLogo, OutcomeIcon } from '../components/icons.tsx';
 import { useScrollLock } from '../scroll-lock.ts';
+import { useVisibleArea } from '../visible-area.ts';
 import { HLineSettings } from '../components/HLineSettings.tsx';
 import { HLINE_DEFAULT_STYLE, HLINE_MAX, hlineVisibleOn, styleOf, type HLine, type HLineStyle } from '../../shared/hlines.ts';
 
@@ -59,6 +84,10 @@ const ALERT_RO: Record<string, string> = {
   atrStopLoss: 'ATR Stop Loss Hit',
   msBullish: 'Bullish Market Structure',
   msBearish: 'Bearish Market Structure',
+  shortSignal: 'Short Signal',
+  shortTakeProfitSignal: 'Short Take Profit Signal',
+  shortAtrTakeProfit: 'Short ATR Take Profit Hit',
+  shortAtrStopLoss: 'Short ATR Stop Loss Hit',
 };
 const OUTCOME_RO: Record<string, string> = { active: 'Activ', tp: 'TP atins', sl: 'SL atins', invalidated: 'Invalidat' };
 const EXCHANGE_NAME: Record<string, string> = { kucoin: 'KuCoin', binance: 'Binance', bybit: 'Bybit', okx: 'OKX', bitget: 'Bitget', twelvedata: 'Twelve Data', nasdaq: 'Nasdaq', cboe: 'Cboe', cnbc: 'CNBC' };
@@ -70,6 +99,8 @@ const REASON_RO: Record<string, string> = {
   superseded: 'înlocuit de un semnal nou',
   trendFlip: 'trendul s-a întors',
 };
+/** Why a signal closed; a SHORT's take profit signal is a low broken (FD-SLINGSHOT34). */
+const reasonRo = (s: SlingshotSignal) => (s.side === 'short' && s.outcomeReason === 'takeProfitSignal' ? 'minimul depășit' : s.outcomeReason ? REASON_RO[s.outcomeReason] : '');
 
 /** Collapses consecutive repeats of the same alert (e.g. ATR TP on every bar above the target). */
 export function collapseAlerts(alerts: SlingshotAlert[]): (SlingshotAlert & { count: number })[] {
@@ -105,122 +136,6 @@ function Holding({ ghost, dash, start = false }: { ghost: string | null; dash: s
   );
 }
 
-function SymbolPicker({ current, onPick }: { current: string; onPick: (path: string) => void }) {
-  const watchlist = useWatchlist();
-  const favs = watchlist.data ?? [];
-  const [q, setQ] = useState('');
-  const term = q.trim();
-  const results = useQuery({
-    queryKey: ['symbols', term],
-    queryFn: () => api.get<SymbolInfo[]>(`/api/market/symbols${qs({ q: term })}`),
-    enabled: term.length >= 1,
-    staleTime: 5 * 60_000,
-  });
-  // Stocks from two letters on (FD-SENTIQ §4.3): one Nasdaq / Twelve Data search per word typed.
-  const stocks = useQuery({
-    queryKey: ['stocks', 'search', term],
-    queryFn: () => api.get<StockSearchHit[]>(`/api/stocks/search${qs({ q: term })}`),
-    enabled: term.length >= 2,
-    staleTime: 10 * 60_000,
-    retry: false,
-  });
-  const pick = (path: string) => {
-    onPick(path);
-    setQ('');
-  };
-  const pairs = results.data ?? [];
-  const shares = stocks.data ?? [];
-  // FD-INDICES: the seven indices are known here, no request needed.
-  const indices = term.length >= 2 ? searchIndices(term) : [];
-  // Group titles only when more than one kind was found.
-  const titled = [pairs, shares, indices].filter((l) => l.length > 0).length > 1;
-  const row = 'flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13.5px] transition-colors hover:bg-hover';
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {/* Drag a chip to reorder the favourites; Alt + ←/→ does it from the keyboard (FD-CHARTFAV §2). */}
-      <FavoritesDnd ids={favs.map((w) => w.coin)} layout="wrap">
-        {(order) =>
-          favs.map((w) => {
-            const id = w.kind === 'crypto' ? `${w.coin}/${w.quote}` : `${w.kind}:${plainSymbol(w.coin)}`;
-            return (
-              <SortableFavorite key={w.coin} id={w.coin}>
-                {(s) => (
-                  <button
-                    ref={s.setNodeRef}
-                    {...s.attributes}
-                    {...s.listeners}
-                    style={s.style}
-                    type="button"
-                    className={clsx('chip gap-1.5 pl-1.5', s.isDragging && 'shadow-drag')}
-                    aria-pressed={id === current}
-                    aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
-                    onClick={() => !order.justDragged() && onPick(chartPathOf(w))}
-                    onKeyDown={order.keyMove(w.coin, 'x')}
-                    title={`${w.name ? `${w.name}. ` : ''}Trage ca să muți favoritul`}
-                  >
-                    <CoinLogo coin={w.coin} size={16} badge={w.kind === 'stock'} square={w.kind === 'stock'} />
-                    {plainSymbol(w.coin)}
-                  </button>
-                )}
-              </SortableFavorite>
-            );
-          })
-        }
-      </FavoritesDnd>
-      <div className="relative ml-1">
-        <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-faint" aria-hidden />
-        {/* The height of the favourite chips it follows (FD-SELECTSAFARI), not of a button. */}
-        <input
-          aria-label="Caută o pereche, o acțiune sau un indice"
-          placeholder="Pereche, acțiune sau indice"
-          value={q}
-          onChange={(e) => setQ(e.target.value.toUpperCase())}
-          className="h-[30px] min-h-[30px] w-64 max-w-full py-0 pl-9 text-[13px] pointer-coarse:h-9 pointer-coarse:min-h-9"
-        />
-        {term && (results.data || stocks.data || indices.length > 0) && (
-          <ul className="absolute z-30 mt-1.5 max-h-80 w-72 overflow-auto overscroll-contain rounded-xl border border-line-strong bg-panel-2 py-1.5 shadow-pop" role="listbox">
-            {pairs.length === 0 && shares.length === 0 && indices.length === 0 && (
-              <li className="px-3.5 py-2 text-[13px] text-faint">{stocks.isFetching || results.isFetching ? 'Se caută…' : 'Nicio pereche, acțiune sau indice'}</li>
-            )}
-            {titled && pairs.length > 0 && <li className="px-3.5 pt-1 pb-0.5 text-[11.5px] text-faint">Crypto</li>}
-            {pairs.map((r) => (
-              <li key={r.symbol}>
-                <button type="button" className={row} onClick={() => pick(`/charts/${r.base}/${r.quote}`)}>
-                  <CoinLogo coin={r.base} size={16} />
-                  {r.symbol}
-                </button>
-              </li>
-            ))}
-            {titled && shares.length > 0 && <li className="px-3.5 pt-1.5 pb-0.5 text-[11.5px] text-faint">Acțiuni</li>}
-            {shares.map((r) => (
-              <li key={`stock:${r.symbol}`}>
-                <button type="button" className={row} onClick={() => pick(stockChartPath(r.symbol))}>
-                  <CoinLogo coin={r.symbol} size={16} badge square />
-                  <span className="font-medium">{r.symbol}</span>
-                  <span className="min-w-0 truncate text-[12.5px] text-faint">
-                    {r.name}
-                    {r.exchange ? ` · ${r.exchange}` : ''}
-                  </span>
-                </button>
-              </li>
-            ))}
-            {titled && indices.length > 0 && <li className="px-3.5 pt-1.5 pb-0.5 text-[11.5px] text-faint">Indici</li>}
-            {indices.map((i) => (
-              <li key={i.id}>
-                <button type="button" className={row} onClick={() => pick(indexChartPath(i.id))}>
-                  <CoinLogo coin={i.id} size={16} />
-                  <span className="font-medium">{i.symbol}</span>
-                  <span className="min-w-0 truncate text-[12.5px] text-faint">{i.name}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
-  );
-}
-
 type FieldDef<P> = {
   key: keyof P & string;
   label: string;
@@ -230,19 +145,87 @@ type FieldDef<P> = {
   inline?: string;
 } & (
   | { kind: 'int' | 'float'; step?: number; min?: number; max?: number }
-  | { kind: 'bool' }
+  /** `lockedWhen`: why the box cannot change now (it is then disabled), e.g. the last side left on. */
+  | { kind: 'bool'; lockedWhen?: (draft: P) => string | null }
   | { kind: 'color' }
   | { kind: 'text' }
   | { kind: 'select'; options: { value: string; label: string }[] }
-  /** A Style-tab hline: on/off (`key`), line style (`styleKey`) and a preview of its colour and value. */
-  | { kind: 'line'; styleKey: keyof P & string; preview: (draft: P) => { color: string; value: number } }
+  /**
+   * FD-STYLEUNIFY: an element's look on one row, the same everywhere: a box to tick (`toggle`), the line box (its `color`,
+   * else `swatch`, a colour that comes from elsewhere, explained by `note`; `scriptColor` when the saved colour is null:
+   * the script's own), its `width` and `style`, its `size`, and a level shown after it (`value`).
+   */
+  | {
+      kind: 'look';
+      toggle?: keyof P & string;
+      color?: keyof P & string;
+      scriptColor?: (draft: P) => string;
+      swatch?: (draft: P) => string;
+      note?: string;
+      width?: keyof P & string;
+      style?: keyof P & string;
+      size?: keyof P & string;
+      value?: (draft: P) => number;
+    }
 );
+
+/** The keys a field edits (an error on any of them names the field). */
+const fieldKeys = <P,>(f: FieldDef<P>): string[] => (f.kind === 'look' ? [f.key, f.toggle, f.color, f.width, f.style, f.size].filter((k): k is keyof P & string => Boolean(k)) : [f.key]);
+/** Pine's line style names <-> the line box's. */
+const PINE_STYLE: Record<ChartLineStyle, string> = { solid: 'Solid', dashed: 'Dashed', dotted: 'Dotted' };
+const boxStyle = (v: unknown): ChartLineStyle => (v === 'Dashed' ? 'dashed' : v === 'Dotted' ? 'dotted' : 'solid');
 interface GroupDef<P> {
   title: string;
   fields: FieldDef<P>[];
 }
 
+const ONE_SIDE_TIP = 'Cel puțin unul dintre Long Signals și Short Signals rămâne bifat.';
+/** FD-STYLEUNIFY: each state of a side's labels, with the Pine input's title and tooltip. */
+const signalLooks = (side: 'long' | 'short'): FieldDef<SlingshotParams>[] => {
+  const S = side === 'long' ? 'Long' : 'Short';
+  const row = (state: string, label: string, tip?: string): FieldDef<SlingshotParams> => ({
+    key: `${side}${state}Color` as keyof SlingshotParams & string,
+    label,
+    kind: 'look',
+    color: `${side}${state}Color` as keyof SlingshotParams & string,
+    size: `${side}${state}Size` as keyof SlingshotParams & string,
+    ...(tip ? { tip } : {}),
+  });
+  return [
+    row('Forming', `${S} Forming Signal`, `A ${S.toUpperCase()} still forming (before its confirmation).`),
+    row('', `${S} Signal`, `A valid ${S.toUpperCase()}: active, or ended with its take profit.`),
+    row('Failed', `${S} Failed Signal`, `A ${S.toUpperCase()} that hit its stop loss.`),
+    row('Invalid', `${S} Invalidated Signal`, `A ${S.toUpperCase()} replaced by a newer one (an X while the newer one is forming, for good once it is confirmed) or ended by a trend flip.`),
+    row('Tp', `${S} Take Profit`, `The TAKE PROFIT label of a ${S.toUpperCase()}.`),
+    row('Sl', `${S} Stop Loss`, `The STOP LOSS label on the bar where a ${S.toUpperCase()} failed.`),
+  ];
+};
+/** FD-STYLEUNIFY: a side's take profit / stop loss level: its line and its label's size. */
+const atrLook = (side: 'long' | 'short', level: 'Tp' | 'Sl'): FieldDef<SlingshotParams> => {
+  const color = `${side}${level === 'Tp' ? 'TP' : 'SL'}Color` as keyof SlingshotParams & string;
+  return {
+    key: color,
+    label: `${side === 'long' ? 'Long' : 'Short'} ATR ${level === 'Tp' ? 'Take Profit' : 'Stop Loss'}`,
+    kind: 'look',
+    color,
+    width: `${side}${level}LineWidth` as keyof SlingshotParams & string,
+    style: `${side}${level}LineStyle` as keyof SlingshotParams & string,
+    size: `${side}${level}LabelSize` as keyof SlingshotParams & string,
+  };
+};
+const CLOUD_NOTE = 'Culoarea vine din Cloud Uptrend Color / Cloud Downtrend Color, după trend.';
+const cloudSwatch = (d: SlingshotParams) => `linear-gradient(135deg, ${d.cloudUpColor} 50%, ${d.cloudDownColor} 50%)`;
 const SLINGSHOT_GROUPS: GroupDef<SlingshotParams>[] = [
+  {
+    // FD-SLINGSHOT34: the sides; the last one ticked cannot be unticked. FD-STYLEUNIFY: each state, each side.
+    title: 'Signals',
+    fields: [
+      { key: 'showLong', label: 'Long Signals', kind: 'bool', tip: ONE_SIDE_TIP, lockedWhen: (d) => (d.showShort ? null : ONE_SIDE_TIP) },
+      { key: 'showShort', label: 'Short Signals', kind: 'bool', tip: ONE_SIDE_TIP, lockedWhen: (d) => (d.showLong ? null : ONE_SIDE_TIP) },
+      ...signalLooks('long'),
+      ...signalLooks('short'),
+    ],
+  },
   {
     title: 'Indicator Settings',
     fields: [
@@ -270,8 +253,21 @@ const SLINGSHOT_GROUPS: GroupDef<SlingshotParams>[] = [
       { key: 'showLines', label: 'Show ATR Levels', kind: 'bool' },
       { key: 'hideAtrOnTP', label: 'Hide ATR Levels and Labels on Take Profit Hit', kind: 'bool' },
       { key: 'hideAtrOnStop', label: 'Hide ATR Levels and Labels on Stop Loss Hit', kind: 'bool' },
-      { key: 'longTPColor', label: 'ATR Take Profit Color', kind: 'color' },
-      { key: 'longSLColor', label: 'ATR Stop Loss Color', kind: 'color' },
+      atrLook('long', 'Tp'),
+      atrLook('long', 'Sl'),
+      atrLook('short', 'Tp'),
+      atrLook('short', 'Sl'),
+    ],
+  },
+  {
+    // FD-SS34LIVE: the EMAs in the trend's colour, the cloud at half its opacity; FD-STYLEUNIFY: the EMAs' width and style
+    // (TradingView's Style tab).
+    title: 'Cloud',
+    fields: [
+      { key: 'cloudUpColor', label: 'Cloud Uptrend Color', kind: 'color', tip: 'The EMAs in an uptrend; the cloud gets it at half its opacity.' },
+      { key: 'cloudDownColor', label: 'Cloud Downtrend Color', kind: 'color', tip: 'The EMAs in a downtrend; the cloud gets it at half its opacity.' },
+      { key: 'slowEmaWidth', label: 'Slow EMA', kind: 'look', swatch: cloudSwatch, note: CLOUD_NOTE, width: 'slowEmaWidth', style: 'slowEmaStyle' },
+      { key: 'fastEmaWidth', label: 'Fast EMA', kind: 'look', swatch: cloudSwatch, note: CLOUD_NOTE, width: 'fastEmaWidth', style: 'fastEmaStyle' },
     ],
   },
   {
@@ -285,20 +281,27 @@ const SLINGSHOT_GROUPS: GroupDef<SlingshotParams>[] = [
       { key: 'msBreakOnClose', label: 'Confirm Break With Candle Close', kind: 'bool' },
       { key: 'msBullText', label: 'Bullish Line Text', kind: 'text' },
       { key: 'msBearText', label: 'Bearish Line Text', kind: 'text' },
-      { key: 'msBullColor', label: 'Bullish MS Color', kind: 'color' },
-      { key: 'msBearColor', label: 'Bearish MS Color', kind: 'color' },
-      { key: 'msLineWidth', label: 'MS Line Width', kind: 'int' },
-      { key: 'msLineStyle', label: 'MS Line Style', kind: 'select', options: ['Solid', 'Dashed', 'Dotted'].map((v) => ({ value: v, label: v })) },
-      { key: 'msTextSize', label: 'MS Text Size', kind: 'select', options: ['Tiny', 'Small', 'Normal', 'Large'].map((v) => ({ value: v, label: v })) },
+      // FD-STYLEUNIFY: each line its colour, width, style and text size
+      { key: 'msBullColor', label: 'Bullish MS Line', kind: 'look', color: 'msBullColor', width: 'msBullLineWidth', style: 'msBullLineStyle', size: 'msBullTextSize' },
+      { key: 'msBearColor', label: 'Bearish MS Line', kind: 'look', color: 'msBearColor', width: 'msBearLineWidth', style: 'msBearLineStyle', size: 'msBearTextSize' },
     ],
   },
 ];
 
 // Names, groups, limits and tooltips from logarithmic-moving-average.pine; "Style" mirrors TradingView's Style tab.
-const lmaLine = (key: 'long' | 'short' | 'neutral') => (d: LmaParams) => {
-  const h = lmaHlines(effectiveLmaParams(d)).find((x) => x.key === key) as ReturnType<typeof lmaHlines>[number];
-  return { color: h.color, value: h.price };
-};
+/** FD-STYLEUNIFY: a threshold line: its colour (the script's until one is chosen), width, style and level. */
+const lmaLine = (key: 'long' | 'short' | 'neutral', label: string): FieldDef<LmaParams> => ({
+  key: `${key}LineColor`,
+  label,
+  kind: 'look',
+  toggle: `show${key === 'long' ? 'Long' : key === 'short' ? 'Short' : 'Neutral'}Line`,
+  color: `${key}LineColor`,
+  scriptColor: (d) => lmaScriptLineColors(effectiveLmaParams(d))[key],
+  width: `${key}LineWidth`,
+  style: `${key}LineStyle`,
+  value: (d) => (lmaHlines(effectiveLmaParams(d)).find((x) => x.key === key) as ReturnType<typeof lmaHlines>[number]).price,
+});
+const lmaSwatch = (d: LmaParams) => `linear-gradient(135deg, ${d.bullishColor} 33%, ${d.neutralColor} 33% 66%, ${d.bearishColor} 66%)`;
 const LMA_GROUPS: GroupDef<LmaParams>[] = [
   {
     title: 'Strategy Presets',
@@ -333,13 +336,21 @@ const LMA_GROUPS: GroupDef<LmaParams>[] = [
   {
     title: 'Style',
     fields: [
-      { key: 'showSignal', label: 'LMA Signal', kind: 'bool' },
-      { key: 'signalWidth', label: 'LMA Signal Line Width', kind: 'int', min: 1, max: 4 },
+      {
+        key: 'signalWidth',
+        label: 'LMA Signal',
+        kind: 'look',
+        toggle: 'showSignal',
+        swatch: lmaSwatch,
+        note: 'Culoarea vine din Bullish / Neutral / Bearish Color, după starea semnalului.',
+        width: 'signalWidth',
+        style: 'signalStyle',
+      },
       { key: 'showFill', label: 'LMA Signal Fill', kind: 'bool' },
       { key: 'showBarColors', label: 'LMA Signal Bar Colors', kind: 'bool' },
-      { key: 'showLongLine', label: 'Long Threshold', kind: 'line', styleKey: 'longLineStyle', preview: lmaLine('long') },
-      { key: 'showShortLine', label: 'Short Threshold', kind: 'line', styleKey: 'shortLineStyle', preview: lmaLine('short') },
-      { key: 'showNeutralLine', label: 'Neutral Line', kind: 'line', styleKey: 'neutralLineStyle', preview: lmaLine('neutral') },
+      lmaLine('long', 'Long Threshold'),
+      lmaLine('short', 'Short Threshold'),
+      lmaLine('neutral', 'Neutral Line'),
     ],
   },
 ];
@@ -384,45 +395,81 @@ function IndicatorForm<P extends Record<string, unknown>>({
   const set = (k: keyof P, v: unknown) => setDraft((d) => ({ ...d, [k]: v }));
   const forced = locked?.(draft) ?? null;
   const allFields = groups.flatMap((g) => g.fields);
-  // The (i) shows the Pine tooltip on hover; for assistive tech the same text is the field's description
-  // (`title` on the control), so the field's name stays just its label.
+  // The (i) shows the Pine tooltip on hover and on a click or a tap (FIX-INFOTIP); the same text stays the control's
+  // description (`title`), so the field's name stays just its label.
   const tipIcon = (tip?: string) =>
     tip ? (
-      <span className="inline-flex shrink-0 cursor-help text-faint" title={tip} aria-hidden>
-        <Info size={13} />
+      // On the first line's middle, however the name wraps.
+      <span className="flex h-[1lh] shrink-0 items-center">
+        <InfoTip text={tip} />
       </span>
     ) : null;
   const renderField = (f: FieldDef<P>, inRow: boolean) => {
     const isForced = forced !== null && f.key in forced;
     const v = isForced ? (forced as Record<string, unknown>)[f.key] : draft[f.key];
     const id = `${settingsKey}-${f.key}`;
-    if (f.kind === 'bool' || f.kind === 'line') {
+    if (f.kind === 'bool') {
       // Checkboxes on the left of their label, as in TradingView.
-      const line = f.kind === 'line' ? f.preview(draft) : null;
+      const lockedWhy = f.lockedWhen?.(draft) ?? null;
       return (
         <div key={f.key} className="flex items-center justify-between gap-3 text-[13px]">
           <label htmlFor={id} className="flex min-w-0 items-center gap-2.5">
-            <input id={id} type="checkbox" checked={Boolean(v)} title={f.tip} onChange={(e) => set(f.key, e.target.checked)} />
-            <span className="text-muted">{f.label}</span>
+            {/* A long label wraps; the box keeps its size (it shrank at 320 px). */}
+            <input id={id} type="checkbox" className="shrink-0" checked={Boolean(v)} disabled={lockedWhy !== null} title={lockedWhy ?? f.tip} onChange={(e) => set(f.key, e.target.checked)} />
+            <span className={lockedWhy ? 'text-faint' : 'text-muted'}>{f.label}</span>
             {tipIcon(f.tip)}
           </label>
-          {f.kind === 'line' && line && (
-            // The preview has the dropdown's height (FD-UIPOLISH).
-            <span className="flex shrink-0 items-stretch gap-2">
-              <span className="inline-flex items-center gap-2 rounded-lg border border-line px-2" aria-hidden>
-                <span className="h-4 w-4 rounded" style={{ background: line.color }} />
-                <span className="w-6 border-t-2" style={{ borderColor: line.color, borderTopStyle: String(draft[f.styleKey]).toLowerCase() as 'solid' | 'dashed' | 'dotted' }} />
+        </div>
+      );
+    }
+    if (f.kind === 'look') {
+      // FD-STYLEUNIFY: [☐] Name ……… [colour · width · style] [size] [level]; on a phone the name wraps and the controls stay
+      // on the right, the same on every row.
+      const colorKey = f.color;
+      const saved = colorKey ? draft[colorKey] : null;
+      const color = colorKey ? String(saved ?? f.scriptColor?.(draft) ?? '#000000') : (f.swatch?.(draft) ?? '#000000');
+      const level = f.value?.(draft);
+      const name = (
+        <>
+          <span className="text-muted">{f.label}</span>
+          {tipIcon(f.tip)}
+        </>
+      );
+      return (
+        <div key={f.key} className="flex items-center justify-between gap-3 text-[13px]">
+          {f.toggle ? (
+            <label htmlFor={`${id}-on`} className="flex min-w-0 items-start gap-2.5">
+              <span className="flex h-[1lh] shrink-0 items-center">
+                <input id={`${id}-on`} type="checkbox" checked={Boolean(draft[f.toggle])} title={f.tip} onChange={(e) => set(f.toggle as keyof P, e.target.checked)} />
               </span>
-              <select aria-label={`${f.label}: stil`} value={String(draft[f.styleKey])} onChange={(e) => set(f.styleKey, e.target.value)} className="w-[92px]">
-                {LINE_STYLES.map((st) => (
-                  <option key={st} value={st}>
-                    {st}
+              <span className="flex min-w-0 items-start gap-1.5">{name}</span>
+            </label>
+          ) : (
+            <span className="flex min-w-0 items-start gap-1.5">{name}</span>
+          )}
+          <span className="flex shrink-0 items-center gap-2">
+            <ColorPicker
+              id={id}
+              label={f.label}
+              value={color}
+              onChange={colorKey ? (c) => set(colorKey, c) : undefined}
+              colorNote={f.note}
+              lineWidth={f.width ? Number(draft[f.width]) : undefined}
+              onLineWidth={f.width ? (w) => set(f.width as keyof P, w) : undefined}
+              lineStyle={f.style ? boxStyle(draft[f.style]) : undefined}
+              onLineStyle={f.style ? (st) => set(f.style as keyof P, PINE_STYLE[st]) : undefined}
+            />
+            {f.size && (
+              <select aria-label={`${f.label}: mărime`} value={String(draft[f.size])} onChange={(e) => set(f.size as keyof P, e.target.value)} className="w-[88px]">
+                {SIGNAL_SIZE_NAMES.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
                   </option>
                 ))}
               </select>
-              <span className="num w-10 self-center text-right text-muted">{Number.isFinite(line.value) ? line.value : '—'}</span>
-            </span>
-          )}
+            )}
+            {level !== undefined && <span className="num w-10 text-right text-muted">{Number.isFinite(level) ? level : '—'}</span>}
+          </span>
         </div>
       );
     }
@@ -434,7 +481,7 @@ function IndicatorForm<P extends Record<string, unknown>>({
           {isForced && <span className="text-[11.5px] text-faint">din preset</span>}
         </span>
         {f.kind === 'color' ? (
-          <input id={id} type="color" value={String(v)} onChange={(e) => set(f.key, e.target.value.toUpperCase())} className="h-8 w-12 p-1" />
+          <ColorPicker id={id} label={f.label} value={String(v)} onChange={(c) => set(f.key, c)} />
         ) : f.kind === 'select' ? (
           <select id={id} value={String(v)} title={f.tip} onChange={(e) => set(f.key, e.target.value)} className="w-40">
             {f.options.map((o) => (
@@ -470,8 +517,14 @@ function IndicatorForm<P extends Record<string, unknown>>({
         e.preventDefault();
         const r = schema.safeParse(draft);
         if (!r.success) {
+          // A rule across fields (e.g. one of Long / Short) says what is wrong in its own words.
+          const rule = r.error.issues.find((i) => i.code === 'custom');
+          if (rule) {
+            setInvalid(rule.message);
+            return;
+          }
           const bad = [...new Set(r.error.issues.map((i) => String(i.path[0])))].map((k) => {
-            const f = allFields.find((x) => x.key === k);
+            const f = allFields.find((x) => fieldKeys(x).includes(k));
             const range = f && (f.kind === 'int' || f.kind === 'float') && f.min !== undefined && f.max !== undefined ? ` (${f.min} – ${f.max})` : '';
             return `${f?.label ?? k}${range}`;
           });
@@ -561,6 +614,7 @@ function SettingsDrawer({
   studies,
   runtime,
   onSaveStudy,
+  resultOf,
   hline,
   onClose,
 }: {
@@ -570,12 +624,16 @@ function SettingsDrawer({
   studies: readonly Study[];
   runtime: StudyRuntime | null;
   onSaveStudy: (next: Study) => Promise<unknown>;
+  /** An indicator's current result, for the fills its Style tab lists (FD-FILLS). */
+  resultOf: (uid: string) => IndicatorResult | null;
   hline: HLinePanel;
   onClose: () => void;
 }) {
   const panel = useRef<HTMLElement>(null);
   // FD-SCROLLLOCK: the page behind the panel stays still (the chart beside it still zooms with the wheel).
   useScrollLock();
+  // FD-MODALFIT: above the on-screen keyboard while it is up.
+  const area = useVisibleArea();
   useEffect(() => {
     // Dialog behaviour: focus moves into the panel, Escape closes it, focus returns to the opener.
     const opener = document.activeElement as HTMLElement | null;
@@ -595,7 +653,16 @@ function SettingsDrawer({
   const isLine = target.startsWith('hline:');
   const title = isLine ? 'Linie orizontală' : target === 'slingshot' ? SLINGSHOT_TITLE : target === 'lma' ? LMA_SHORT_TITLE : (meta?.name ?? 'Indicator');
   return (
-    <aside ref={panel} role="dialog" aria-modal="false" className="panel fixed top-0 right-0 z-40 flex h-screen w-[400px] max-w-full flex-col rounded-none border-y-0 border-r-0" aria-label={`Setările ${title}`}>
+    // FD-CHARTAUDIT §2: top to bottom of the visible window (100vh is Safari's "large" screen on iOS: the buttons at the
+    // bottom fell under it); the whole width on a phone.
+    <aside
+      ref={panel}
+      role="dialog"
+      aria-modal="false"
+      className="panel fixed top-0 right-0 bottom-0 z-40 flex w-[400px] max-w-full flex-col rounded-none border-y-0 border-r-0 max-[440px]:w-full"
+      style={area}
+      aria-label={`Setările ${title}`}
+    >
       <header className="flex items-center justify-between gap-3 border-b border-line px-5 py-4">
         <h2 className="flex min-w-0 items-center gap-2 text-[16px] font-semibold">
           <span className="truncate">{title}</span>
@@ -632,15 +699,33 @@ function SettingsDrawer({
           <Loading label="Se încarcă indicatorul…" />
         </div>
       ) : (
-        <StudySettings key={study.uid} name={meta.name} mod={runtime.STUDY_MODULES[study.id]} runtime={runtime} study={study} onSave={onSaveStudy} />
+        <StudySettings key={study.uid} name={meta.name} mod={runtime.STUDY_MODULES[study.id]} runtime={runtime} study={study} result={resultOf(study.uid)} onSave={onSaveStudy} />
       )}
     </aside>
   );
 }
 
-function SignalsTable({ signals, precision, tz }: { signals: SlingshotSignal[]; precision: number; tz: string }) {
-  if (!signals.length) return <p className="pb-4 text-[13.5px] text-faint">Niciun semnal LONG în istoricul încărcat.</p>;
-  const counts = signals.reduce<Record<string, number>>((a, s) => ((a[s.outcome] = (a[s.outcome] ?? 0) + 1), a), {});
+/**
+ * `shortColor`: the chart's SHORT label colour, so a SHORT row reads like its label (FD-SLINGSHOT34). A LONG uses the
+ * theme's green: the indicator's neon one would vanish on the light theme (FD-THEME §1).
+ */
+function SignalsTable({
+  signals,
+  precision,
+  tz,
+  shortColor,
+  forming,
+}: {
+  signals: SlingshotSignal[];
+  precision: number;
+  tz: string;
+  shortColor: string;
+  /** FD-SS34LIVE: a new signal of that side is forming, so its active one shows as invalidated, as on the chart. */
+  forming: Record<SlingshotSignal['side'], boolean>;
+}) {
+  if (!signals.length) return <p className="pb-4 text-[13.5px] text-faint">Niciun semnal în istoricul încărcat.</p>;
+  const shown = (s: SlingshotSignal) => (s.outcome === 'active' && forming[s.side] ? 'invalidated' : s.outcome);
+  const counts = signals.reduce<Record<string, number>>((a, s) => ((a[shown(s)] = (a[shown(s)] ?? 0) + 1), a), {});
   const pill = 'inline-flex h-[26px] items-center gap-1.5 rounded-full px-2.5 text-[12.5px]';
   return (
     <>
@@ -670,7 +755,7 @@ function SignalsTable({ signals, precision, tz }: { signals: SlingshotSignal[]; 
         <table className="table min-w-[680px]">
           <thead>
             <tr>
-              <th>LONG (minimul V2)</th>
+              <th>Semnal (V2)</th>
               <th className="text-right">Intrare</th>
               <th className="text-right">SL</th>
               <th className="text-right">TP (ATR)</th>
@@ -679,20 +764,29 @@ function SignalsTable({ signals, precision, tz }: { signals: SlingshotSignal[]; 
           </thead>
           <tbody>
             {[...signals].reverse().map((s) => (
-              <tr key={s.bar}>
+              <tr key={`${s.side}-${s.bar}`}>
                 <td className="num">
+                  <span className={clsx('mr-2 font-semibold', s.side === 'long' && 'text-bull')} style={s.side === 'short' ? { color: shortColor } : undefined}>
+                    {s.side === 'long' ? 'LONG' : 'SHORT'}
+                  </span>
                   {fmtDateTime(s.time, tz)}
                   {s.provisional && <span className="ml-1 text-[11px] text-warn">neconfirmat</span>}
                 </td>
-                <td className="num text-right">{fmtPrice(s.entryLow, precision)}</td>
+                <td className="num text-right" title={s.side === 'long' ? 'Minimul V2' : 'Maximul V2'}>
+                  {fmtPrice(s.entry, precision)}
+                </td>
                 <td className="num text-right text-bear">{fmtPrice(s.sl, precision)}</td>
                 <td className="num text-right text-bull">{fmtPrice(s.tp, precision)}</td>
                 <td className="whitespace-nowrap">
-                  <span className={clsx('inline-flex items-center gap-1.5 font-semibold', s.outcome === 'tp' ? 'text-bull' : s.outcome === 'active' ? 'text-text' : 'text-bear')}>
-                    <OutcomeIcon outcome={s.outcome} />
-                    {OUTCOME_RO[s.outcome]}
+                  <span className={clsx('inline-flex items-center gap-1.5 font-semibold', shown(s) === 'tp' ? 'text-bull' : shown(s) === 'active' ? 'text-text' : 'text-bear')}>
+                    <OutcomeIcon outcome={shown(s)} />
+                    {OUTCOME_RO[shown(s)]}
                   </span>
-                  {s.outcomeReason && <span className="ml-1 text-[12px] text-faint">({REASON_RO[s.outcomeReason]})</span>}
+                  {s.outcomeReason ? (
+                    <span className="ml-1 text-[12px] text-faint">({reasonRo(s)})</span>
+                  ) : (
+                    shown(s) !== s.outcome && <span className="ml-1 text-[12px] text-faint">(semnal nou în formare)</span>
+                  )}
                   {s.closedTime && <span className="ml-1 text-[12px] text-faint">{fmtDateTime(s.closedTime, tz)}</span>}
                 </td>
               </tr>
@@ -704,7 +798,11 @@ function SignalsTable({ signals, precision, tz }: { signals: SlingshotSignal[]; 
   );
 }
 
-function usePositionLines(symbol: string, show: boolean, lastPrice: number | null, stock: boolean): PriceLineSpec[] {
+/**
+ * The trades on this chart's asset across the accounts that can hold it (FD-PNL): entries, liquidations, SL / TP with
+ * their PnL, the PnL now, the other open orders (FD-ORDEREDIT: with their attached TP / SL), each with its account.
+ */
+function useTradeLines(symbol: string, show: boolean, lastPrice: number | null, stock: boolean): { lines: AccountLine[]; portfolios: Map<number, Portfolio> } {
   const accounts = useQuery({ queryKey: ['accounts'], queryFn: () => api.get<AccountView[]>('/api/accounts'), staleTime: 60_000, enabled: show });
   // Only the accounts that can hold this chart's asset: brokers for a share, exchanges for a coin (their APIs have limits).
   const relevant = (accounts.data ?? []).filter((a) => (a.kind === 'stocks') === stock);
@@ -712,34 +810,31 @@ function usePositionLines(symbol: string, show: boolean, lastPrice: number | nul
     queries: (show ? relevant : []).map((a) => ({
       queryKey: ['portfolio', a.id],
       queryFn: () => api.get<Portfolio>(`/api/portfolio/${a.id}`),
-      refetchInterval: 60_000,
+      // FIX-SLTPDUP: every few seconds while the account settles after a trading action.
+      refetchInterval: () => portfolioInterval(a.id, 60_000),
     })),
   });
   // The lines' colours follow the theme (FD-THEME §1).
   const theme = useTheme();
   return useMemo(() => {
-    if (!show) return [];
+    const byAccount = new Map<number, Portfolio>();
+    if (!show) return { lines: [], portfolios: byAccount };
     const colors = theme === 'light' ? PNL_COLORS_LIGHT : PNL_COLORS;
     const [base = '', quote = 'USDT'] = stock ? [symbol, 'USD'] : symbol.split('/');
-    const lines: PriceLineSpec[] = [];
+    const lines: AccountLine[] = [];
     const several = relevant.length > 1;
     for (const p of portfolios) {
       const d = p.data;
       // Stocks come from brokers, coins from exchanges: a ticker can be both (COIN), the account kind decides.
       if (!d || (d.kind === 'stocks') !== stock) continue;
-      // The open trade on this coin: entry, liquidation, SL / TP orders with their PnL, PnL now (FD-PNL).
-      const account = several ? accounts.data?.find((a) => a.id === d.accountId)?.label : undefined;
-      const pnl = pnlLines({ base, quote, lastPrice, positions: d.positions, balances: d.balances, orders: d.orders, account, stock }, colors);
-      lines.push(...pnl.lines);
-      // Other orders on this coin stay as plain lines.
-      for (const o of d.orders) {
-        if (pnl.usedOrders.has(`${o.market}:${o.id}`)) continue;
-        if (!o.symbol.startsWith(`${base}/`) || (o.market === 'spot' && !o.symbol.startsWith(`${base}/${quote}`))) continue;
-        const price = o.triggerPrice ?? o.price;
-        if (price) lines.push({ price, color: colors.other, title: `${o.side} ${o.type}${o.triggerPrice ? ' stop' : ''}`, style: 'dashed' });
-      }
+      const account = accounts.data?.find((a) => a.id === d.accountId);
+      if (!account) continue;
+      byAccount.set(account.id, d);
+      const r = tradeLinesOf({ base, quote, lastPrice, positions: d.positions, balances: d.balances, orders: d.orders, account: several ? account.label : undefined, accountId: account.id, stock }, colors);
+      // FD-TRADEUI: the PnL now is in the entry's box (no line of its own).
+      for (const l of r.lines) if (l.role !== 'pnl') lines.push({ ...l, account });
     }
-    return lines;
+    return { lines, portfolios: byAccount };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `relevant` derives from accounts.data
   }, [portfolios, accounts.data, symbol, show, lastPrice, stock, theme]);
 }
@@ -769,7 +864,7 @@ export default function ChartsPage() {
   return stock ? <ChartView stock symbol={stock} /> : <ChartView stock={false} symbol={`${params.base?.toUpperCase()}/${params.quote?.toUpperCase()}`} />;
 }
 
-const DEFAULT_CHART_PREFS: Settings['charts'] = { symbol: '', showPositions: true, showLma: true, showSlingshot: true, slingshotHidden: false, lmaHidden: false, lmaPane: 0.25 };
+const DEFAULT_CHART_PREFS: Settings['charts'] = { symbol: '', showPositions: true, showLma: true, showSlingshot: true, slingshotHidden: false, lmaHidden: false, lmaPane: 0.25, logScale: false, listId: null };
 
 /**
  * `symbol`: "BTC/USDT", the ticker ("AAPL") of a stock or the id ("^SPX") of an index. `stock`: a share or an index, both
@@ -783,6 +878,20 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
   const tz = useTz();
   const settings = useSettings();
   const s = settings.data;
+  // FD-CHARTSETTINGS: the chart's settings; while their window is open, its draft, shown on the chart at once.
+  const savedLook = s?.chartStyle ?? DEFAULT_CHART_STYLE;
+  const [lookOpen, setLookOpen] = useState(false);
+  const [lookDraft, setLookDraft] = useState<ChartStyle | null>(null);
+  const look = lookOpen && lookDraft ? lookDraft : savedLook;
+  const closeLook = useCallback(() => {
+    setLookOpen(false);
+    setLookDraft(null);
+  }, []);
+  // The chart's own time zone (axis, signals, alerts), else the account's.
+  const chartTz = chartTimeZone(look, tz);
+  // FD-TRADESOUND: the coin sound when a trade ends, while this chart is open and seen.
+  // FIX-COINSOUND2: the trades of this chart only (an index has none).
+  useTradeEndSound(savedLook.alerts.tradeSound && !index, stock ? symbol : (symbol.split('/')[0] ?? symbol), stock);
   // Defaults fill in what an older server does not send yet.
   const prefs: Settings['charts'] = { ...DEFAULT_CHART_PREFS, ...s?.charts };
   // FD-PREMIUMHIDE: Slingshot and LMA off the chart, drawn, or on it but hidden with the legend's eye.
@@ -820,7 +929,46 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
   const [picker, setPicker] = useState(false);
   const closePicker = useCallback(() => setPicker(false), []);
   const frame = useRef<HTMLDivElement>(null);
-  const fs = useFullscreen(frame, { blockEsc: drawer !== null || picker });
+  // FD-WATCHDRAWER: on a phone (under 768 px, Tailwind's `md`) the symbol list is a panel sliding in from the right,
+  // closed whenever the page opens and never remembered; wider, the side panel of FD-CHARTTV.
+  const wide = useMediaQuery('(min-width: 768px)');
+  const [listOpen, setListOpen] = useState(false);
+  const closeListDrawer = useCallback(() => setListOpen(false), []);
+  useEffect(() => {
+    if (wide) setListOpen(false);
+  }, [wide]);
+  const fs = useFullscreen(frame, { blockEsc: drawer !== null || picker || listOpen });
+  // FD-CHARTTV §3: the symbol list's width and visibility, kept in this browser.
+  const [list, setList] = useState(readPrefs);
+  const listShown = wide ? !list.hidden : listOpen;
+  const setListPrefs = useCallback((next: WatchlistPrefs) => {
+    setList(next);
+    writePrefs(next);
+  }, []);
+  const chartRow = useRef<HTMLDivElement>(null);
+  // Dragging the list's left edge: its width is from the pointer to the row's right side.
+  const onListEdgeDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    const edge = e.currentTarget;
+    edge.setPointerCapture(e.pointerId);
+    let width = list.width;
+    const move = (ev: PointerEvent) => {
+      const row = chartRow.current?.getBoundingClientRect();
+      if (!row) return;
+      width = clampWidth(row.right - ev.clientX - 6, row.width);
+      setList((l) => ({ ...l, width }));
+    };
+    const up = () => {
+      edge.removeEventListener('pointermove', move);
+      edge.removeEventListener('pointerup', up);
+      edge.removeEventListener('pointercancel', up);
+      setListPrefs({ ...list, width });
+    };
+    edge.addEventListener('pointermove', move);
+    edge.addEventListener('pointerup', up);
+    edge.addEventListener('pointercancel', up);
+  };
   /** Chart toggles are saved at once (optimistic) and kept on the server. */
   const remember = useCallback((patch: SettingsPatch) => void saveSettingsPatch(qc, patch).catch(() => undefined), [qc]);
 
@@ -873,7 +1021,14 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
   const lma = useMemo(() => (lmaDrawn && candles.data ? runLma(candles.data.candles, lmaParams) : null), [lmaDrawn, candles.data, lmaParams]);
 
   // FD-INDICATORS: the other indicators, saved for every chart of the user.
-  const studies = useMemo(() => s?.studies ?? [], [s?.studies]);
+  // FD-COLORUNIFY: in the linked form everywhere (drawing, legend, settings); written so at the next save of its settings.
+  const studies = useMemo(() => (s?.studies ?? []).map(linkStyle), [s?.studies]);
+  // FD-CHARTAUDIT §3: how many times each indicator is on the chart (the picker says "Pe grafic").
+  const studiesOn = useMemo(() => {
+    const n: Record<string, number> = {};
+    for (const st of studies) n[st.id] = (n[st.id] ?? 0) + 1;
+    return n;
+  }, [studies]);
   const [studyError, setStudyError] = useState<unknown>(null);
   const studyRuntime = useStudyRuntime(studies.some((x) => x.visible) || picker || (drawer?.startsWith('study:') ?? false));
   const runtime = studyRuntime.runtime;
@@ -999,6 +1154,9 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
   // The panes below the price (FD §2): the LMA, then each shown indicator that has a pane of its own.
   const paneStudies = useMemo(() => studies.filter((x) => x.visible && studyMeta(x.id)?.overlay === false), [studies]);
   const paneOrder = useMemo(() => [...(lma ? ['lma'] : []), ...paneStudies.map((x) => x.uid)], [lma, paneStudies]);
+  // FD-INDICATORS §2: 120 px more for each pane below the price. FD-CHARTAUDIT §6: from what is switched on (the LMA's
+  // values come with the candles), so the panel keeps the same height while another timeframe or symbol loads.
+  const chartHeight = 560 + 120 * ((lmaDrawn ? 1 : 0) + paneStudies.length);
   const paneFactors = useMemo(() => {
     const f: Record<string, number> = { lma: prefs.lmaPane / (1 - prefs.lmaPane) };
     for (const x of paneStudies) f[x.uid] = x.height ?? DEFAULT_PANE_FACTOR;
@@ -1030,16 +1188,160 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
   }, [runtime, studies, studyStates]);
 
   // Nobody holds an index: no position lines on its chart.
-  const rawLines = usePositionLines(symbol, prefs.showPositions && !index, candles.data?.candles.at(-1)?.c ?? null, stock);
+  const lastClose = candles.data?.candles.at(-1)?.c ?? null;
+  const { lines: tradeLines, portfolios: tradePortfolios } = useTradeLines(symbol, prefs.showPositions && !index, lastClose, stock);
+  // FD-ORDEREDIT: the lines dragged and not yet sent (none on another symbol); a line gone takes its draft along.
+  const [drafts, setDrafts] = useState<Drafts>({});
+  useEffect(() => setDrafts({}), [symbol]);
+  const live = useMemo(() => liveDrafts(tradeLines, drafts), [tradeLines, drafts]);
+  useEffect(() => {
+    if (live !== drafts) setDrafts(live);
+  }, [live, drafts]);
+  // FIX-SLTPDUP: the levels just confirmed stay at their new price until the platform lists them (it does a few seconds
+  // late); an old order it still lists meanwhile is hidden. Each waits at most a minute.
+  const [sent, setSent] = useState<SentLevel[]>([]);
+  const [sentTick, setSentTick] = useState(0);
+  useEffect(() => setSent([]), [symbol]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `sentTick` re-reads the clock when a level expires
+  const settled = useMemo(() => withSent(tradeLines, sent, Date.now()), [tradeLines, sent, sentTick]);
+  useEffect(() => {
+    if (settled.waiting.length !== sent.length) setSent(settled.waiting);
+  }, [settled.waiting, sent.length]);
+  useEffect(() => {
+    if (!sent.length) return;
+    const t = setTimeout(() => setSentTick((x) => x + 1), Math.max(0, Math.min(...sent.map((x) => x.until)) - Date.now()) + 50);
+    return () => clearTimeout(t);
+  }, [sent, sentTick]);
+  const shownLines = useMemo(() => withDrafts(settled.lines, live), [settled.lines, live]);
+  // FD-TRADEUI: each line with its box (quantity | PnL | ×), in TradingView's colours.
+  const theme = useTheme();
+  const tradePalette = theme === 'light' ? TRADE_COLORS_LIGHT : TRADE_COLORS;
+  const severalAccounts = new Set(tradeLines.map((l) => l.account.id)).size > 1;
+  const rawLines: PriceLineSpec[] = shownLines.map((l) =>
+    chartLineOf(l, {
+      last: lastClose,
+      drafted: live[l.id] !== undefined,
+      entryDraft: l.role === 'order-sl' || l.role === 'order-tp' ? live[`${l.group}|line`] : undefined,
+      several: severalAccounts,
+      palette: tradePalette,
+      close: lineCloses(l, tradePortfolios.get(l.account.id)),
+      draggable: isDraggable(l, l.account),
+    }),
+  );
   const linesKey = JSON.stringify(rawLines);
   // Keep the array identity stable while the content is unchanged (avoids redrawing price lines every render).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const priceLines = useMemo(() => rawLines, [linesKey]);
-  const precision = candles.data?.pricePrecision ?? 2;
+  // The pair's decimals (what a drag or a new line is rounded to), and the ones shown (FD-CHARTSETTINGS' precision).
+  const pairPrecision = candles.data?.pricePrecision ?? 2;
+  const precision = chartPrecision(look, pairPrecision);
+  // FD-ORDEREDIT: a drop is a draft (back on its own level: none); the title follows the drag with the PnL there.
+  const lineById = useMemo(() => new Map(tradeLines.map((l) => [l.id, l])), [tradeLines]);
+  const onDragLine = useCallback(
+    (id: string, price: number) => {
+      const l = lineById.get(id);
+      if (!l) return;
+      setDrafts((d) => {
+        const next = { ...d };
+        if (price === l.price) delete next[id];
+        else next[id] = price;
+        return next;
+      });
+    },
+    [lineById],
+  );
+  const dragText = useCallback(
+    (id: string, price: number) => {
+      const l = lineById.get(id);
+      if (!l) return '';
+      const { text } = labelText(l, price, lastClose, l.role === 'order-sl' || l.role === 'order-tp' ? live[`${l.group}|line`] : undefined);
+      return severalAccounts ? `${text} · ${l.account.label}` : text;
+    },
+    [lineById, live, lastClose, severalAccounts],
+  );
+  // FD-TRADEUI: the × of a box: close the position (its order form), remove a SL / TP, cancel an order.
+  const [lineAction, setLineAction] = useState<LineAction | null>(null);
+  const closeLineAction = useCallback(() => setLineAction(null), []);
+  const onLineAction = useCallback(
+    (id: string) => {
+      const l = lineById.get(id);
+      if (!l) return;
+      const act = lineActionOf(l, tradePortfolios.get(l.account.id));
+      if (!act) return;
+      if (act.kind === 'ticket') setTicket(act.seed);
+      else setLineAction(act.action);
+    },
+    [lineById, tradePortfolios],
+  );
+  const [tradeNote, setTradeNote] = useState<ToastMessage | null>(null);
+  const quietTrade = useCallback(() => setTradeNote(null), []);
+  // On the entry (or order) line, before its box (TradingView): ⇅ for a futures position that can be turned, then
+  // Discard / Confirm for its lines dragged and not yet sent.
+  const [reverseOf, setReverseOf] = useState<{ account: AccountView; symbol: string; side: 'long' | 'short' } | null>(null);
+  const closeReverse = useCallback(() => setReverseOf(null), []);
+  const reversible = shownLines.filter((l) => l.role === 'entry' && l.position?.market === 'futures' && canReverse(l.account, l.position.symbol));
+  const overlayGroups = [...new Set([...reversible.map((l) => l.group), ...draftGroups(tradeLines, live)])];
+  const lineOverlays = overlayGroups.flatMap((group) => {
+    const anchor = anchorOf(group, shownLines);
+    const ticket = draftTicket(tradeLines, live, group);
+    if (!anchor) return [];
+    const account = anchor.account;
+    const pos = anchor.role === 'entry' ? anchor.position : undefined;
+    const reverse = pos && reversible.includes(anchor) ? (
+      <button
+        type="button"
+        className={clsx(BOX, 'w-[26px] bg-chart px-0 pointer-coarse:w-8')}
+        style={{ borderColor: lineColor(anchor, tradePalette), color: lineColor(anchor, tradePalette) }}
+        onClick={() => setReverseOf({ account, symbol: pos.symbol, side: pos.side })}
+        aria-label={`Întoarce poziția ${pos.side} ${pos.symbol.split(':')[0]}`}
+        title="Întoarce poziția (închide-o și deschide-o în sens opus)"
+      >
+        <ArrowDownUp size={13} aria-hidden />
+      </button>
+    ) : null;
+    if (!ticket) return reverse ? [{ key: group, price: anchor.price, clamp: false, node: reverse }] : [];
+    const order = tradeLines.find((l) => l.group === group && l.order)?.order;
+    const quote = (order?.symbol.split('/')[1] ?? '').split(':')[0] || (stock ? 'USD' : 'USDT');
+    const impact = (st: ModifyStepPlan) =>
+      stepImpact(
+        st,
+        anchor.role === 'entry'
+          ? { kind: 'protection', basisOf: (orderId, what) => tradeLines.find((l) => l.group === group && l.role === what && l.order?.id === orderId)?.basis ?? anchor.basis ?? null }
+          : { kind: 'order', basis: order ? entryBasisOf(order, quote) : null, closes: false, amount: order?.amount ?? null },
+      );
+    const discard = () =>
+      setDrafts((d) => {
+        const next = { ...d };
+        for (const l of tradeLines) if (l.group === group) delete next[l.id];
+        return next;
+      });
+    return [
+      {
+        key: group,
+        price: anchor.price,
+        node: (
+          <div className="flex items-center gap-1.5">
+            {reverse}
+            <TradeDraftBar
+              account={account}
+              ticket={ticket}
+              impact={impact}
+              onDiscard={discard}
+              onSent={(r, message) => {
+                if (r) setSent((x) => [...x, ...sentLevels(tradeLines, live, group, ticket, r, Date.now())]);
+                discard();
+                setTradeNote({ text: message, bad: r?.status !== 'done', at: Date.now() });
+              }}
+            />
+          </div>
+        ),
+      },
+    ];
+  });
   const hlinePanel = useMemo<HLinePanel>(
     () => ({
       line: hlinesSaved.find((l) => l.id === hlineTarget),
-      precision,
+      precision: pairPrecision,
       template: s?.hlineTemplate ?? null,
       onDraft: setHlineDraft,
       // Optimistic, as the drags and additions: the form checks the same schema as the server, and a change made while
@@ -1048,9 +1350,77 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
       onSaveTemplate: (style) => saveSettingsPatch(qc, { hlineTemplate: style }, { optimistic: false }),
       onDelete: (id) => saveHlines(linesNow().filter((l) => l.id !== id)),
     }),
-    [hlinesSaved, hlineTarget, precision, s?.hlineTemplate, saveHlines, linesNow, qc],
+    [hlinesSaved, hlineTarget, pairPrecision, s?.hlineTemplate, saveHlines, linesNow, qc],
   );
   const alerts = useMemo(() => (result ? collapseAlerts(result.alerts).reverse().slice(0, 40) : []), [result]);
+
+  // FD-CHARTSETTINGS: the chart's menu (a right click on its panes), "Resetează vizualizarea" (⌥R / Alt+R too) and the
+  // removals, each with "Anulează" in its message.
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const closeMenu = useCallback(() => setMenuAt(null), []);
+  const [resetTick, setResetTick] = useState(0);
+  const resetView = useCallback(() => setResetTick((t) => t + 1), []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.code !== 'KeyR' || e.defaultPrevented) return;
+      // Not while typing, nor under an open window.
+      if ((e.target as HTMLElement | null)?.closest?.('input, textarea, select, [contenteditable="true"]') || modalOpen()) return;
+      e.preventDefault();
+      resetView();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [resetView]);
+  // Another symbol: its settings window closes as with "Renunță", its menu too.
+  useEffect(() => {
+    closeLook();
+    closeMenu();
+  }, [symbol, closeLook, closeMenu]);
+  const saveLook = useCallback((next: ChartStyle) => saveSettingsPatch(qc, { chartStyle: next }), [qc]);
+  const indicatorCount = studies.length + (prem.slingshot !== 'off' ? 1 : 0) + (prem.lma !== 'off' ? 1 : 0);
+  const removeDrawings = () => {
+    const before = linesNow();
+    if (!before.length) return;
+    if (drawerRef.current?.startsWith('hline:')) closeDrawer();
+    void saveHlines([]).catch(() => undefined);
+    const text = before.length === 1 ? 'Desenul a fost șters.' : `${countRo(before.length, 'desen', 'desene')} au fost șterse.`;
+    const undo = () => {
+      // Back as they were, with any drawn since.
+      const ids = new Set(before.map((l) => l.id));
+      void saveHlines([...before, ...linesNow().filter((l) => !ids.has(l.id))].slice(0, HLINE_MAX)).catch(() => undefined);
+    };
+    setTradeNote({ text, at: Date.now(), action: { label: 'Anulează', run: undo } });
+  };
+  const removeIndicators = () => {
+    const n = indicatorCount;
+    if (!n) return;
+    const before = { studies: qc.getQueryData<SettingsView>(['settings'])?.studies ?? studies, charts: { showSlingshot: prefs.showSlingshot, slingshotHidden: prefs.slingshotHidden, showLma: prefs.showLma, lmaHidden: prefs.lmaHidden } };
+    setDrawer((d) => (d && (d === 'slingshot' || d === 'lma' || d.startsWith('study:')) ? null : d));
+    // Removed as one by one would: the memory keeps each one's settings. After a form's save on its way, so the list
+    // put back by "Anulează" is the one removed (with that save in it).
+    void formSave.current
+      .then(() =>
+        saveStudies((list, memory) => {
+          before.studies = list;
+          return { studies: [], memory: list.reduce((m, x) => rememberStudy(m, memoryOf(x)), [...memory]) };
+        }),
+      )
+      .catch(() => undefined);
+    remember({ charts: { showSlingshot: false, slingshotHidden: false, showLma: false, lmaHidden: false } });
+    const text = n === 1 ? 'Indicatorul a fost scos de pe grafic.' : `${countRo(n, 'indicator', 'indicatori')} au fost scoși de pe grafic.`;
+    const undo = () => {
+      const uids = new Set(before.studies.map((x) => x.uid));
+      void saveStudies((list) => ({ studies: [...before.studies, ...list.filter((x) => !uids.has(x.uid))].slice(0, STUDY_MAX) })).catch(() => undefined);
+      remember({ charts: before.charts });
+    };
+    setTradeNote({ text, at: Date.now(), action: { label: 'Anulează', run: undo } });
+  };
+  const menuItems: ChartMenuItem[] = [
+    { id: 'reset', label: 'Resetează vizualizarea', icon: RotateCcw, shortcut: isMac() ? '⌥R' : 'Alt+R', onSelect: resetView },
+    ...(hlinesSaved.length ? [{ id: 'drawings', label: `Șterge ${countRo(hlinesSaved.length, 'desen', 'desene')}`, icon: Trash2, separated: true, onSelect: removeDrawings }] : []),
+    ...(indicatorCount ? [{ id: 'indicators', label: `Șterge ${countRo(indicatorCount, 'indicator', 'indicatori')}`, icon: Trash2, separated: !hlinesSaved.length, onSelect: removeIndicators }] : []),
+    { id: 'settings', label: 'Setări…', icon: Cog, separated: true, onSelect: () => setLookOpen(true) },
+  ];
   const last = candles.data?.candles.at(-1);
   // 24 h change from the loaded candles (only meaningful when a candle is at most a day long).
   const change24h = useMemo(() => {
@@ -1078,26 +1448,54 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
   const canTrade = !index && (tradingCaps.data?.accounts ?? []).some((a) => a.enabled && a.markets.length > 0 && (a.kind === 'stocks') === stock);
   const [ticket, setTicket] = useState<TicketSeed | null>(null);
   const closeTicket = useCallback(() => setTicket(null), []);
+  // FD-BOT §1: the bots' window, from the chart's symbol, timeframe, price and the range of its last 100 candles.
+  const [botSeed, setBotSeed] = useState<BotSeed | null>(null);
+  const closeBots = useCallback(() => setBotSeed(null), []);
+  const openBots = () => {
+    const recent = candles.data?.candles.slice(-100) ?? [];
+    setBotSeed({
+      kind: stock ? 'stocks' : 'crypto',
+      symbol: stock ? (base ?? symbol) : symbol,
+      tf: activeTf,
+      price: last?.c ?? null,
+      low: recent.length ? Math.min(...recent.map((c) => c.l)) : null,
+      high: recent.length ? Math.max(...recent.map((c) => c.h)) : null,
+    });
+  };
 
   // FD-CHARTFAV §1: with Slingshot off or hidden nothing of it is drawn (the panels below still use `result`).
-  const tpSl = slingshotDrawn && result?.atr ? (
-    // The indicator's own table, in its Pine colours: on a dark plate in both themes, or its neon would vanish on white
-    // (FD-THEME §1).
-    <div className="absolute right-3 bottom-3 rounded-xl border border-[#262d3a] bg-[#07090e]/90 px-4 py-3 text-[13px] backdrop-blur">
-      <div className="flex justify-between gap-6">
-        <span style={{ color: p.longTPColor }}>TAKE PROFIT</span>
-        <span className="num font-semibold" style={{ color: p.longTPColor }}>
-          {fmtPrice(result.atr.tp, precision)}
-        </span>
+  // FD-SLINGSHOT34: the LONG's rows, then the SHORT's; the two sides are independent and may show together.
+  const tpSlRows = result ? [result.atr, result.atrShort].filter((a) => a !== null) : [];
+  const tpSl =
+    slingshotDrawn && tpSlRows.length > 0 ? (
+      // The indicator's own table, in its Pine colours: on a dark plate in both themes, or its neon would vanish on white
+      // (FD-THEME §1).
+      // On phones the side's suffix needs a tighter box, or "TAKE PROFIT (SHORT)" would wrap; it never gets wider than the
+      // chart (a label would be cut short first).
+      <div className="absolute right-3 bottom-3 flex max-w-[calc(100%-1.5rem)] flex-col gap-1 rounded-xl border border-[#262d3a] bg-[#07090e]/90 px-3 py-3 text-[11px] whitespace-nowrap backdrop-blur min-[360px]:text-[12px] sm:px-4 sm:text-[13px]">
+        {tpSlRows.map((a) => {
+          // FD-STYLEUNIFY: each side in its own take profit / stop loss colours.
+          const tpColor = a.side === 'short' ? p.shortTPColor : p.longTPColor;
+          const slColor = a.side === 'short' ? p.shortSLColor : p.longSLColor;
+          return (
+            <Fragment key={a.side}>
+              <div className="flex justify-between gap-3 sm:gap-6">
+                <span className="min-w-0 truncate" style={{ color: tpColor }}>TAKE PROFIT{a.side === 'short' ? ' (SHORT)' : ''}</span>
+                <span className="num shrink-0 font-semibold" style={{ color: tpColor }}>
+                  {fmtPrice(a.tp, precision)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-3 sm:gap-6">
+                <span className="min-w-0 truncate" style={{ color: slColor }}>STOP LOSS{a.side === 'short' ? ' (SHORT)' : ''}</span>
+                <span className="num shrink-0 font-semibold" style={{ color: slColor }}>
+                  {fmtPrice(a.sl, precision)}
+                </span>
+              </div>
+            </Fragment>
+          );
+        })}
       </div>
-      <div className="mt-1 flex justify-between gap-6">
-        <span style={{ color: p.longSLColor }}>STOP LOSS</span>
-        <span className="num font-semibold" style={{ color: p.longSLColor }}>
-          {fmtPrice(result.atr.sl, precision)}
-        </span>
-      </div>
-    </div>
-  ) : null;
+    ) : null;
 
   const lmaText = (e: LmaParams) => `${e.preset !== 'Default' && e.preset !== 'Custom' ? `${e.preset} ` : ''}${e.period} ${e.steepness} ${e.maType} ${e.smooth}`;
   const lmaButtons = (hidden: boolean) => (
@@ -1119,18 +1517,22 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
     return (
       <div className="px-1.5 pt-1.5">
         <LegendRow>
-          <span className="font-medium text-muted">{LMA_SHORT_TITLE}</span>
-          <span className="num hidden text-faint sm:inline">{lmaText(e)}</span>
+          <span className={clsx('font-medium text-muted', LEGEND_TITLE)}>{LMA_SHORT_TITLE}</span>
+          <span className={clsx('contents', LEGEND_INPUTS)}>
+            <span className="num hidden text-faint sm:inline">{lmaText(e)}</span>
+          </span>
           {/* FD-CHARTSTEADY §2: the buttons before the values, so the cursor's values never move them. */}
           {lmaButtons(false)}
-          <span className="num font-semibold" style={{ color: col }}>
-            {Number.isFinite(v) ? v.toFixed(2) : '—'}
-          </span>
-          {Number.isFinite(v) && (
-            <span className="text-[11.5px] font-semibold" style={{ color: col }}>
-              {lma.state[i]}
+          <span className={clsx('contents', LEGEND_VALUES)}>
+            <span className="num font-semibold" style={{ color: col }}>
+              {Number.isFinite(v) ? v.toFixed(2) : '—'}
             </span>
-          )}
+            {Number.isFinite(v) && (
+              <span className="text-[11.5px] font-semibold" style={{ color: col }}>
+                {lma.state[i]}
+              </span>
+            )}
+          </span>
         </LegendRow>
       </div>
     );
@@ -1167,18 +1569,51 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
       />
     );
   };
-  // The price pane: Slingshot, a hidden LMA, the indicators over the candles, and the hidden ones that have a pane of their own.
+  // FD-CHARTSETTINGS: the status line, first in the price pane: the symbol as shown in the header, its name (a share's
+  // company, a coin's own name from the watchlist), where the prices come from, whether the market is open.
+  const symbolLabel = base ? `${plainSymbol(base)}${quote ? `/${quote}` : ''}` : symbol;
+  const coinAlias = !stock ? watch.data?.find((w) => w.kind === 'crypto' && w.coin === base)?.aliases.map((a) => a.replace(/^=/, '')).find((a) => a.toUpperCase() !== base?.toUpperCase()) : undefined;
+  const instrumentName = companyName ?? coinAlias ?? null;
+  const statusMarket = stock ? (market ? { open: market.state === 'open', text: MARKET_RO[market.state] ?? market.label } : null) : { open: true, text: 'piața e deschisă non-stop' };
+  const statusSource = candles.data ? (EXCHANGE_NAME[candles.data.exchange] ?? candles.data.exchange) : '';
+  // The change since the day before: for candles shorter than a day (a day's or a week's own change is the candle's).
+  const wantDay = look.status.dayChange && chartSec < 86_400;
+  const prevDay = useMemo(() => (wantDay && candles.data ? prevDayCloses(candles.data.candles, chartTz) : null), [wantDay, candles.data, chartTz]);
+  const hasVolume = useMemo(() => candles.data?.candles.some((k) => k.v > 0) ?? false, [candles.data]);
+  const statusOn = statusLineOn(look.status);
+  const statusLine = (bar: number | null) =>
+    candles.data ? (
+      <ChartStatusLine
+        look={look}
+        logo={base ? <CoinLogo coin={base} size={16} badge={stock} square={stock} /> : null}
+        symbol={symbolLabel}
+        name={instrumentName}
+        tf={activeTf}
+        source={statusSource}
+        market={statusMarket}
+        candles={candles.data.candles}
+        bar={bar}
+        precision={precision}
+        prevDay={prevDay}
+        hasVolume={hasVolume}
+      />
+    ) : null;
+  // The price pane: the status line, Slingshot, a hidden LMA, the indicators over the candles, and the hidden ones that
+  // have a pane of their own.
   const mainStudies = studies.filter((st) => studyMeta(st.id)?.overlay !== false || !st.visible);
   const legends: Record<string, (bar: number | null) => React.ReactNode> = {};
-  if (prem.slingshot !== 'off' || prem.lma === 'hidden' || mainStudies.length) {
+  if (statusOn || prem.slingshot !== 'off' || prem.lma === 'hidden' || mainStudies.length) {
     const slingshotHidden = prem.slingshot === 'hidden';
     legends.main = (bar) => (
       <div className="flex flex-col items-start gap-0.5 px-1.5 pt-1.5">
+        {statusOn && statusLine(bar)}
         {prem.slingshot !== 'off' && (
           <LegendRow dim={slingshotHidden}>
-            <span className="font-medium text-muted">{SLINGSHOT_SHORT_TITLE}</span>
-            <span className="num hidden text-faint sm:inline">
-              {p.lenFastEma} {p.lenSlowEma}
+            <span className={clsx('font-medium text-muted', LEGEND_TITLE)}>{SLINGSHOT_SHORT_TITLE}</span>
+            <span className={clsx('contents', LEGEND_INPUTS)}>
+              <span className="num hidden text-faint sm:inline">
+                {p.lenFastEma} {p.lenSlowEma}
+              </span>
             </span>
             <LegendButtons
               name={SLINGSHOT_SHORT_TITLE}
@@ -1191,8 +1626,10 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
         )}
         {prem.lma === 'hidden' && (
           <LegendRow dim>
-            <span className="font-medium text-muted">{LMA_SHORT_TITLE}</span>
-            <span className="num hidden text-faint sm:inline">{lmaText(effectiveLmaParams(lmaParams))}</span>
+            <span className={clsx('font-medium text-muted', LEGEND_TITLE)}>{LMA_SHORT_TITLE}</span>
+            <span className={clsx('contents', LEGEND_INPUTS)}>
+              <span className="num hidden text-faint sm:inline">{lmaText(effectiveLmaParams(lmaParams))}</span>
+            </span>
             {lmaButtons(true)}
           </LegendRow>
         )}
@@ -1207,6 +1644,12 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
     <div className="flex flex-col gap-3.5">
       {/* Everything inside this frame goes full screen: the chart's toolbar, the pair picker and the chart. */}
       <div ref={frame} className={clsx('flex flex-col gap-3.5', fs.active && 'fixed inset-0 z-[45] overflow-auto overscroll-contain bg-ink p-3 sm:p-4')}>
+        {/* FD-CHARTAUDIT §7: the page's banner is behind the full screen. */}
+        {fs.active && <OfflineBanner framed />}
+        {/* FD-ORDEREDIT: what came of the lines' changes (in the frame, so it shows in full screen too). */}
+        <Toast message={tradeNote} onDone={quietTrade} autoHide={look.alerts.autoHideToasts} />
+        {menuAt && <ChartMenu at={menuAt} items={menuItems} onClose={closeMenu} />}
+        {lookOpen && <ChartSettingsDialog saved={savedLook} pairPrecision={pairPrecision} accountTz={tz} onPreview={setLookDraft} onSave={saveLook} onClose={closeLook} />}
         <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
           {/* FD-CHARTSTEADY §1: a fixed basis, so whether the toolbar fits beside it never depends on the symbol's data. */}
           <div className="flex min-w-0 flex-[1_1_34rem] flex-wrap items-baseline gap-x-4 gap-y-1.5">
@@ -1248,10 +1691,14 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
                 {stockChangeText ?? (quoteQ.isPending ? <Holding ghost={changeGhost} dash="—" /> : '—')}
               </span>
             )}
-            {/* While loading it keeps the previous width; never empty (an empty line would shift the row's baseline). */}
-            <span className="text-[12.5px] text-faint">{loadingCandles && sourceGhost && sourceGhost.length > sourceText.length ? <Holding ghost={sourceGhost} dash={sourceText || '\u00a0'} start /> : sourceText || '\u00a0'}</span>
+            {/* While loading it keeps the previous width; never empty (an empty line would shift the row's baseline).
+                Centred on the row, as the 24h chip beside it (FD-ORDEREDIT §alignment). */}
+            <span className="self-center text-[12.5px] leading-6 text-faint">{loadingCandles && sourceGhost && sourceGhost.length > sourceText.length ? <Holding ghost={sourceGhost} dash={sourceText || '\u00a0'} start /> : sourceText || '\u00a0'}</span>
           </div>
-          <div className="flex flex-wrap items-center gap-2.5">
+          {/* FD-CHARTTV §2: everything on a row as tall as its tallest; the buttons stay together (never split). */}
+          {/* FD-CHARTPOLISH §2: left-aligned; it grows to its row's width (its basis is its content, so it still wraps
+              as before), and only the list's button goes to the right edge, above the list. */}
+          <div className="flex flex-[1_1_auto] flex-wrap items-stretch gap-2.5">
             <div className="seg" role="group" aria-label="Timeframe">
               {TIMEFRAMES.map((t) => {
                 const off = tfs !== null && !tfs.includes(t);
@@ -1271,32 +1718,56 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
                 );
               })}
             </div>
-            <label className="inline-flex min-h-[38px] items-center gap-2 rounded-[10px] border border-line px-3 text-[13px] text-muted">
-              <input type="checkbox" checked={prefs.showPositions} onChange={(e) => remember({ charts: { showPositions: e.target.checked } })} /> Pozițiile mele
-            </label>
-            {canTrade && (
-              <button className="btn btn-primary" onClick={() => setTicket(stock ? { kind: 'stocks', symbol: base ?? symbol, price: last?.c } : { kind: 'crypto', symbol, price: last?.c })}>
-                <ArrowRightLeft size={16} aria-hidden /> Tranzacționează
+            {/* FD-WATCHDRAWER: on a phone the buttons wrap (nothing leaves the screen); wider, they stay together.
+                FD-CHARTPOLISH §2: on a phone the group lays nothing out itself (`contents`): its buttons and the list's
+                share the rows, so the list's button sits at the end of the last one, not alone on a row of its own.
+                FD-CHARTAUDIT §8: wider, the list's button is in the group, which grows to its row's width: it goes to
+                the next row only with the others (it was left alone on one at 1180 px, and at 1024 in full screen). */}
+            <div className="contents md:flex md:flex-[1_1_auto] md:flex-nowrap md:items-stretch md:gap-2.5">
+              <label className="inline-flex items-center gap-2 rounded-[10px] border border-line px-3 text-[13px] whitespace-nowrap text-muted">
+                <input type="checkbox" checked={prefs.showPositions} onChange={(e) => remember({ charts: { showPositions: e.target.checked } })} /> Pozițiile mele
+              </label>
+              {canTrade && (
+                <button className="btn btn-primary" onClick={() => setTicket(stock ? { kind: 'stocks', symbol: base ?? symbol, price: last?.c } : { kind: 'crypto', symbol, price: last?.c })}>
+                  <ArrowRightLeft size={16} aria-hidden /> Tranzacționează
+                </button>
+              )}
+              {!index && (
+                <button className="btn" onClick={openBots}>
+                  <Bot size={16} aria-hidden /> Bot
+                </button>
+              )}
+              <button className="btn whitespace-nowrap" onClick={() => setPicker(true)}>
+                <SlidersHorizontal size={16} aria-hidden /> Indicatori
               </button>
-            )}
-            <button className="btn" onClick={() => setPicker(true)}>
-              <SlidersHorizontal size={16} aria-hidden /> Indicatori
-            </button>
-            {fs.active ? (
-              <button className="btn btn-primary" onClick={fs.exit} aria-label="Ieși din ecran complet (Esc)">
-                <Minimize2 size={16} aria-hidden /> Ieși din ecran complet
-                <kbd className="num rounded border border-current/30 px-1 text-[11px] opacity-80">Esc</kbd>
+              {fs.active ? (
+                <button className="btn btn-primary w-[38px] px-0 pointer-coarse:w-11" onClick={fs.exit} aria-label="Ieși din ecran complet (Esc)" title="Ieși din ecran complet (Esc)">
+                  <Minimize2 size={16} aria-hidden />
+                </button>
+              ) : (
+                <button className="btn" onClick={() => void fs.enter()} aria-label="Ecran complet" title="Ecran complet">
+                  <Maximize2 size={16} aria-hidden />
+                  <span className="hidden sm:inline">Ecran complet</span>
+                </button>
+              )}
+              {/* FD-CHARTTV §3, FD-CHARTTOUCH, FD-CHARTPOLISH §2: the symbol list's button at the right edge (its panel
+                  comes from the right), the rest of the row staying on the left. */}
+              <button
+                className="btn ml-auto w-[38px] shrink-0 px-0 pointer-coarse:w-11"
+                aria-pressed={listShown}
+                aria-label={listShown ? 'Ascunde lista de simboluri' : 'Arată lista de simboluri'}
+                title={listShown ? 'Ascunde lista de simboluri' : 'Arată lista de simboluri'}
+                onClick={() => (wide ? setListPrefs({ ...list, hidden: !list.hidden }) : setListOpen((o) => !o))}
+              >
+                {listShown ? <PanelRightClose size={16} aria-hidden /> : <PanelRightOpen size={16} aria-hidden />}
               </button>
-            ) : (
-              <button className="btn" onClick={() => void fs.enter()} aria-label="Ecran complet" title="Ecran complet">
-                <Maximize2 size={16} aria-hidden />
-                <span className="hidden sm:inline">Ecran complet</span>
-              </button>
-            )}
+            </div>
           </div>
         </div>
-        <SymbolPicker current={savedSymbol} onPick={(path) => navigate(path)} />
         {ticket && <OrderTicket seed={ticket} onClose={closeTicket} />}
+        {botSeed && <BotsDialog seed={botSeed} onClose={closeBots} />}
+        {lineAction && <LineActionDialog action={lineAction} onClose={closeLineAction} onDone={(text, bad) => setTradeNote({ text, bad, at: Date.now() })} />}
+        {reverseOf && <ReverseDialog account={reverseOf.account} symbol={reverseOf.symbol} side={reverseOf.side} onClose={closeReverse} onDone={(text, bad) => setTradeNote({ text, bad, at: Date.now() })} />}
         {!stock && cryptoTfs && activeTf !== savedTf && (
           <p className="text-[12.5px] text-faint">
             {exchangeName} nu are {savedTf}; graficul arată {activeTf}.
@@ -1335,53 +1806,129 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
         {candles.isError && candles.data && <Warning>Actualizarea a eșuat ({errorMessage(candles.error)}); graficul arată ultimele date primite.</Warning>}
         {studyError ? <Warning>Lista indicatorilor nu s-a putut salva ({errorMessage(studyError)}); se arată cea de pe server.</Warning> : null}
         {studyRuntime.error ? <Warning>Codul indicatorilor nu s-a putut încărca ({errorMessage(studyRuntime.error)}). Reîncarcă pagina.</Warning> : null}
-        <div className={clsx('panel relative overflow-hidden bg-chart', fs.active && 'min-h-[320px] flex-1')}>
-          {!candles.data && !candles.isError ? (
-            <div className="px-6">
-              <Loading label="Se încarcă lumânările…" />
-            </div>
-          ) : !candles.data ? (
-            <div className="p-6">
-              <ErrorNote error={candles.error} onRetry={() => candles.refetch()} />
-            </div>
-          ) : (
-            <CandleChart
-              candles={candles.data.candles}
-              result={slingshotDrawn ? result : null}
-              params={p}
-              precision={precision}
-              tz={tz}
-              priceLines={priceLines}
-              viewKey={`${exchange}|${symbol}|${activeTf}`}
-              lma={lma}
-              paneOrder={paneOrder}
-              paneFactors={paneFactors}
-              onPaneFactors={onPaneFactors}
-              studies={draws}
-              runtime={runtime}
-              mainOverlay={tpSl}
-              legends={legends}
-              onVisibleRange={readsVisible ? setVisibleRange : undefined}
-              // FD-INDICATORS §2: 120 px more for each pane below the price.
-              className={fs.active ? 'h-full' : undefined}
-              style={fs.active ? undefined : { height: 560 + 120 * paneOrder.length }}
-              hlines={shownHlines}
-              selectedHLine={hlineTarget}
-              onAddHLine={addHLine}
-              hlineBlocked={hlineBlocked}
-              onMoveHLine={moveHLine}
-              onOpenHLine={openHLine}
-            />
+        {/* FD-CHARTTV §3: the chart, then the symbol list on its right (under it on a narrow screen). */}
+        <div ref={chartRow} className={clsx('flex', fs.active && 'min-h-[320px] flex-1')}>
+          {/* FD-CHARTSETTINGS: on the chart's own background, the loading one included (no flash of the theme's). */}
+          <div className="panel relative min-w-0 flex-1 overflow-hidden bg-chart" style={look.canvas.background.top ? ({ '--color-chart': look.canvas.background.top } as React.CSSProperties) : undefined}>
+            {/* FD-CHARTAUDIT §6: while another timeframe or symbol loads, the panel keeps the chart's height (the page
+                below does not jump). */}
+            {!candles.data && !candles.isError ? (
+              <div className={clsx('grid place-items-center px-6', fs.active && 'h-full')} style={fs.active ? undefined : { height: chartHeight }}>
+                <Loading label="Se încarcă lumânările…" />
+              </div>
+            ) : !candles.data ? (
+              <div className={clsx('p-6', fs.active && 'h-full')} style={fs.active ? undefined : { height: chartHeight }}>
+                <ErrorNote error={candles.error} onRetry={() => candles.refetch()} />
+              </div>
+            ) : (
+              <CandleChart
+                candles={candles.data.candles}
+                result={slingshotDrawn ? result : null}
+                params={p}
+                precision={pairPrecision}
+                displayPrecision={precision}
+                tz={chartTz}
+                priceLines={priceLines}
+                viewKey={`${exchange}|${symbol}|${activeTf}`}
+                lma={lma}
+                paneOrder={paneOrder}
+                paneFactors={paneFactors}
+                onPaneFactors={onPaneFactors}
+                studies={draws}
+                runtime={runtime}
+                mainOverlay={tpSl}
+                legends={legends}
+                onVisibleRange={readsVisible ? setVisibleRange : undefined}
+                className={fs.active ? 'h-full' : undefined}
+                style={fs.active ? undefined : { height: chartHeight }}
+                hlines={shownHlines}
+                selectedHLine={hlineTarget}
+                onAddHLine={addHLine}
+                hlineBlocked={hlineBlocked}
+                onMoveHLine={moveHLine}
+                onOpenHLine={openHLine}
+                tfMs={chartSec * 1000}
+                // A share's candle runs only with the market open, and ends by its close at the latest (a weekly one: not today).
+                countdown={!stock || (market?.state === 'open' && activeTf !== '1w')}
+                closeCap={stock ? (market?.closesAt ?? null) : null}
+                logScale={prefs.logScale}
+                onLogScale={(on) => remember({ charts: { logScale: on } })}
+                onDragLine={onDragLine}
+                dragText={dragText}
+                onLineAction={onLineAction}
+                lineOverlays={lineOverlays}
+                look={look}
+                watermark={[`${symbolLabel}, ${activeTf}`, ...(instrumentName ? [instrumentName] : [])]}
+                resetView={resetTick}
+                onSettings={() => setLookOpen(true)}
+                onContextMenu={(at) => setMenuAt({ x: at.x, y: at.y })}
+              />
+            )}
+          </div>
+          {wide && !list.hidden && (
+            <>
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Lățimea listei de simboluri"
+                aria-valuemin={WATCHLIST_MIN}
+                aria-valuemax={WATCHLIST_MAX}
+                aria-valuenow={list.width}
+                tabIndex={0}
+                title="Trage ca să schimbi lățimea listei (dublu-click: 300 px)"
+                className="group flex w-3 shrink-0 cursor-col-resize touch-none items-center justify-center"
+                onPointerDown={onListEdgeDown}
+                onDoubleClick={() => setListPrefs({ ...list, width: WATCHLIST_DEFAULT })}
+                onKeyDown={(e) => {
+                  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+                  e.preventDefault();
+                  // The edge is the list's left side: ← widens it, → narrows it.
+                  setListPrefs({ ...list, width: clampWidth(list.width + (e.key === 'ArrowLeft' ? 16 : -16), chartRow.current?.offsetWidth) });
+                }}
+              >
+                <span className="h-12 w-1 rounded-full bg-line-strong transition-colors group-hover:bg-accent group-focus-visible:bg-accent" aria-hidden />
+              </div>
+              {/* No overflow clip: the search's results may spill over the chart. */}
+              <aside className="panel relative flex w-[var(--wl)] max-w-[50%] shrink-0 flex-col" style={{ '--wl': `${list.width}px` } as React.CSSProperties} aria-label="Lista de simboluri">
+                <div className="absolute inset-0 flex flex-col">
+                  <Watchlist current={savedSymbol} onPick={(path) => navigate(path)} contained={fs.active} />
+                </div>
+              </aside>
+            </>
           )}
         </div>
+        {!wide && (
+          // FD-WATCHDRAWER: in the page's frame, so the system's full screen shows it too.
+          <ListDrawer open={listOpen} onClose={closeListDrawer}>
+            <Watchlist
+              current={savedSymbol}
+              inDrawer
+              onPick={(path) => {
+                setListOpen(false);
+                navigate(path);
+              }}
+            />
+          </ListDrawer>
+        )}
         {drawer && (
-          <SettingsDrawer target={drawer} slingshot={p} lma={lmaParams} studies={studies} runtime={runtime} onSaveStudy={saveStudy} hline={hlinePanel} onClose={closeDrawer} />
+          <SettingsDrawer
+            target={drawer}
+            slingshot={p}
+            lma={lmaParams}
+            studies={studies}
+            runtime={runtime}
+            onSaveStudy={saveStudy}
+            resultOf={(uid) => studyStates.get(uid)?.result ?? null}
+            hline={hlinePanel}
+            onClose={closeDrawer}
+          />
         )}
         {picker && (
           <IndicatorPicker
             premium={PREMIUM}
             premiumOn={prem}
             studyCount={studies.length}
+            studiesOn={studiesOn}
             favorites={favorites}
             favoriteError={favoriteError}
             onToggleFavorite={toggleFavorite}
@@ -1395,7 +1942,7 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
       <div className="grid gap-3.5 xl:grid-cols-[2fr_1fr]">
         <Panel title={`Semnale Slingshot ${SLINGSHOT_VERSION} pe ${activeTf}`} icon={ListChecks} flush>
           {result ? (
-            <SignalsTable signals={result.signals} precision={precision} tz={tz} />
+            <SignalsTable signals={result.signals} precision={precision} tz={chartTz} shortColor={p.shortColor} forming={{ long: result.last?.liveSignal ?? false, short: result.last?.liveShortSignal ?? false }} />
           ) : candles.isError ? (
             <p className="pb-4 text-[13.5px] text-faint">Fără semnale: lumânările nu s-au putut încărca.</p>
           ) : (
@@ -1409,13 +1956,18 @@ function ChartView({ symbol, stock, index = false }: { symbol: string; stock: bo
             <ul className="rows -mx-5 max-h-[380px] divide-y divide-line-soft overflow-auto text-[13.5px]">
               {alerts.map((a) => (
                 <li key={`${a.bar}-${a.type}`} className="flex items-center justify-between gap-3 px-5 py-2.5">
-                  <span className="flex flex-wrap items-center gap-x-2">
-                    <AlertIcon type={a.type} />
-                    <span>{ALERT_RO[a.type]}</span>
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-2">
+                    {/* The icon stays with its name, on the name's first line, however a narrow screen wraps them. */}
+                    <span className="flex min-w-0 items-start gap-2">
+                      <span className="flex h-[1lh] shrink-0 items-center">
+                        <AlertIcon type={a.type} />
+                      </span>
+                      <span>{ALERT_RO[a.type]}</span>
+                    </span>
                     {a.count > 1 && <span className="text-faint">× {a.count} bare</span>}
                     {a.provisional && <span className="text-[12px] text-warn">neconfirmat</span>}
                   </span>
-                  <span className="num shrink-0 text-faint">{fmtDateTime(a.time, tz)}</span>
+                  <span className="num shrink-0 text-faint">{fmtDateTime(a.time, chartTz)}</span>
                 </li>
               ))}
             </ul>

@@ -16,7 +16,8 @@ export const newsQuerySchema = z.object({
     .enum(['0', '1', 'true', 'false'])
     .optional()
     .transform((v) => v === '1' || v === 'true'),
-  category: z.enum(['crypto', 'macro', 'geopolitics', 'stocks']).optional(),
+  // FD-MACRORULES: "other", the news about none of the categories.
+  category: z.enum(['crypto', 'macro', 'geopolitics', 'stocks', 'other']).optional(),
   source: z.string().max(80).optional(),
   sentiment: z.enum(['positive', 'neutral', 'negative', 'pending']).optional(),
   q: z.string().trim().max(100).optional(),
@@ -47,7 +48,8 @@ export interface NewsItemDto {
   /** The importance by keywords (shown next to Claude's when they differ). */
   ruleImpact: number;
   flags: string[];
-  sentiment: { score: number; label: string; engine: string; meta: unknown } | null;
+  /** `reason`: the user's AI's reason for its score (FD-WHYPLAIN §3), null otherwise. */
+  sentiment: { score: number; label: string; engine: string; meta: unknown; reason: string | null } | null;
   clusterId: string;
   related: { id: string; title: string; url: string | null; source: string; publishedAt: number }[];
 }
@@ -79,6 +81,7 @@ interface Row {
   sentiment_label: string | null;
   sentiment_engine: string | null;
   sentiment_meta: string | null;
+  sentiment_reason: string | null;
   cluster_id: string;
   coins: string | null;
 }
@@ -164,7 +167,8 @@ export async function queryNews(db: Db, q: NewsQuery, tz: string, userId: number
             ${own('impact', 'sentiment_impact')} AS sentiment_impact, n.flags,
             ${own('score', 'sentiment')} AS sentiment, ${own('label', 'sentiment_label')} AS sentiment_label,
             ${ownAi ? 'CASE WHEN a.score IS NOT NULL THEN a.engine ELSE n.sentiment_engine END' : 'n.sentiment_engine'} AS sentiment_engine,
-            ${ownAi ? 'CASE WHEN a.score IS NOT NULL THEN NULL ELSE n.sentiment_meta END' : 'n.sentiment_meta'} AS sentiment_meta, n.cluster_id,
+            ${ownAi ? 'CASE WHEN a.score IS NOT NULL THEN NULL ELSE n.sentiment_meta END' : 'n.sentiment_meta'} AS sentiment_meta,
+            ${ownAi ? 'CASE WHEN a.score IS NOT NULL THEN a.reason END' : 'NULL'} AS sentiment_reason, n.cluster_id,
             (SELECT STRING_AGG(coin, ',') FROM news_coins c WHERE c.news_id = n.id AND c.coin NOT LIKE N'#%') AS coins
      FROM news n JOIN sources s ON s.id = n.source_id${ownAi ? ' LEFT JOIN news_ai_scores a ON a.news_id = n.id AND a.user_id = ?' : ''}
      WHERE ${where.join(' AND ')}
@@ -213,7 +217,7 @@ export async function queryNews(db: Db, q: NewsQuery, tz: string, userId: number
       flags: safeJson(r.flags, []) as string[],
       sentiment:
         r.sentiment_engine !== null && r.sentiment !== null
-          ? { score: r.sentiment, label: r.sentiment_label ?? 'neutral', engine: r.sentiment_engine, meta: safeJson(r.sentiment_meta, null) }
+          ? { score: r.sentiment, label: r.sentiment_label ?? 'neutral', engine: r.sentiment_engine, meta: safeJson(r.sentiment_meta, null), reason: r.sentiment_reason }
           : null,
       clusterId: r.cluster_id,
       related: (members.get(r.cluster_id) ?? []).filter((m) => m.id !== r.id),

@@ -468,7 +468,7 @@ export default function SecurityPage() {
   if (!account.data) return <ErrorNote error={account.error} onRetry={() => void account.refetch()} />;
   const a = account.data;
   return (
-    <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-3.5">
+    <div className="flex w-full flex-col gap-3.5">
       <h1 className="page-title">Securitate</h1>
       {params.get('recovery') === '1' && (
         <Warning>

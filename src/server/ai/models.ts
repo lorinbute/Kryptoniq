@@ -2,7 +2,7 @@
 // before it is saved. Only the text models worth offering are kept, the current ones (shared/ai.ts) first.
 import { z } from 'zod';
 import { AI_PROVIDER_INFO, type AiProvider } from '../../shared/ai.ts';
-import { GEMINI_URL, geminiKind } from './gemini.ts';
+import { explainGemini, GEMINI_URL, geminiKind } from './gemini.ts';
 import { callJson, kindOfStatus, type HttpDeps } from './http.ts';
 import { OPENAI_URL, openAiKind } from './openai.ts';
 
@@ -64,6 +64,8 @@ export async function listModels(provider: AiProvider, key: string, deps: HttpDe
         timeoutMs: TIMEOUT_MS,
         signal,
         classify: geminiKind,
+        // FD-AIQUOTA: an empty Prepay balance said as such when the key is checked too (no model asked for here).
+        explain: (kind, status, b, text) => explainGemini(kind, status, b, text, null),
       },
       deps,
     );

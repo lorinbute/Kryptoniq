@@ -2,9 +2,9 @@
 // and stop-limit on equities, by quantity (negative = sell), cancelling a pending order. The API is in beta and not
 // idempotent: Sentiq's own journal is what keeps a double click from placing twice.
 import { createHash } from 'node:crypto';
-import type { InstrumentInfo, OrderPreview, OrderResult, OrderTicket, TradeMarket, TradeSymbol } from '../../../shared/trading.ts';
+import { type InstrumentInfo, type OrderPreview, type OrderResult, type OrderTicket, type TradeMarket, type TradeSymbol, type ModifyPreview, type ModifyResult, type ModifyStepPlan, type ModifyTicket } from '../../../shared/trading.ts';
 import { brokerCall } from './http.ts';
-import { commonChecks, fmtPlain, TradingError, type CancelInput, type Trader } from './types.ts';
+import { commonChecks, fmtPlain, TradingError, type CancelInput, type Trader, modifyStatus, protectionChecks, type ModifyPlan } from './types.ts';
 
 const INSTRUMENTS_TTL_MS = 24 * 3_600_000;
 /**
@@ -44,7 +44,7 @@ export class Trading212Trader implements Trader {
     this.now = now;
   }
 
-  private call(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<unknown> {
+  private call(method: 'GET' | 'POST' | 'DELETE' | 'PATCH', path: string, body?: unknown): Promise<unknown> {
     return brokerCall('Trading 212', `${this.base}${path}`, { method, headers: { Authorization: this.auth }, body, write: method !== 'GET', forbidden: FORBIDDEN });
   }
 
@@ -209,6 +209,105 @@ export class Trading212Trader implements Trader {
     this.reads.clear();
     await this.call('DELETE', `/equity/orders/${input.orderId}`);
     return { status: 'cancelled', orderId: input.orderId, message: 'Anularea a fost cerută (nu e garantată dacă ordinul se execută chiar acum).', followUps: [] };
+  }
+
+  // ---------------- FD-ORDEREDIT: Trading 212 has no change of an order: it is cancelled, then placed again ----------------
+
+  async normalizeModify(t: ModifyTicket): Promise<ModifyPlan> {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const steps: ModifyStepPlan[] = [];
+    const orders: Record<string, unknown>[] = [];
+    for (const [i, c] of t.changes.entries()) {
+      if (c.orderId === null) {
+        errors.push('La Trading 212, un SL / TP nou se pune cu un ordin nou (stop sau limită de vânzare).');
+        continue;
+      }
+      if (!/^\d+$/.test(c.orderId)) {
+        errors.push('Ordinul nu e unul Trading 212.');
+        continue;
+      }
+      let o: Record<string, unknown>;
+      try {
+        o = ((await this.call('GET', `/equity/orders/${c.orderId}`)) ?? {}) as Record<string, unknown>;
+      } catch (err) {
+        if (err instanceof TradingError && err.code === 'NOT_FOUND') {
+          errors.push('Ordinul nu mai e deschis (poate s-a executat sau a fost anulat).');
+          continue;
+        }
+        throw err;
+      }
+      const type = (str(o.type) ?? '').toUpperCase();
+      const qty = num(o.quantity) ?? 0;
+      const side = qty < 0 ? 'sell' : 'buy';
+      const before = { price: num(o.limitPrice), triggerPrice: num(o.stopPrice), amount: Math.abs(qty), takeProfit: null, stopLoss: null };
+      const after = { ...before };
+      if (type === 'MARKET' || !type) {
+        errors.push('Un ordin la piață nu se modifică.');
+        continue;
+      }
+      if (c.what === 'order') {
+        if (c.takeProfit !== undefined || c.stopLoss !== undefined) errors.push('Trading 212 nu are TP / SL atașate.');
+        if (c.price !== undefined) after.price = c.price;
+        if (c.triggerPrice !== undefined) after.triggerPrice = c.triggerPrice;
+        if (c.amount !== undefined) after.amount = c.amount;
+      } else if (t.position && side !== (t.position.side === 'long' ? 'sell' : 'buy')) {
+        errors.push('Ordinul nu închide această poziție.');
+        continue;
+      } else if (c.level === null) {
+        steps.push({ change: i, how: 'cancel', orderId: c.orderId, side, kind: c.what, before, after: before, removes: true });
+        orders.push(o);
+        if (c.what === 'sl') warnings.push('Fără stop loss, pierderea poziției nu mai e limitată de un ordin.');
+        continue;
+      } else {
+        if (before.triggerPrice !== null) after.triggerPrice = c.level;
+        else after.price = c.level;
+        if (t.position) protectionChecks(c.what, t.position.side === 'long', c.level, null, { errors }, fmtPlain);
+      }
+      if (JSON.stringify(before) === JSON.stringify(after)) continue;
+      steps.push({ change: i, how: 'cancel-then-place', orderId: c.orderId, side, kind: type.toLowerCase(), before, after, removes: false });
+      orders.push(o);
+    }
+    if (steps.some((s) => s.how === 'cancel-then-place')) {
+      warnings.push('Trading 212 nu modifică un ordin: cel vechi se anulează, apoi se plasează unul nou. O clipă, ordinul nu există; dacă cel nou e refuzat, cel vechi rămâne anulat.');
+      warnings.push('Trading 212 nu arată valabilitatea ordinului: cel nou e „până la anulare”.');
+    }
+    if (!steps.length && !errors.length) errors.push('Nimic nu se schimbă: valorile sunt cele de acum.');
+    const preview: ModifyPreview = { ticket: t, displaySymbol: t.symbol, last: null, currency: '', env: '', steps, warnings: [...new Set(warnings)], errors };
+    return { preview, internal: { orders } };
+  }
+
+  async modify(plan: ModifyPlan): Promise<ModifyResult> {
+    const { orders } = plan.internal as { orders: Record<string, unknown>[] };
+    const results: (ModifyResult['steps'][number] & { unknown?: boolean })[] = [];
+    for (const [i, s] of plan.preview.steps.entries()) {
+      const o = orders[i] as Record<string, unknown>;
+      try {
+        await this.cancel({ orderId: s.orderId as string, symbol: plan.preview.ticket.symbol, market: 'stock', trigger: false });
+        results.push({ change: s.change, what: 'ordin vechi anulat', ok: true, orderId: s.orderId, message: null, ...(s.orderId ? { cancelled: s.orderId } : {}) });
+      } catch (err) {
+        // Not cancelled (it may have just been filled): nothing new goes out.
+        results.push({ change: s.change, what: 'eroare', ok: false, orderId: s.orderId, message: (err as Error).message });
+        continue;
+      }
+      if (s.how === 'cancel') continue;
+      const ticker = str(o.ticker) as string;
+      const quantity = s.side === 'sell' ? -(s.after.amount as number) : (s.after.amount as number);
+      const kind = (str(o.type) ?? '').toUpperCase();
+      const body: Record<string, unknown> = { ticker, quantity, timeValidity: 'GOOD_TILL_CANCEL' };
+      if (kind === 'LIMIT' || kind === 'STOP_LIMIT') body.limitPrice = s.after.price;
+      if (kind === 'STOP' || kind === 'STOP_LIMIT') body.stopPrice = s.after.triggerPrice;
+      try {
+        this.reads.clear();
+        const r = ((await this.call('POST', `/equity/orders/${kind.toLowerCase()}`, body)) ?? {}) as Record<string, unknown>;
+        results.push({ change: s.change, what: 'ordin nou plasat', ok: true, orderId: str(r.id), message: null });
+      } catch (err) {
+        const unknown = err instanceof TradingError && err.code === 'UNKNOWN_OUTCOME';
+        results.push({ change: s.change, what: 'ordin nou plasat', ok: false, orderId: null, message: `Ordinul vechi a fost anulat, dar cel nou a fost refuzat: ${(err as Error).message}`, ...(unknown ? { unknown } : {}) });
+        if (unknown) break;
+      }
+    }
+    return { status: modifyStatus(results), steps: results.map(({ unknown: _u, ...r }) => r) };
   }
 }
 

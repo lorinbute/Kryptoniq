@@ -197,6 +197,11 @@ export class CoinDetector {
     this.userSymbols = new Set(Object.keys(userAliases).map((s) => s.toUpperCase()));
   }
 
+  /** FD-MULTICAT: a crypto coin (of the coin list), not a stock of the favourites with the same ticker. */
+  isCrypto(symbol: string): boolean {
+    return this.symbols.has(symbol) && !this.stockSymbols.has(symbol);
+  }
+
   detect(text: string): string[] {
     const found = new Set<string>();
     const used: [number, number][] = [];

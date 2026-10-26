@@ -226,7 +226,7 @@ export async function buildDayContext(deps: DayContextDeps, userId: number, now 
     `Favoritele utilizatorului (scanner Slingshot, timeframe ${s.scanner.tf})`,
     rows.map(
       (row) =>
-        `- ${plainSymbol(row.coin)}${row.kind === 'stock' ? ' (acțiune)' : row.kind === 'index' ? ` (indice: ${indexById(row.coin)?.name ?? plainSymbol(row.coin)})` : ''}: preț ${row.price ?? 'n/a'}, 24h ${row.change24h === null || row.change24h === undefined ? 'n/a' : `${r2(row.change24h)}%`}, ${row.uptrend ? 'trend ascendent' : 'fără trend ascendent'}${row.liveSignal ? ', semnal LONG activ' : ''}${row.lastSignal ? `; ultimul semnal ${row.lastSignal.outcome}` : ''}`,
+        `- ${plainSymbol(row.coin)}${row.kind === 'stock' ? ' (acțiune)' : row.kind === 'index' ? ` (indice: ${indexById(row.coin)?.name ?? plainSymbol(row.coin)})` : ''}: preț ${row.price ?? 'n/a'}, 24h ${row.change24h === null || row.change24h === undefined ? 'n/a' : `${r2(row.change24h)}%`}, ${row.uptrend ? 'trend ascendent' : 'fără trend ascendent'}${row.liveSignal ? ', semnal LONG în formare' : ''}${row.liveShortSignal ? ', semnal SHORT în formare' : ''}${row.lastSignal ? `; ultimul semnal ${row.lastSignal.side === 'short' ? 'SHORT' : 'LONG'} ${row.lastSignal.outcome}` : ''}`,
     ),
   );
   const movers = rows.filter((row) => typeof row.change24h === 'number');

@@ -116,6 +116,9 @@ describe('LMA parameters', () => {
     expect(lmaParamsSchema.safeParse({ shortThreshold: 0.2 }).success).toBe(false);
     expect(lmaParamsSchema.safeParse({ smooth: 2 }).success).toBe(false);
     expect(lmaParamsSchema.safeParse({ maType: 'HMA' }).success).toBe(false);
+    // FD-OPACITY: a colour may carry its opacity
+    expect(lmaParamsSchema.safeParse({ bullishColor: '#00FFAA80' }).success).toBe(true);
+    expect(lmaParamsSchema.safeParse({ bullishColor: '#00FFAA8' }).success).toBe(false);
     // Style tab
     expect(DEFAULT_LMA_PARAMS).toMatchObject({ showSignal: true, signalWidth: 3, showFill: true, showBarColors: true, showLongLine: true, longLineStyle: 'Dashed', showShortLine: true, shortLineStyle: 'Dashed', showNeutralLine: true, neutralLineStyle: 'Solid' });
     expect(lmaParamsSchema.safeParse({ signalWidth: 5 }).success).toBe(false);
@@ -141,6 +144,11 @@ describe('LMA parameters', () => {
 describe('LMA colours (color.* semantics)', () => {
   const bull = hexToRgba('#00FFAA');
   const neutral = hexToRgba('#FFFF00');
+  it('an input colour keeps the opacity the user chose (FD-OPACITY); color.new still replaces it, as in Pine', () => {
+    expect(hexToRgba('#00FFAA')).toEqual({ r: 0, g: 255, b: 170, a: 255 });
+    expect(hexToRgba('#00FFAA80')).toEqual({ r: 0, g: 255, b: 170, a: 128 });
+    expect(colorNew(hexToRgba('#00FFAA80'), 30).a).toBe(179);
+  });
   it('color.new sets the alpha byte like TradingView', () => {
     expect(colorNew(bull, 10).a).toBe(230);
     expect(colorNew(bull, 30).a).toBe(179);

@@ -8,6 +8,7 @@ export function memoryOf(st: Study): StudyMemoryEntry {
     inputs: st.inputs,
     ...(st.plots ? { plots: st.plots } : {}),
     ...(st.hlines ? { hlines: st.hlines } : {}),
+    ...(st.fills ? { fills: st.fills } : {}),
     ...(st.height !== undefined ? { height: st.height } : {}),
   };
 }
@@ -27,6 +28,7 @@ export function fromMemory(id: StudyId, list: readonly StudyMemoryEntry[], uid: 
     visible: true,
     ...(m?.plots ? { plots: m.plots } : {}),
     ...(m?.hlines ? { hlines: m.hlines } : {}),
+    ...(m?.fills ? { fills: m.fills } : {}),
     ...(m?.height !== undefined ? { height: m.height } : {}),
   };
 }

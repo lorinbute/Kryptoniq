@@ -6,7 +6,7 @@ import type { Logger } from '../../log.ts';
 import type { StepUp } from '../../auth/users.ts';
 import type { AccountsService, AccountView } from '../accounts.ts';
 import { providerById } from '../../../shared/providers.ts';
-import { TRADING, type InstrumentInfo, type OrderPreview, type OrderResult, type OrderTicket, type TradeLogRow, type TradeMarket, type TradeSymbol, type TradingCaps } from '../../../shared/trading.ts';
+import { TRADING, type InstrumentInfo, type ModifyPreview, type ModifyResult, type ModifyTicket, type OrderPreview, type OrderResult, type OrderTicket, type ReversePreview, type ReverseTicket, type TradeLogRow, type TradeMarket, type TradeSymbol, type TradingCaps } from '../../../shared/trading.ts';
 import { AlpacaTrader } from './alpaca.ts';
 import { CcxtTrader } from './crypto.ts';
 import { EtoroTrader } from './etoro.ts';
@@ -80,6 +80,9 @@ const toLogRow = (r: LogRow): TradeLogRow => ({
   message: r.message,
   createdAt: r.created_at,
 });
+
+/** The orders a change took off the platform (FIX-SLTPDUP). */
+const cancelledBy = (r: ModifyResult): string[] => r.steps.flatMap((s) => (s.ok && s.cancelled ? [s.cancelled] : []));
 
 export interface TradingDeps {
   db: Db;
@@ -371,9 +374,146 @@ export class TradingService {
     try {
       const r = await this.trader(a).cancel(input);
       await this.settle(logId, 'sent', { message: r.message });
+      // FIX-SLTPDUP: gone from the chart now, even while the platform still lists it for a moment.
+      if (r.status !== 'rejected') this.accounts.forgetOrders(a.id, [input.orderId]);
       return r;
     } catch (err) {
       await this.settle(logId, 'error', { message: (err as Error).message });
+      throw err;
+    } finally {
+      this.accounts.invalidate(a.id);
+    }
+  }
+
+  // ---------------- FD-ORDEREDIT ----------------
+
+  /** A broker's orders are on its one market (`stock`); a perpetual's are futures wherever it is listed. */
+  private async modifyAccess(userId: number, t: ModifyTicket): Promise<{ a: TradingAccess; ticket: ModifyTicket }> {
+    const probe = await this.access(userId, t.accountId, false);
+    const market: TradeMarket = !probe.clients ? 'stock' : t.symbol.includes(':') ? 'futures' : t.market;
+    return { a: await this.access(userId, t.accountId, true, market), ticket: { ...t, market } };
+  }
+
+  /** The changes checked and planned (nothing sent). */
+  async previewModify(userId: number, t: ModifyTicket): Promise<ModifyPreview> {
+    const { a, ticket } = await this.modifyAccess(userId, t);
+    const plan = await this.trader(a).normalizeModify(ticket);
+    return { ...plan.preview, env: a.env };
+  }
+
+  /**
+   * One action of several orders (FD-ORDEREDIT, FD-REVERSE) claimed by its form key: a new journal row, or the first
+   * sending's answer (its result; in progress; cut off: unknown).
+   */
+  private async claimAction(userId: number, a: TradingAccess, idemKey: string, row: Partial<Omit<LogRow, 'id'>> & Pick<LogRow, 'action'>): Promise<{ result: ModifyResult } | { id: number }> {
+    const select = () => this.db.get<LogRow>('SELECT * FROM trade_log WITH (UPDLOCK, HOLDLOCK) WHERE user_id = ? AND idem_key = ?', [userId, idemKey]);
+    let claimed: { existing: LogRow } | { id: number };
+    try {
+      claimed = await this.db.tx(async () => {
+        const existing = await select();
+        if (existing) return { existing };
+        return { id: await this.journal(userId, a, { ...row, status: 'pending' }, idemKey) };
+      });
+    } catch (err) {
+      const existing = await this.db.get<LogRow>('SELECT * FROM trade_log WHERE user_id = ? AND idem_key = ?', [userId, idemKey]);
+      if (!existing) throw err;
+      claimed = { existing };
+    }
+    if ('id' in claimed) return claimed;
+    const r = claimed.existing;
+    if (r.status === 'pending') {
+      if (this.now() - r.created_at > PENDING_STALE_MS) throw new TradingError('UNKNOWN_OUTCOME', 'Trimiterea a fost întreruptă: nu știm sigur ce a ajuns. Verifică pozițiile și ordinele deschise înainte să trimiți din nou.');
+      throw new TradingError('IN_PROGRESS', 'Acțiunea aceasta e deja în curs de trimitere.');
+    }
+    try {
+      const prev = (JSON.parse(r.detail ?? '{}') as { result?: ModifyResult }).result;
+      if (prev) return { result: prev };
+    } catch {
+      // fall through
+    }
+    throw new TradingError('UNKNOWN_OUTCOME', r.message ?? 'Nu știm sigur ce a ajuns.');
+  }
+
+  /** Sends the changes once (the form's key in the journal), checked again first. */
+  async modify(userId: number, t: ModifyTicket): Promise<ModifyResult> {
+    const { a, ticket } = await this.modifyAccess(userId, t);
+    this.throttle(userId);
+    const claimed = await this.claimAction(userId, a, ticket.idemKey, { action: 'modify', market: ticket.market, symbol: ticket.symbol, message: `${ticket.changes.length} schimbări` });
+    if ('result' in claimed) return claimed.result;
+    const logId = claimed.id;
+    const trader = this.trader(a);
+    let plan;
+    try {
+      plan = await trader.normalizeModify(ticket);
+    } catch (err) {
+      await this.settle(logId, 'error', { message: (err as Error).message });
+      throw err;
+    }
+    if (plan.preview.errors.length) {
+      await this.settle(logId, 'rejected', { message: plan.preview.errors.join(' ') });
+      throw new TradingError('INVALID', plan.preview.errors.join(' '));
+    }
+    try {
+      const result = await trader.modify(plan);
+      this.accounts.forgetOrders(a.id, cancelledBy(result));
+      const status = result.status === 'unknown' ? 'unknown' : result.status === 'failed' ? 'error' : 'sent';
+      const message = result.steps.map((s) => `${s.what}${s.ok ? '' : ` (${s.message ?? 'eșuat'})`}`).join('; ');
+      await this.settle(logId, status, { order_id: result.steps.find((s) => s.ok && s.orderId)?.orderId ?? null, message, detail: JSON.stringify({ steps: plan.preview.steps, result }) });
+      return result;
+    } catch (err) {
+      const unknown = err instanceof TradingError && err.code === 'UNKNOWN_OUTCOME';
+      await this.settle(logId, unknown ? 'unknown' : 'error', { message: (err as Error).message, detail: JSON.stringify({ steps: plan.preview.steps }) });
+      throw err;
+    } finally {
+      this.accounts.invalidate(a.id);
+    }
+  }
+
+  // ---------------- FD-REVERSE ----------------
+
+  /** A reversal is of a futures position, where the platform can (crypto). */
+  private async reverseAccess(userId: number, t: ReverseTicket): Promise<{ a: TradingAccess; trader: Trader & Required<Pick<Trader, 'normalizeReverse' | 'reverse'>> }> {
+    const a = await this.access(userId, t.accountId, true, 'futures');
+    const trader = this.trader(a);
+    if (!trader.normalizeReverse || !trader.reverse) throw new TradingError('UNSUPPORTED', 'Întoarcerea poziției se face doar pe futures crypto.');
+    return { a, trader: trader as Trader & Required<Pick<Trader, 'normalizeReverse' | 'reverse'>> };
+  }
+
+  /** The reversal checked and planned (nothing sent). */
+  async previewReverse(userId: number, t: ReverseTicket): Promise<ReversePreview> {
+    const { a, trader } = await this.reverseAccess(userId, t);
+    const plan = await trader.normalizeReverse(t);
+    return { ...plan.preview, env: a.env };
+  }
+
+  /** Turns the position once (the confirmation's key in the journal), checked again first. */
+  async reverse(userId: number, t: ReverseTicket): Promise<ModifyResult> {
+    const { a, trader } = await this.reverseAccess(userId, t);
+    this.throttle(userId);
+    const claimed = await this.claimAction(userId, a, t.idemKey, { action: 'reverse', market: 'futures', symbol: t.symbol, side: t.side === 'long' ? 'sell' : 'buy', message: `${t.side} → ${t.side === 'long' ? 'short' : 'long'}` });
+    if ('result' in claimed) return claimed.result;
+    const logId = claimed.id;
+    let plan;
+    try {
+      plan = await trader.normalizeReverse(t);
+    } catch (err) {
+      await this.settle(logId, 'error', { message: (err as Error).message });
+      throw err;
+    }
+    if (plan.preview.errors.length) {
+      await this.settle(logId, 'rejected', { message: plan.preview.errors.join(' ') });
+      throw new TradingError('INVALID', plan.preview.errors.join(' '));
+    }
+    try {
+      const result = await trader.reverse(plan);
+      this.accounts.forgetOrders(a.id, cancelledBy(result));
+      const status = result.status === 'unknown' ? 'unknown' : result.status === 'failed' ? 'error' : 'sent';
+      const message = result.steps.map((s) => `${s.what}${s.ok ? '' : ` (${s.message ?? 'eșuat'})`}`).join('; ');
+      await this.settle(logId, status, { order_id: result.steps.find((s) => s.ok && s.orderId)?.orderId ?? null, message, detail: JSON.stringify({ preview: plan.preview, result }) });
+      return result;
+    } catch (err) {
+      const unknown = err instanceof TradingError && err.code === 'UNKNOWN_OUTCOME';
+      await this.settle(logId, unknown ? 'unknown' : 'error', { message: (err as Error).message });
       throw err;
     } finally {
       this.accounts.invalidate(a.id);

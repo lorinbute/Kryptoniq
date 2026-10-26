@@ -101,7 +101,7 @@ Ce greșesc modelele: implicațiile macro („Fed cuts rates” → ar trebui po
 - Date: **ccxt 4.5.85** → `fetchOHLCV` public (fără cheie). Testat KuCoin `BTC/USDT 1h`: 1500 lumânări/cerere, `paginate:true` → 3000 ok. Timeframe-uri KuCoin: 1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,1w,1M.
 
 ## 5. Indicatorul Slingshot System 3.2 (Pine v5) — semantică necesară pentru port
-Sursa: `/Users/lorinbute/Documents/Development/GitHub/Sling Shot System/sling-shot-system.pine` (v3.2, „Market Structure Levels”). Cercetarea s-a făcut pe 3.2. Între timp scriptul și portul au ajuns la 3.3 (reparația urmăririi TP/SL, vezi [slingshot-port.md](slingshot-port.md)), iar semantica de mai jos rămâne valabilă.
+Sursa: `/Users/lorinbute/Documents/Development/GitHub/Sling Shot System/sling-shot-system.pine` (v3.2, „Market Structure Levels”). Cercetarea s-a făcut pe 3.2. Între timp scriptul și portul au ajuns la 3.3 (reparația urmăririi TP/SL) și apoi la 3.4 (partea SHORT, `sling-shot-system-3.4.pine`, vezi [slingshot-port.md](slingshot-port.md) și FD-SLINGSHOT34). Semantica de mai jos rămâne valabilă pentru LONG, iar SHORT-ul este oglinda ei.
 
 Semantica exactă a funcțiilor `ta.*` a fost verificată în **PyneCore** (runtime Python care reproduce bit-cu-bit TradingView, cu „measured laws”):
 - `ta.ema`: α = 2/(len+1), **seed = SMA** pe primele `len` valori non-na; pas `prev + α·(src − prev)` (forma algebric echivalentă `α·src + (1−α)·prev` diverge pe ultimii biți).
@@ -272,6 +272,41 @@ Observații:
 
 **Ce există deja în Sentiq și se refolosește:** contextul zilei (`buildDayContext`, FD-SUMMARY), `DailySentimentService.today/history`, `queryNews` (filtre: interval, categorie, monede, sentiment, text), `CalendarService.query` (cu evenimentele utilizatorului și rezultatele companiilor), `EconomyService.view`, `Scanner.result(userId)`, `readContext` (piața), `MarketData.candles` / `StockData.candles` + `runSlingshot` / `summarize` (aceeași analiză ca scannerul). Login-ul (parolă + 2FA / passkey) e cel al aplicației; `safeNext` limitează adresa de întoarcere la 300 de caractere (de aceea cererea de autorizare se ține pe server și pagina de consimțământ primește doar un id).
 
+## 14. Boți de tranzacționare (cercetare 21 oct 2026)
+
+**Ce tipuri există** (Binance, OKX, 3Commas, Gainium, Altrady, bit.com):
+- **Grid:** cumpără sub preț și vinde peste, între o limită de jos și una de sus, împărțite în N grile.
+  - Spațiere aritmetică (pas egal în preț) sau geometrică (pas egal în procente).
+  - Pe spot, la pornire se cumpără activul pentru grilele de deasupra prețului (ca să existe ce vinde).
+  - Pe futures: modurile Long, Short și Neutru, cu levier și o marjă inițială.
+  - Opțiuni: un preț de pornire (trigger); stop loss / take profit pe preț, sau pe profit / ROI; „închide pozițiile la oprire”.
+  - Câștigul pe grilă = pasul minus comisioanele (de 2 ori: cumpărare + vânzare).
+  - Iese din interval: botul nu mai face nimic până revine prețul.
+- **DCA** (3Commas, Gainium): un ordin de bază și ordine de siguranță (safety orders) la scăderi succesive.
+  - Ordinul de bază: suma și tipul (piață / limită).
+  - Ordinele de siguranță: abaterea până la primul, suma primului, multiplicatorul de volum, multiplicatorul de pas, câte cel mult.
+  - Take profit: procent din prețul mediu (unul sau mai multe, opțional trailing).
+  - Stop loss: procent din prețul ordinului de bază; acțiunea la SL (închide / închide și oprește botul), breakeven, trailing.
+  - Ciclurile: pauză între cicluri, câte cicluri cel mult, prețul minim / maxim la care pornește un ciclu, durata maximă a unui ciclu.
+- **Boți pe semnale:** intră pe semnalele unui indicator sau ale unui webhook (TradingView), cu SL / TP proprii sau ale semnalului.
+
+**Reguli de risc folosite peste tot:**
+- risc pe tranzacție de 0,5–2% din capital, riscul total deschis ~6%;
+- o limită de pierdere pe zi (kill switch);
+- stop loss obligatoriu;
+- pauză după o pierdere;
+- un număr maxim de poziții deschise.
+
+**Ce înseamnă pentru Sentiq:**
+- Setările clasice: Grid și DCA, cu numele și valorile obișnuite.
+- Modul Premium: un bot pe semnale (Slingshot), cu sentimentul site-ului ca filtru și, la alegere, modelul AI al utilizatorului ca o ultimă verificare.
+- Ordinele pleacă prin `TradingService.place` (aceleași verificări, același jurnal, aceeași cheie anti-dublură ca formularul).
+- Platformele închid diferit:
+  - un exchange crypto acceptă o vânzare la piață sau un ordin reduce-only;
+  - eToro închide după id-ul poziției;
+  - Trading 212 nu are short.
+- De aceea modul real pornește doar pe exchange-urile crypto. Pe acțiuni, botul rulează în simulare (aceleași reguli, fără ordine).
+
 ## Surse
 - PyneCore `ta.py`, `safe_convert.py`, `_math_stateful.py` — github.com/PyneSys/pynecore
 - [KuCoin — Signing a Message](https://KuCoin.com/docs/basic-info/connection-method/authentication/signing-a-message)
@@ -290,3 +325,4 @@ Observații:
 - [Claude — Authentication for connectors](https://claude.com/docs/connectors/building/authentication), [Lazy authentication](https://claude.com/docs/connectors/building/lazy-authentication)
 - [MCP 2026-07-28 — Authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization), [Client registration](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration), [Security considerations](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/security-considerations), [Authorization server discovery](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/authorization-server-discovery)
 - [MCP TypeScript SDK v2 — Serving over HTTP](https://ts.sdk.modelcontextprotocol.io/v2/serving/http), [Authorization](https://ts.sdk.modelcontextprotocol.io/v2/serving/authorization.html)
+- Boți: [Binance — Spot Grid parameters](https://www.binance.com/en/support/faq/binance-spot-grid-trading-parameters-688ff6ff08734848915de76a07b953dd), [Binance — What is spot grid trading](https://www.binance.com/en/support/faq/what-is-spot-grid-trading-and-how-does-it-work-d5f441e8ab544a5b98241e00efb3a4ab), [Binance — What is futures grid trading](https://www.binance.com/en/support/faq/what-is-futures-grid-trading-f4c453bab89648beb722aa26634120c3), [3Commas — Main settings of the DCA bot](https://help.3commas.io/en/articles/3108940-main-settings-dca-bot), [Altrady — Grid bot setup](https://support.altrady.com/en/article/grid-bot-setup-configuration-guide-1pffkoo/), [Gainium — Grid bot](https://gainium.io/grid-bot), [ForkLog — OKX trading bots](https://forklog.com/en/grid-dca-and-the-signals-marketplace-an-overview-of-okxs-trading-bots/), [bit.com — Trading bot](https://www.bit.com/knowledge-hub/trading-bot)

@@ -1,10 +1,10 @@
 // The Today page as a cockpit (FD-REDESIGN): one screen of tiles at 1440 × 900, fewer columns below.
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { clsx } from 'clsx';
-import type { CalendarResponse, DaySentiment, HistoryPoint, NewsPage, ScanResult, ScanRow, WatchItem } from '../../shared/api-types.ts';
-import { addDays, dayBounds, dayKey, type Timeframe } from '../../shared/time.ts';
+import type { CalendarResponse, DaySentiment, HistoryPoint, MarketContext, NewsPage, ScanResult, ScanRow, WatchItem } from '../../shared/api-types.ts';
+import { dayBounds, dayKey, type Timeframe } from '../../shared/time.ts';
 import { INDEX_DELAY_NOTE, plainSymbol } from '../../shared/indices.ts';
 import { SCANNER_TFS } from '../../shared/settings.ts';
 import { api, errorMessage, qs } from '../api.ts';
@@ -12,9 +12,13 @@ import { confidenceLabel, fmtAgo, fmtCountdown, fmtDate, fmtPct, fmtPrice, fmtTi
 import { useNextHighImpact, useNow, useSaveSettings, useSettings, useStockSet, useTz, useWatchlist } from '../hooks.ts';
 import { Sparkline, useSparks, useStockQuotes, useStockSparks } from '../components/MarketStrip.tsx';
 import { chartPathOf } from '../chart/paths.ts';
+import { byDay, chartScale, cnnDay, cryptoDay, daySlots, fearGreedLabel, joined, segments } from '../history-chart.ts';
 import { sparkChange } from '../spark.ts';
 import { ErrorNote, fmtScore, Loading } from '../components/ui.tsx';
 import { CoinLogo, EventIcon, TopicIcon } from '../components/icons.tsx';
+import { aiNameOf, ScoreWhy } from '../components/ScoreWhy.tsx';
+import { effectLine, weighLine } from '../why-text.ts';
+import { IndexExplain } from '../components/IndexExplain.tsx';
 import { CalendarClock, Flame, Gauge, History, Radio, TrendingDown, TrendingUp, type LucideIcon } from 'lucide-react';
 
 const HOUR = 3_600_000;
@@ -50,6 +54,8 @@ function Tile({
   className,
   children,
   accent,
+  onLabel,
+  labelHint,
 }: {
   label: string;
   labelId: string;
@@ -58,13 +64,34 @@ function Tile({
   className?: string;
   children: React.ReactNode;
   accent?: boolean;
+  /** The title itself opens something (FD-WHYPLAIN §2: "Sentimentul zilei" opens how it was computed). */
+  onLabel?: () => void;
+  /** What the title opens, said on hover and to screen readers. */
+  labelHint?: string;
 }) {
   return (
     <section aria-labelledby={labelId} className={clsx('panel flex min-w-0 flex-col gap-3 px-5 py-4', accent && 'border-accent-dim/60', className)}>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+      {/* A title that opens something sits above what follows: the sentiment's big figure (tight lines) reaches up over
+          the title row with its text box, and took the pointer coming from below. */}
+      <div className={clsx('flex flex-wrap items-center justify-between gap-x-3 gap-y-1', onLabel && 'relative z-[1]')}>
         <h2 id={labelId} className="panel-title inline-flex items-center gap-2">
           <Icon size={15} strokeWidth={1.9} className="shrink-0 text-faint" aria-hidden />
-          {label}
+          {onLabel ? (
+            // A link on the title: dotted underline so it reads as one on a touch screen too (no hover there).
+            <button
+              type="button"
+              onClick={onLabel}
+              aria-haspopup="dialog"
+              title={labelHint}
+              aria-description={labelHint}
+              // A few px more above and below (same place on screen): the dotted underline is inside what takes the pointer.
+              className="-my-1 cursor-pointer py-1 underline decoration-dotted underline-offset-4 transition-colors hover:text-accent hover:decoration-solid"
+            >
+              {label}
+            </button>
+          ) : (
+            label
+          )}
         </h2>
         {actions}
       </div>
@@ -151,6 +178,8 @@ function DayChart({ s, tz }: { s: DaySentiment; tz: string }) {
 function SentimentTile() {
   const tz = useTz();
   const q = useSentiment();
+  const [explain, setExplain] = useState(false);
+  const closeExplain = useCallback(() => setExplain(false), []);
   const s = q.data;
   const scored = s ? s.counts.positive + s.counts.neutral + s.counts.negative : 0;
   // Change over the last hour, from the hourly points.
@@ -162,6 +191,9 @@ function SentimentTile() {
       label="Sentimentul zilei"
       labelId="tile-sentiment"
       icon={Gauge}
+      // FD-WHYPLAIN §2: the title opens how the index was computed (once there is a day to explain).
+      onLabel={s ? () => setExplain(true) : undefined}
+      labelHint="Cum s-a calculat sentimentul zilei"
       // From 768 px: the left column, as tall as the two tiles beside it (FD-TODAYGRID §2). A container: its parts follow its width.
       className="@container gap-4 px-6 py-5 md:row-span-2 xl:col-span-7"
       actions={
@@ -222,6 +254,7 @@ function SentimentTile() {
             ))}
           </div>
           {s.counts.pending > 0 && <span className="text-[12.5px] text-faint">{s.counts.pending} știri încă în analiză</span>}
+          {explain && <IndexExplain onClose={closeExplain} />}
         </>
       )}
     </Tile>
@@ -369,12 +402,14 @@ function LiveNewsTile() {
 
 function signalLine(r: ScanRow, tz: string) {
   const s = r.lastSignal;
-  if (!s) return <span className="text-faint">fără semnal LONG</span>;
+  if (!s) return <span className="text-faint">fără semnal</span>;
+  // FD-SLINGSHOT34: the side of the last signal (LONG, or SHORT with Short Signals on).
+  const side = s.side === 'short' ? 'SHORT' : 'LONG';
   const outcome: Record<string, [string, string]> = { active: ['activ', 'text-text'], tp: ['TP atins', 'text-bull'], sl: ['SL atins', 'text-bear'], invalidated: ['invalidat', 'text-bear'] };
   const [label, cls] = outcome[s.outcome] ?? [s.outcome, 'text-text'];
   return (
-    <span title={`LONG ${fmtDate(s.time, tz)}, ${fmtAgo(s.time)}`}>
-      LONG {fmtDate(s.time, tz)}, <span className={cls}>{label}</span>
+    <span title={`${side} ${fmtDate(s.time, tz)}, ${fmtAgo(s.time)}`}>
+      {side} {fmtDate(s.time, tz)}, <span className={cls}>{label}</span>
       {s.provisional ? ', neconfirmat' : ''}
     </span>
   );
@@ -390,12 +425,17 @@ function ScanLines({ r, digits, tf }: { r: ScanRow | undefined; digits: number; 
         {signalLine(r, tz)}
         {r.ms?.lastBreak && <span className={r.ms.lastBreak.type === 'msBullish' ? 'text-bull' : 'text-bear'}>{r.ms.lastBreak.type === 'msBullish' ? 'Bullish' : 'Bearish'}</span>}
       </div>
-      {r.atr && (
-        <span className="num">
-          TP <span className="text-bull">{fmtPrice(r.atr.tp, digits)}</span> SL <span className="text-bear">{fmtPrice(r.atr.sl, digits)}</span>
-        </span>
+      {/* FD-SLINGSHOT34: each side's TP/SL, the LONG's first; the two sides are independent. */}
+      {[r.atr, r.atrShort].map(
+        (a) =>
+          a && (
+            <span key={a.side} className="num">
+              {a.side === 'short' && 'SHORT · '}TP <span className="text-bull">{fmtPrice(a.tp, digits)}</span> SL <span className="text-bear">{fmtPrice(a.sl, digits)}</span>
+            </span>
+          ),
       )}
       {r.liveSignal && <span className="text-bull">LONG în formare</span>}
+      {r.liveShortSignal && <span className="text-bear">SHORT în formare</span>}
       {/* A stock without the Twelve Data key is scanned on daily candles (FD-SENTIQ §4.6). */}
       {r.warnings?.includes('STOCK_TF_FALLBACK') && <span className="text-faint">Slingshot pe {r.tf} (sursa nu are {tf})</span>}
     </div>
@@ -514,19 +554,19 @@ function CoinsTile() {
   return (
     <section aria-labelledby="tile-coins" className="flex min-w-0 flex-col gap-2 md:col-span-2 xl:col-span-12">
       <h2 id="tile-coins" className="sr-only">
-        Favoritele mele
+        Simbolurile urmărite
       </h2>
       {all.length > 0 && <SignalTimeframe tf={tf} />}
       {watchlist.data && all.length === 0 ? (
         <div className="panel flex h-full flex-col items-start justify-center gap-3 px-5 py-4 text-[13.5px] text-muted">
-          Nu ai monede sau acțiuni favorite încă.
-          <Link to="/settings" className="btn">
-            Adaugă favorite
+          Nu urmărești încă nicio monedă sau acțiune.
+          <Link to="/watchlists" className="btn">
+            Adaugă simboluri
           </Link>
         </div>
       ) : (
         <div className="grid h-full grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3.5">
-          {/* In the order of the watchlist (Settings → Favorite), coins and stocks mixed. */}
+          {/* In the common order of the watch lists (FD-WATCHLISTS §6), coins and stocks mixed. */}
           {all.map((w) => (w.kind !== 'crypto' ? stockCard(w, stockSymbols.indexOf(w.coin)) : coinCard(w, coins.indexOf(w))))}
         </div>
       )}
@@ -540,6 +580,7 @@ function DriversTile() {
   const [all, setAll] = useState(false);
   const d = q.data?.drivers;
   const total = d ? d.positive.length + d.negative.length : 0;
+  const counted = q.data ? q.data.counts.positive + q.data.counts.neutral + q.data.counts.negative : 0;
   // Two strongest each way by default; "Arată toate" lists every driver of the day.
   const list = d ? [...d.positive.slice(0, all ? undefined : 2), ...d.negative.slice(0, all ? undefined : 2)] : [];
   return (
@@ -561,6 +602,11 @@ function DriversTile() {
       ) : list.length === 0 ? (
         <p className="text-[13px] text-faint">Nimic notabil încă.</p>
       ) : (
+        <>
+        {/* FD-WHYPLAIN: why these and not others. */}
+        <p className="-mt-1 text-[12.5px] text-faint">
+          Din cele {counted} știri de azi: cele care au împins indicele cel mai mult în sus și cele care l-au tras cel mai mult în jos (pondere × scor).
+        </p>
         <ul className="flex flex-col gap-2.5">
           {list.map((x) => (
             <li key={x.id} className="grid grid-cols-[16px_46px_minmax(0,1fr)] gap-2.5 text-[13px] leading-snug">
@@ -568,49 +614,221 @@ function DriversTile() {
                 <TopicIcon title={x.title} category={x.category} coins={x.coins} size={16} stocks={stocks} />
               </span>
               <span className={clsx('num', SCORE_TEXT(x.sentiment))}>{fmtScore(x.sentiment)}</span>
-              {x.url ? (
-                <a href={x.url} target="_blank" rel="noopener noreferrer" className="line-clamp-2 text-text" title={`${x.source}, ${fmtAgo(x.publishedAt)}`}>
-                  {x.title}
-                </a>
-              ) : (
-                <span className="line-clamp-2">{x.title}</span>
-              )}
+              <div className="flex min-w-0 flex-col gap-0.5">
+                {x.url ? (
+                  <a href={x.url} target="_blank" rel="noopener noreferrer" className="line-clamp-2 text-text" title={`${x.source}, ${fmtAgo(x.publishedAt)}`}>
+                    {x.title}
+                  </a>
+                ) : (
+                  <span className="line-clamp-2">{x.title}</span>
+                )}
+                {/* FD-WHYPLAIN: how much it moved the index, always in sight; why it weighs that much, with its score's why. */}
+                {x.effect !== undefined && x.without !== undefined && q.data && <span className="text-[12px] text-muted">{effectLine(q.data.index, x.without, x.effect)}</span>}
+                <ScoreWhy why={x.why ?? null}>
+                  {x.weighs && <div>{weighLine(x.weighs, counted, x.source, x.publishedAt, Date.now(), x.why?.impactSource === 'ai' ? aiNameOf(x.why.engine) : 'cuvinte-cheie')}</div>}
+                </ScoreWhy>
+              </div>
             </li>
           ))}
         </ul>
+        </>
       )}
     </Tile>
   );
 }
 
+type SeriesKey = 'sentiq' | 'crypto' | 'cnn';
+/** FD-HISTORYCHART: the three lines, all 0–100. */
+const SERIES: Record<SeriesKey, { label: string; source: string; color: string; width: number; dash?: string }> = {
+  sentiq: { label: 'Sentiq', source: 'Sentimentul zilei, din știri', color: 'var(--color-accent)', width: 2.25 },
+  crypto: { label: 'Crypto F&G', source: 'Fear & Greed crypto (alternative.me)', color: 'var(--color-link)', width: 1.5 },
+  // CNN's index is the US stock market's only (S&P 500, NYSE highs / lows, VIX, put / call, junk bonds…): not global.
+  cnn: { label: 'Stocks F&G', source: 'Fear & Greed al bursei americane (CNN)', color: 'var(--color-muted)', width: 1.5, dash: '4 4' },
+};
+const SERIES_KEYS: SeriesKey[] = ['sentiq', 'crypto', 'cnn'];
+
+/** Width and height of an element, kept up to date. */
+function useSize<T extends HTMLElement>(fallback: { w: number; h: number }): [React.RefObject<T | null>, { w: number; h: number }] {
+  const ref = useRef<T>(null);
+  const [size, setSize] = useState(fallback);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const w = Math.round(entry?.contentRect.width ?? 0);
+      const h = Math.round(entry?.contentRect.height ?? 0);
+      if (w > 0 && h > 0) setSize((was) => (was.w === w && was.h === h ? was : { w, h }));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, size];
+}
+
+/** "20 oct." for a day key. */
+const dayLabel = (day: string) => fmtDate(Date.parse(`${day}T12:00:00Z`), 'UTC');
+
 function HistoryTile() {
   const tz = useTz();
   const q = useQuery({ queryKey: ['sentiment', 'history'], queryFn: () => api.get<{ tz: string; points: HistoryPoint[] }>('/api/sentiment/history?days=30'), refetchInterval: 10 * 60_000 });
-  const pts = q.data?.points ?? [];
+  // The same query as the market strip (one request for both).
+  const ctx = useQuery({ queryKey: ['market', 'context'], queryFn: () => api.get<MarketContext>('/api/market/context'), refetchInterval: 10 * 60_000 });
+  const [hidden, setHidden] = useState<ReadonlySet<SeriesKey>>(new Set());
+  const [hover, setHover] = useState<number | null>(null);
+  const [box, size] = useSize<HTMLDivElement>({ w: 420, h: 160 });
+  // Today as on the card (the live index): the history has it only from its last save, which can still be yesterday's.
+  const live = useSentiment().data;
+  const tip = useRef<HTMLDivElement>(null);
+  const [tipW, setTipW] = useState(0);
   const DAYS = 30;
+  const saved = q.data?.points ?? [];
   // One fixed slot per calendar day (oldest left), so missing days stay visible as gaps.
   const today = dayKey(Date.now(), tz);
-  const slots = Array.from({ length: DAYS }, (_, k) => addDays(today, k - (DAYS - 1)));
-  const byDay = new Map(pts.map((p) => [p.day, p]));
+  const slots = daySlots(today, DAYS);
+  const inSlots = new Set(slots);
+  const pts: HistoryPoint[] =
+    live && live.day === today
+      ? [...saved.filter((p) => p.day !== today), { day: today, index: live.index, confidence: live.confidence, count: live.counts.positive + live.counts.neutral + live.counts.negative, final: false }]
+      : saved;
+  const point = new Map(pts.map((p) => [p.day, p]));
+  const fg = ctx.data?.fearGreed;
+  const cnnFg = ctx.data?.stocks?.fearGreed;
+  const series: Record<SeriesKey, Map<string, number>> = {
+    sentiq: byDay(pts, (p) => p.day, (p) => p.index),
+    crypto: fg ? byDay(fg.history, (h) => cryptoDay(h.timestamp), (h) => h.value) : new Map(),
+    cnn: cnnFg ? byDay(cnnFg.history, (h) => cnnDay(h.timestamp), (h) => h.value) : new Map(),
+  };
+  // Fear & Greed only when it has days in these 30; Sentiq always (its note says when it has none yet).
+  const available = SERIES_KEYS.filter((k) => k === 'sentiq' || [...series[k].keys()].some((d) => inSlots.has(d)));
+  const shown = available.filter((k) => !hidden.has(k));
+  const values = shown.flatMap((k) => slots.flatMap((d) => (series[k].has(d) ? [series[k].get(d) as number] : [])));
+  const { lo, hi } = chartScale(values);
+  const W = size.w;
+  const H = size.h;
+  // A gutter on the right for the scale's labels (top, 50, bottom), off the lines.
+  const GUTTER = 24;
+  const PW = Math.max(1, W - GUTTER);
+  const slotW = PW / DAYS;
+  const x = (i: number) => (i + 0.5) * slotW;
+  const y = (v: number) => 6 + (1 - (v - lo) / (hi - lo)) * (H - 12);
+  const path = (run: { i: number; v: number }[]) => run.map((p, k) => `${k ? 'L' : 'M'}${x(p.i).toFixed(1)} ${y(p.v).toFixed(1)}`).join('');
+  const latest: Record<SeriesKey, number | undefined> = { sentiq: series.sentiq.get(today), crypto: fg?.value, cnn: cnnFg?.value };
+  const fmtValue = (k: SeriesKey, v: number) => (k === 'sentiq' ? v.toFixed(1) : String(Math.round(v)));
+  const toggle = (k: SeriesKey) =>
+    setHidden((h) => {
+      const next = new Set(h);
+      if (next.has(k)) next.delete(k);
+      // The last line shown stays.
+      else if (shown.length > 1) next.add(k);
+      return next;
+    });
+  const pick = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setHover(Math.min(DAYS - 1, Math.max(0, Math.floor(((e.clientX - r.left) / Math.max(1, r.width - GUTTER)) * DAYS))));
+  };
+  const hoverDay = hover !== null ? slots[hover] : undefined;
+  useLayoutEffect(() => setTipW(tip.current?.offsetWidth ?? 0), [hover, W]);
+  // Beside the day's line, on the side with room; never out of the tile (a phone has room on neither side).
+  const tipLeft = hover === null ? 0 : (() => {
+    const right = x(hover) + 8;
+    const left = x(hover) - 8 - tipW;
+    const want = right + tipW <= W - 4 ? right : left >= 4 ? left : W - tipW - 4;
+    return Math.max(4, Math.min(want, W - tipW - 4));
+  })();
+  const sentiqValues = slots.flatMap((d) => (series.sentiq.has(d) ? [series.sentiq.get(d) as number] : []));
+  const summary = [
+    sentiqValues.length
+      ? `Sentiq în ultimele 30 de zile: între ${Math.min(...sentiqValues).toFixed(1)} și ${Math.max(...sentiqValues).toFixed(1)}${latest.sentiq !== undefined ? `, azi ${latest.sentiq.toFixed(1)}` : ''}`
+      : 'Sentiq: încă fără istoric',
+    ...(available.includes('crypto') && fg ? [`Fear & Greed crypto azi ${fg.value}`] : []),
+    ...(available.includes('cnn') && cnnFg ? [`Fear & Greed al bursei americane (CNN) azi ${cnnFg.value}`] : []),
+  ].join('; ');
   return (
     <Tile label="Ultimele 30 de zile" labelId="tile-history" icon={History} className="xl:col-span-5">
-      <div className="grid h-16 grid-cols-[repeat(30,minmax(0,1fr))] gap-[3px]" role="img" aria-label="Indicele zilnic din ultimele 30 de zile, față de pragul neutru 50">
-        {slots.map((day) => {
-          const p = byDay.get(day);
-          const h = p ? Math.max(2, (Math.abs(p.index - 50) / 50) * 30) : 0;
-          return (
-            <span key={day} className="relative rounded-[2px] bg-panel-3" title={p ? `${day}: ${p.index.toFixed(1)} (${p.count} știri)${p.final ? '' : ', provizoriu'}` : day}>
-              {p && (
-                <span
-                  className={clsx('absolute inset-x-0 rounded-[2px]', p.index >= 60 ? 'bg-bull' : p.index < 40 ? 'bg-bear' : 'bg-muted')}
-                  style={{ height: h, ...(p.index >= 50 ? { bottom: 32 } : { top: 32 }), opacity: p.final ? 0.9 : 0.5 }}
-                />
-              )}
-            </span>
-          );
-        })}
+      {/* FD-HISTORYCHART: each line shown or hidden; today's value of each. */}
+      <div className="-mt-1 flex flex-wrap gap-1.5" role="group" aria-label="Liniile graficului">
+        {available.map((k) => (
+          <button
+            key={k}
+            type="button"
+            aria-pressed={!hidden.has(k)}
+            title={SERIES[k].source}
+            onClick={() => toggle(k)}
+            className={clsx('inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[12px] transition-colors', hidden.has(k) ? 'border-line text-faint' : 'border-line-strong text-text')}
+          >
+            <svg width="14" height="6" aria-hidden className="shrink-0">
+              <line x1="0" x2="14" y1="3" y2="3" stroke={SERIES[k].color} strokeWidth={k === 'sentiq' ? 2.5 : 1.75} strokeDasharray={SERIES[k].dash} opacity={hidden.has(k) ? 0.4 : 1} />
+            </svg>
+            {SERIES[k].label}
+            {latest[k] !== undefined && <span className="num text-muted">{fmtValue(k, latest[k] as number)}</span>}
+          </button>
+        ))}
       </div>
-      {pts.length < 2 && <p className="text-[12px] text-faint">Istoricul se construiește zi de zi; revino mâine.</p>}
+      <div className="flex min-h-[160px] flex-1 flex-col gap-1">
+        <div ref={box} className="relative min-h-[140px] flex-1 touch-pan-y" onPointerMove={pick} onPointerDown={pick} onPointerLeave={(e) => e.pointerType === 'mouse' && setHover(null)}>
+          <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="absolute inset-0 block" role="img" aria-label={summary}>
+            <line x1={0} x2={PW} y1={y(50)} y2={y(50)} stroke="var(--color-line-strong)" strokeDasharray="3 5" />
+            {/* The scale: its ends and 50 (an end too close to 50 is left out). */}
+            {[hi, 50, lo]
+              .filter((v, k) => k === 1 || Math.abs(y(v) - y(50)) >= 14)
+              .map((v) => (
+                <text key={v} x={W - 2} y={y(v) + 3.5} textAnchor="end" fontSize="10.5" fill="var(--color-faint)" fontFamily="var(--font-mono)">
+                  {v}
+                </text>
+              ))}
+            {hover !== null && <line x1={x(hover)} x2={x(hover)} y1={0} y2={H} stroke="var(--color-line-strong)" />}
+            {shown.includes('cnn') && <path d={path(joined(slots, series.cnn))} fill="none" stroke={SERIES.cnn.color} strokeWidth={SERIES.cnn.width} strokeDasharray={SERIES.cnn.dash} strokeLinejoin="round" />}
+            {shown.includes('crypto') && <path d={path(joined(slots, series.crypto))} fill="none" stroke={SERIES.crypto.color} strokeWidth={SERIES.crypto.width} strokeLinejoin="round" />}
+            {shown.includes('sentiq') && (
+              <>
+                {segments(slots, series.sentiq).map((run) => (
+                  <path key={run[0]?.i} d={path(run)} fill="none" stroke={SERIES.sentiq.color} strokeWidth={SERIES.sentiq.width} strokeLinejoin="round" strokeLinecap="round" />
+                ))}
+                {slots.map((d, i) => {
+                  const p = point.get(d);
+                  if (!p) return null;
+                  // Today and the days not frozen yet: a hollow dot.
+                  return <circle key={d} cx={x(i)} cy={y(p.index)} r={hover === i ? 4 : 2.75} fill={p.final ? SERIES.sentiq.color : 'var(--color-panel)'} stroke={SERIES.sentiq.color} strokeWidth={1.5} />;
+                })}
+              </>
+            )}
+          </svg>
+          {hoverDay && (
+            <div
+              ref={tip}
+              className="pointer-events-none absolute top-1 z-[1] flex max-w-[calc(100%-8px)] flex-col gap-0.5 rounded-lg border border-line-strong bg-panel-2 px-2.5 py-1.5 text-[12px] shadow-pop"
+              style={{ left: tipLeft, visibility: tipW ? 'visible' : 'hidden' }}
+            >
+              <span className="font-medium text-text">{hoverDay === today ? `azi, ${dayLabel(hoverDay)}` : dayLabel(hoverDay)}</span>
+              {available.map((k) => {
+                const v = series[k].get(hoverDay);
+                const p = k === 'sentiq' ? point.get(hoverDay) : undefined;
+                return (
+                  <span key={k} className="flex items-center gap-1.5 whitespace-nowrap text-muted">
+                    <span className="inline-block size-2 rounded-full" style={{ background: SERIES[k].color }} aria-hidden />
+                    {SERIES[k].label}{' '}
+                    {v === undefined ? (
+                      <span className="text-faint">—</span>
+                    ) : (
+                      <span className="num text-text">
+                        {fmtValue(k, v)}
+                        {k === 'sentiq' ? (p && !p.final ? ' (provizoriu)' : '') : `, ${fearGreedLabel(v, k)}`}
+                      </span>
+                    )}
+                    {p && <span className="text-faint">· {p.count} știri</span>}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <div className="flex justify-between text-[11px] text-faint" aria-hidden>
+          <span className="num">{dayLabel(slots[0] as string)}</span>
+          <span className="num">{dayLabel(slots[Math.floor(DAYS / 2)] as string)}</span>
+          <span>azi</span>
+        </div>
+      </div>
+      {pts.length < 2 && <p className="text-[12px] text-faint">Istoricul Sentiq se construiește zi de zi; revino mâine.</p>}
     </Tile>
   );
 }

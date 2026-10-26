@@ -138,6 +138,30 @@ describe('eToro (FD-TRADING)', () => {
       { id: '113', units: 1, isBuy: true, leverage: 1, openRate: 150, openedAt: null, pnl: 50, invested: null },
     ]);
     expect(info.availableBase).toBe(6);
+    // One side only: the position, as before (no split).
+    expect(info).toMatchObject({ position: { side: 'long', amount: 6, entryPrice: 180 } });
+    expect(info).not.toHaveProperty('hedgePositions');
+  });
+
+  it('a short beside the buys (FD-HEDGEALL): both sides, each summed; the short is a position of its own', async () => {
+    const pf = { clientPortfolio: { credit: 5000, positions: [
+      { positionID: 111, instrumentID: 1001, units: 2, isBuy: true, leverage: 1, openRate: 180 },
+      { positionID: 121, instrumentID: 1001, units: 1.5, isBuy: false, leverage: 2, openRate: 205 },
+      { positionID: 122, instrumentID: 1001, units: 0.5, isBuy: false, leverage: 2, openRate: 210 },
+    ] } }; // prettier-ignore
+    serve([
+      ['GET /market-data/search', () => ({ body: search })],
+      ['GET /trading/info/real/pnl', () => ({ body: pf })],
+      ['GET /instruments/rates', () => ({ body: { rates: [{ instrumentId: 1001, ask: 200 }] } })],
+    ]);
+    const info = await new EtoroTrader({ publicKey: 'p', userKey: 'u' }, 'real', async () => undefined).instrument('stock', 'AAPL');
+    expect(info).toMatchObject({
+      position: null,
+      positionMode: 'hedge',
+      hedgePositions: { long: { side: 'long', amount: 2, entryPrice: 180 }, short: { side: 'short', amount: 2, entryPrice: 205 } },
+      availableBase: 2,
+    });
+    expect(info.positions).toHaveLength(3);
   });
 
   it('asks for a stop loss with leverage or a short; reports a refusal read back; closes each position of a holding (demo)', async () => {
@@ -233,6 +257,30 @@ describe('Alpaca (FD-TRADING)', () => {
     expect(c).toMatchObject({ errors: [], ticket: { symbol: 'BTC/USD', tif: 'gtc' }, last: 60000 });
   });
 
+  it('one net position per symbol (FD-HEDGEALL): selling past a long, or buying with a short, said so', async () => {
+    const at = (position: object) =>
+      serve([
+        ['GET /v2/assets/AAPL', () => ({ body: { symbol: 'AAPL', name: 'Apple Inc.', class: 'us_equity', tradable: true, fractionable: true } })],
+        ['GET /v2/account', () => ({ body: { buying_power: '10000', cash: '10000' } })],
+        ['GET /v2/positions/', () => ({ body: position })],
+        ['GET /v2/stocks/AAPL/trades/latest', () => ({ body: { trade: { p: 200 } } })],
+      ]);
+    const t = new AlpacaTrader({ keyId: 'kid', secret: 'sec' }, 'paper');
+    const own = (w: string[]) => w.filter((x) => x.startsWith('Alpaca ține'));
+    at({ symbol: 'AAPL', qty: '3', qty_available: '3', side: 'long', avg_entry_price: '190', current_price: '200' });
+    expect(own((await t.normalize(ticket({ side: 'sell', amount: 5 }))).warnings)).toEqual([
+      'Alpaca ține o singură poziție pe simbol: vânzarea închide întâi long-ul de 3 AAPL, iar peste el deschide un short (dacă contul permite short). Nu există long și short în același timp.',
+    ]);
+    expect(own((await t.normalize(ticket({ side: 'sell', amount: 2 }))).warnings)).toEqual([]);
+    at({ symbol: 'AAPL', qty: '-2', qty_available: '-2', side: 'short', avg_entry_price: '210', current_price: '200' });
+    expect(own((await t.normalize(ticket({ side: 'buy', amount: 5 }))).warnings)).toEqual([
+      'Alpaca ține o singură poziție pe simbol: cumpărarea acoperă întâi short-ul de 2 AAPL, iar peste el deschide un long.',
+    ]);
+    expect(own((await t.normalize(ticket({ side: 'buy', amount: 1 }))).warnings)).toEqual([
+      'Alpaca ține o singură poziție pe simbol: cumpărarea micșorează short-ul de 2 AAPL (nu deschide un long separat).',
+    ]);
+  });
+
   it('explains no buying power, and an order that can no longer be cancelled', async () => {
     routes([
       ['POST /v2/orders', () => ({ status: 403, body: { message: 'insufficient buying power' } })],
@@ -264,3 +312,81 @@ describe('closing units of several eToro positions (FD-ETOROUNITS)', () => {
   });
 });
 
+
+describe('changing a stop loss / take profit at the brokers (FD-ORDEREDIT)', () => {
+  const change = (changes: import('../../../shared/trading.ts').ModifyTicket['changes'], extra: object = {}) => ({ accountId: 1, idemKey: KEY, market: 'stock' as const, symbol: 'AAPL', position: { side: 'long' as const, ref: '111' }, changes, ...extra });
+
+  it('eToro: a position SL and TP in one PATCH (demo path, the form key as the request id); a removal clears it', async () => {
+    const pf = { clientPortfolio: { credit: 5000, positions: [{ positionID: 111, instrumentID: 1001, units: 2, isBuy: true, leverage: 1, openRate: 180, stopLossRate: 150, takeProfitRate: 230, unrealizedPnL: { closeRate: 200 } }] } };
+    const sent = serve([
+      ['GET /trading/info/demo/pnl', () => ({ body: pf })],
+      ['PATCH /api/v2/trading/demo/positions/111', () => ({ status: 202, body: { operationId: 'op1', positionId: 111 } })],
+    ]);
+    const t = new EtoroTrader({ publicKey: 'p', userKey: 'u' }, 'demo');
+    const plan = await t.normalizeModify(change([{ what: 'sl', orderId: 'sl-111', level: 160 }, { what: 'tp', orderId: 'tp-111', level: null }]));
+    expect(plan.preview.errors).toEqual([]);
+    expect(plan.preview.steps.map((s) => [s.kind, s.how, s.before.stopLoss ?? s.before.takeProfit, s.after.stopLoss ?? s.after.takeProfit])).toEqual([
+      ['sl', 'position', 150, 160],
+      ['tp', 'position', 230, null],
+    ]);
+    const r = await t.modify(plan);
+    expect(r.status).toBe('done');
+    const patch = sent.filter((s) => s.method === 'PATCH');
+    expect(patch).toHaveLength(1);
+    expect(patch[0]).toMatchObject({ body: { stopLossRate: 160, clearTakeProfit: true }, headers: { 'x-request-id': KEY } });
+  });
+
+  it('eToro: a stop loss over the price refused; a new one added through the position id; a pending order is not changed', async () => {
+    const pf = { clientPortfolio: { positions: [{ positionID: 111, instrumentID: 1001, units: 2, isBuy: true, leverage: 2, openRate: 180, isNoStopLoss: true, unrealizedPnL: { closeRate: 200 } }] } };
+    serve([['GET /trading/info/real/pnl', () => ({ body: pf })]]);
+    const t = new EtoroTrader({ publicKey: 'p', userKey: 'u' }, 'real');
+    expect((await t.normalizeModify(change([{ what: 'sl', orderId: null, level: 210 }]))).preview.errors.join(' ')).toMatch(/sub prețul de acum/);
+    expect((await t.normalizeModify(change([{ what: 'sl', orderId: null, level: 170 }]))).preview.steps).toMatchObject([{ how: 'position', before: { stopLoss: null }, after: { stopLoss: 170 } }]);
+    expect((await t.normalizeModify(change([{ what: 'order', orderId: '555', trigger: false, price: 190 }]))).preview.errors.join(' ')).toMatch(/nu se poate modifica/);
+  });
+
+  it('Alpaca: a stop sell moved with PATCH (only what changed); a removal cancels it', async () => {
+    const sent = serve([
+      ['GET /v2/orders/s1', () => ({ body: { id: 's1', symbol: 'AAPL', status: 'new', type: 'stop', side: 'sell', qty: '5', stop_price: '180', limit_price: null, asset_class: 'us_equity' } })],
+      ['GET /v2/stocks/AAPL/trades/latest', () => ({ body: { trade: { p: 200 } } })],
+      ['PATCH /v2/orders/s1', () => ({ body: { id: 's2', status: 'new' } })],
+      ['DELETE /v2/orders/s1', () => ({ status: 204 })],
+    ]);
+    const t = new AlpacaTrader({ keyId: 'k', secret: 's' }, 'paper');
+    const r = await t.modify(await t.normalizeModify(change([{ what: 'sl', orderId: 's1', level: 185.004 }])));
+    expect(r).toMatchObject({ status: 'done', steps: [{ ok: true, orderId: 's2' }] });
+    expect(sent.find((s) => s.method === 'PATCH')?.body).toEqual({ stop_price: '185' });
+    await t.modify(await t.normalizeModify(change([{ what: 'sl', orderId: 's1', level: null }])));
+    expect(sent.some((s) => s.method === 'DELETE' && s.url.includes('/v2/orders/s1'))).toBe(true);
+  });
+
+  it("Alpaca: a stop moved across the price now is refused; an order that does not close the position is not its level", async () => {
+    serve([
+      ['GET /v2/orders/s1', () => ({ body: { id: 's1', symbol: 'AAPL', status: 'new', type: 'stop', side: 'sell', qty: '5', stop_price: '180', limit_price: null, asset_class: 'us_equity' } })],
+      ['GET /v2/orders/b1', () => ({ body: { id: 'b1', symbol: 'AAPL', status: 'new', type: 'stop', side: 'buy', qty: '5', stop_price: '220', limit_price: null, asset_class: 'us_equity' } })],
+      ['GET /v2/stocks/AAPL/trades/latest', () => ({ body: { trade: { p: 200 } } })],
+    ]);
+    const t = new AlpacaTrader({ keyId: 'k', secret: 's' }, 'paper');
+    expect((await t.normalizeModify(change([{ what: 'order', orderId: 's1', trigger: true, triggerPrice: 205 }], { position: undefined }))).preview.errors.join(' ')).toMatch(/peste prețul de acum.*s-ar executa imediat/);
+    expect((await t.normalizeModify(change([{ what: 'sl', orderId: 'b1', level: 190 }]))).preview.errors).toEqual(['Ordinul nu închide această poziție.']);
+  });
+
+  it('Trading 212: no change of an order: cancelled, then placed again (negative quantity for a sell)', async () => {
+    const sent = serve([
+      ['GET /equity/orders/77', () => ({ body: { id: 77, ticker: 'AAPL_US_EQ', type: 'STOP', quantity: -5, stopPrice: 180, status: 'NEW' } })],
+      ['DELETE /equity/orders/77', () => ({ body: {} })],
+      ['POST /equity/orders/stop', () => ({ body: { id: 78, status: 'NEW' } })],
+    ]);
+    const t = new Trading212Trader({ apiKey: 'a', secret: 'b' }, 'demo');
+    const plan = await t.normalizeModify(change([{ what: 'sl', orderId: '77', level: 185 }], { position: { side: 'long' } }));
+    expect(plan.preview.steps).toMatchObject([{ how: 'cancel-then-place', before: { triggerPrice: 180 }, after: { triggerPrice: 185 } }]);
+    expect(plan.preview.warnings.join(' ')).toMatch(/cel vechi se anulează/);
+    const r = await t.modify(plan);
+    expect(r.status).toBe('done');
+    const writes = sent.filter((s) => s.method !== 'GET').map((s) => [s.method, s.url.replace(/^.*\/api\/v0/, ''), s.body]);
+    expect(writes).toEqual([
+      ['DELETE', '/equity/orders/77', undefined],
+      ['POST', '/equity/orders/stop', { ticker: 'AAPL_US_EQ', quantity: -5, timeValidity: 'GOOD_TILL_CANCEL', stopPrice: 185 }],
+    ]);
+  });
+});

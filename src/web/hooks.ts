@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SettingsView } from '../shared/settings.ts';
-import type { AccountInfo, CalendarResponse, MarketSourceInfo, StocksInfo, WatchItem } from '../shared/api-types.ts';
+import type { AccountInfo, CalendarResponse, MarketSourceInfo, StocksInfo, WatchItem, WatchView } from '../shared/api-types.ts';
 import { api, qs } from './api.ts';
 
 /** The signed-in user's own account (Security; the passkeys the trading switch can confirm with, FD-TRADEUNLOCK). */
@@ -64,35 +64,67 @@ export function useWatchlist() {
   return useQuery({ queryKey: ['watchlist'], queryFn: () => api.get<WatchItem[]>('/api/watchlist'), staleTime: 60_000 });
 }
 
-/** `list` in the order of `coins` (favourites missing from `coins` keep their place at the end). */
-export function orderWatchlist(list: WatchItem[], coins: string[]): WatchItem[] {
-  const byCoin = new Map(list.map((w) => [w.coin, w]));
-  const moved = coins.map((c) => byCoin.get(c)).filter((w): w is WatchItem => w !== undefined);
-  return [...moved, ...list.filter((w) => !coins.includes(w.coin))];
+/** FD-WATCHLISTS: the user's lists, with all their symbols together (`items`, the same as `useWatchlist`). */
+export const WATCHLISTS_KEY = ['watchlists'] as const;
+export function useWatchlists() {
+  return useQuery({ queryKey: WATCHLISTS_KEY, queryFn: () => api.get<WatchView>('/api/watchlists'), staleTime: 60_000 });
+}
+
+/** `coins` in the order of `order` (those missing from it keep their place at the end). */
+export function orderCoins(coins: string[], order: string[]): string[] {
+  const have = new Set(coins);
+  const moved = order.filter((c) => have.has(c));
+  const set = new Set(moved);
+  return [...moved, ...coins.filter((c) => !set.has(c))];
 }
 
 /**
- * Saves a new order of the favourites (FD-CHARTFAV §2). `save(coins)` takes the whole list in its new order: it is
- * shown at once everywhere; the saves go one after the other, in the order of the moves; if one fails, the list is
- * read again from the server.
+ * Puts the server's answer about the lists where everything reads it: the lists, and all their symbols together (Today,
+ * the strip, ⌘K). `followed`: the symbols followed changed, so what depends on them is read again.
  */
-export function useReorderWatchlist() {
+export function useApplyWatchView() {
   const qc = useQueryClient();
-  const mutationKey = ['watchlist', 'order'];
+  return (v: WatchView, followed: boolean) => {
+    qc.setQueryData<WatchView>(WATCHLISTS_KEY, { lists: v.lists, items: v.items });
+    qc.setQueryData<WatchItem[]>(['watchlist'], v.items);
+    if (!followed) return;
+    void qc.invalidateQueries({ queryKey: ['scanner'] });
+    void qc.invalidateQueries({ queryKey: ['news'] });
+    void qc.invalidateQueries({ queryKey: ['sources'] });
+    void qc.invalidateQueries({ queryKey: ['calendar'] });
+  };
+}
+
+export interface ListReorder {
+  save: (coins: string[]) => void;
+  isError: boolean;
+  error: unknown;
+}
+
+/**
+ * Saves a new order of a list's symbols (FD-CHARTFAV §2, in each list since FD-WATCHLISTS). `save(coins)` takes the
+ * whole list in its new order: it is shown at once; the saves go one after the other, in the order of the moves; if
+ * one fails, the lists are read again.
+ */
+export function useReorderList(listId: number | null): ListReorder {
+  const qc = useQueryClient();
+  const apply = useApplyWatchView();
+  const mutationKey = ['watchlists', 'order', listId];
   const m = useMutation({
     mutationKey,
-    scope: { id: 'watchlist-order' },
-    mutationFn: (coins: string[]) => api.put<WatchItem[]>('/api/watchlist/order', { coins }),
+    scope: { id: `watchlist-order-${listId}` },
+    mutationFn: (coins: string[]) => api.put<WatchView>(`/api/watchlists/${listId}/items/order`, { coins }),
     // While a later move is still waiting, its order (already shown) stays on screen.
     onSuccess: (data) => {
-      if (qc.isMutating({ mutationKey }) <= 1) qc.setQueryData(['watchlist'], data);
+      if (qc.isMutating({ mutationKey }) <= 1) apply(data, false);
     },
-    onError: () => void qc.invalidateQueries({ queryKey: ['watchlist'] }),
+    onError: () => void qc.invalidateQueries({ queryKey: WATCHLISTS_KEY }),
   });
   const save = (coins: string[]) => {
-    void qc.cancelQueries({ queryKey: ['watchlist'] });
-    const prev = qc.getQueryData<WatchItem[]>(['watchlist']);
-    if (prev) qc.setQueryData<WatchItem[]>(['watchlist'], orderWatchlist(prev, coins));
+    if (listId === null) return;
+    void qc.cancelQueries({ queryKey: WATCHLISTS_KEY });
+    const prev = qc.getQueryData<WatchView>(WATCHLISTS_KEY);
+    if (prev) qc.setQueryData<WatchView>(WATCHLISTS_KEY, { ...prev, lists: prev.lists.map((l) => (l.id === listId ? { ...l, coins: orderCoins(l.coins, coins) } : l)) });
     m.mutate(coins);
   };
   return { save, isError: m.isError, error: m.error };

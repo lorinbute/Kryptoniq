@@ -8,6 +8,7 @@ import { studiesSchema, studyFavoritesSchema, studyMemorySchema } from './studie
 import { orderTicketMemorySchema } from './trading.ts';
 import { stockNewsSchema } from './stock-indices.ts';
 import { chartLinesSchemaFor, hlineStyleSchema } from './hlines.ts';
+import { chartStyleSchema } from './chart-style.ts';
 
 /** The exchanges crypto prices can come from (FD-MARKETSRC §1: Kraken and Coinbase lack the pairs and the history). */
 export const MARKET_EXCHANGES = ['kucoin', 'binance', 'bybit', 'okx', 'bitget'] as const;
@@ -77,6 +78,10 @@ export const settingsSchema = z.object({
       lmaHidden: z.boolean().default(false),
       /** Share of the chart height given to the LMA pane. */
       lmaPane: z.number().min(0.1).max(0.7).default(0.25),
+      /** The price scale is logarithmic ("L" under it, FD-CHARTTV §4). */
+      logScale: z.boolean().default(false),
+      /** The watch list the symbol panel shows (FD-WATCHLISTS §4); null, or one deleted since: the first. */
+      listId: z.number().int().positive().nullable().default(null),
     })
     .prefault({}),
   /**
@@ -96,6 +101,8 @@ export const settingsSchema = z.object({
   chartLines: chartLinesSchemaFor(CHART_SYMBOL_RE).prefault({}),
   /** The style new horizontal lines start with ("Salvează ca șablon", FD-HLINE §4); null: the initial one. */
   hlineTemplate: hlineStyleSchema.nullable().default(null),
+  /** How the chart looks (FD-CHARTSETTINGS); a key of its own, like `studies`. */
+  chartStyle: chartStyleSchema.prefault({}),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;

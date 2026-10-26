@@ -13,6 +13,76 @@ import { ErrorNote, Loading, Panel, Warning } from '../components/ui.tsx';
 import { SettingsTabs } from '../components/SettingsTabs.tsx';
 
 const CAT_RO: Record<string, string> = { crypto: 'Crypto', macro: 'Macro', geopolitics: 'Geopolitică', stocks: 'Acțiuni' };
+type Category = 'crypto' | 'stocks' | 'macro' | 'geopolitics';
+/** FD-MULTICAT: the categories in their fixed order (as the server keeps them). */
+const CAT_ORDER: Category[] = ['crypto', 'stocks', 'macro', 'geopolitics'];
+const categoriesOf = (s: Pick<SourceRow, 'category' | 'categories'>): Category[] => {
+  const list = s.categories ? CAT_ORDER.filter((c) => (s.categories as string).split(',').includes(c)) : [];
+  return list.length > 1 ? list : [s.category];
+};
+/** "General" for all four, else "Crypto + Acțiuni". */
+const categoriesLabel = (cats: readonly Category[]) => (cats.length === 4 ? 'General' : cats.map((c) => CAT_RO[c]).join(' + '));
+
+/** FD-MULTICAT: one or several categories of a source, or "Toate (general)" for all four. */
+function CategoryPicker({ value, onChange, label }: { value: readonly Category[]; onChange: (next: Category[]) => void; label: string }) {
+  const all = value.length === CAT_ORDER.length;
+  const chip = (on: boolean) => clsx('rounded-lg border px-2.5 py-1 text-[12.5px] transition-colors', on ? 'border-accent bg-selected text-text' : 'border-line-strong text-muted hover:text-text');
+  return (
+    <div role="group" aria-label={label} className="flex flex-wrap gap-1.5">
+      {CAT_ORDER.map((c) => (
+        <button key={c} type="button" aria-pressed={value.includes(c)} className={chip(value.includes(c))} onClick={() => onChange(value.includes(c) ? value.filter((x) => x !== c) : CAT_ORDER.filter((x) => x === c || value.includes(x)))}>
+          {CAT_RO[c]}
+        </button>
+      ))}
+      <button type="button" aria-pressed={all} className={chip(all)} onClick={() => onChange(all ? [] : [...CAT_ORDER])}>
+        Toate (general)
+      </button>
+    </div>
+  );
+}
+
+/** The categories cell: the label, and for a source added by the admin, "Schimbă" (FD-MULTICAT). */
+function SourceCategories({ s, onSave, saving }: { s: SourceRow; onSave: (categories: Category[]) => void; saving: boolean }) {
+  const [editing, setEditing] = useState<Category[] | null>(null);
+  const cats = categoriesOf(s);
+  if (!editing) {
+    return (
+      <div className="flex flex-col items-start gap-0.5">
+        <span>{categoriesLabel(cats)}</span>
+        {!s.builtin && !s.auto && (
+          <button type="button" className="link-accent" onClick={() => setEditing(cats)} aria-label={`Schimbă categoriile ${s.name}`}>
+            Schimbă
+          </button>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="flex min-w-[260px] flex-col gap-1.5">
+      <CategoryPicker value={editing} onChange={setEditing} label={`Categoriile ${s.name}`} />
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className="btn btn-primary h-8 px-3 text-[12.5px]"
+          disabled={editing.length === 0 || saving}
+          onClick={() => {
+            onSave(editing);
+            setEditing(null);
+          }}
+        >
+          Salvează
+        </button>
+        <button type="button" className="btn h-8 px-3 text-[12.5px]" onClick={() => setEditing(null)}>
+          Anulează
+        </button>
+        {editing.length === 0 && <span className="text-[12px] text-warn">Alege cel puțin o categorie</span>}
+      </div>
+    </div>
+  );
+}
+/** FD-HTMLFEED: how a source of a site's page is read, in its row. */
+// The same words as the test's message (READ_AS_LABEL on the server).
+const READ_AS_RO: Record<string, string> = { declared: 'feed găsit în pagină', sitemap: 'sitemap-ul de știri', jsonld: 'datele structurate ale paginii', page: 'titlurile din pagină' };
 /** FD-AUTOFEED §2: what an automatic feed is, on its tag. */
 const AUTO_HINT = 'Adăugată pentru o acțiune din favoritele cuiva. Dispare când acțiunea nu mai e în favoritele nimănui.';
 
@@ -33,11 +103,11 @@ function SourcesSection() {
   const remove = useMutation({ mutationFn: (id: string) => api.del(`/api/sources/${id}`), onSuccess: () => qc.invalidateQueries({ queryKey: ['sources'] }) });
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
-  const [category, setCategory] = useState<'crypto' | 'macro' | 'geopolitics' | 'stocks'>('crypto');
+  const [categories, setCategories] = useState<Category[]>(['crypto']);
   const [test, setTest] = useState<FeedTest | null>(null);
   const testFeed = useMutation({ mutationFn: () => api.post<FeedTest>('/api/sources/test', { url }), onSuccess: setTest });
   const add = useMutation({
-    mutationFn: () => api.post('/api/sources', { name, url, category }),
+    mutationFn: () => api.post('/api/sources', { name, url, categories }),
     onSuccess: () => {
       setName('');
       setUrl('');
@@ -81,7 +151,9 @@ function SourcesSection() {
                     </div>
                     <div className="max-w-[340px] truncate text-[12px] text-faint">{s.url}</div>
                   </td>
-                  <td>{CAT_RO[s.category]}</td>
+                  <td>
+                    <SourceCategories s={s} saving={update.isPending} onSave={(cats) => update.mutate({ id: s.id, patch: { categories: cats } })} />
+                  </td>
                   <td>
                     <select aria-label={`Pondere ${s.name}`} value={String(s.weight)} onChange={(e) => update.mutate({ id: s.id, patch: { weight: Number(e.target.value) } })}>
                       {[0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5].map((w) => (
@@ -101,7 +173,10 @@ function SourcesSection() {
                     ) : (
                       <span className="text-faint">încă neverificată</span>
                     )}
-                    <div className="text-faint">{s.item_count} știri</div>
+                    <div className="text-faint">
+                      {s.item_count} știri
+                      {s.read_as && <span title={s.read_url ?? s.url}> · {READ_AS_RO[s.read_as] ?? s.read_as}</span>}
+                    </div>
                   </td>
                   <td className="text-right">
                     {!s.builtin && (
@@ -117,7 +192,7 @@ function SourcesSection() {
         </div>
       )}
       <form
-        className="mx-5 mt-4 grid gap-3 border-t border-line pt-4 md:grid-cols-[200px_1fr_150px_auto]"
+        className="mx-5 mt-4 grid gap-3 border-t border-line pt-4 md:grid-cols-[200px_1fr_auto]"
         onSubmit={(e) => {
           e.preventDefault();
           add.mutate();
@@ -128,32 +203,50 @@ function SourcesSection() {
           <input required maxLength={80} value={name} onChange={(e) => setName(e.target.value)} />
         </label>
         <label className="flex flex-col gap-1 text-[13px]">
-          <span className="text-faint">Adresa feed-ului RSS/Atom</span>
-          <input required type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…/feed" />
-        </label>
-        <label className="flex flex-col gap-1 text-[13px]">
-          <span className="text-faint">Categorie</span>
-          <select value={category} onChange={(e) => setCategory(e.target.value as typeof category)}>
-            <option value="crypto">Crypto</option>
-            <option value="macro">Macro / piețe</option>
-            <option value="geopolitics">Geopolitică</option>
-            <option value="stocks">Acțiuni</option>
-          </select>
+          <span className="text-faint">Adresa feed-ului RSS/Atom sau a paginii site-ului</span>
+          <input
+            required
+            type="url"
+            value={url}
+            // A test said what the old address gave: not this one's.
+            onChange={(e) => {
+              setUrl(e.target.value);
+              setTest(null);
+            }}
+            placeholder="https://…/feed sau https://site.com/markets"
+          />
         </label>
         <div className="flex flex-wrap items-end gap-2">
           <button type="button" className="btn" disabled={!url || testFeed.isPending} onClick={() => testFeed.mutate()}>
             Testează
           </button>
-          <button className="btn btn-primary" disabled={add.isPending || !name || !url}>
+          <button className="btn btn-primary" disabled={add.isPending || !name || !url || categories.length === 0}>
             Adaugă sursa
           </button>
         </div>
+        {/* FD-MULTICAT: one category, several, or all four for a general feed; each item then gets the one it is about. */}
+        <div className="flex flex-col gap-1 text-[13px] md:col-span-3">
+          <span className="text-faint">
+            Categorii
+          </span>
+          <CategoryPicker value={categories} onChange={setCategories} label="Categoriile sursei noi" />
+          <span className="text-[12px] text-faint">
+            {categories.length === 0
+              ? 'Alege cel puțin o categorie.'
+              : categories.length === 1
+                ? 'Toate știrile sursei intră la această categorie.'
+                : 'Fiecare știre intră la categoria pe care o tratează, dintre cele alese; una care nu tratează niciuna nu intră în sentiment.'}
+          </span>
+        </div>
         {test && (
-          <div className={clsx('text-[13px] md:col-span-4', test.ok ? 'text-muted' : 'text-bear')}>
-            {test.ok ? `Feed valid, ${test.count} articole. Ultimele: ${test.sample.slice(0, 3).join('; ')}` : `Feed-ul nu poate fi citit: ${test.error}`}
+          <div className={clsx('text-[13px] md:col-span-3', test.ok ? 'text-muted' : 'text-bear')}>
+            {test.ok
+              ? // FD-HTMLFEED: how the address reads, and how many items have a date (the undated ones come in only once seen new).
+                `${!test.method || test.method === 'feed RSS' ? 'Feed valid' : `Citită din ${test.method}`}: ${test.count} știri${test.dated !== undefined && test.dated < test.count ? `, ${test.dated} cu dată` : ''}${test.note ? ` (${test.note})` : ''}. Ultimele: ${test.sample.slice(0, 3).join('; ')}`
+              : `Sursa nu poate fi citită: ${test.error}`}
           </div>
         )}
-        {(add.error || update.error || remove.error) && <div className="text-[13px] text-bear md:col-span-4">{errorMessage(add.error ?? update.error ?? remove.error)}</div>}
+        {(add.error || update.error || remove.error) && <div className="text-[13px] text-bear md:col-span-3">{errorMessage(add.error ?? update.error ?? remove.error)}</div>}
       </form>
     </Panel>
   );
@@ -348,7 +441,7 @@ export default function AdminSettingsPage() {
   // The long list of sources comes first: an anchor below it (#market-data) is scrolled to once it is drawn.
   useHashScroll(Boolean(settings.data) && !sources.isPending);
   return (
-    <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-3.5">
+    <div className="flex w-full flex-col gap-3.5">
       <h1 className="page-title">Setări</h1>
       <SettingsTabs />
       <p className="text-[13px] text-muted">Aceste setări se aplică tuturor utilizatorilor.</p>

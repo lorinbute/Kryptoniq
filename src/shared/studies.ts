@@ -80,6 +80,14 @@ export const studyHlineStyleSchema = z
   })
   .strict();
 
+/** A fill (FD-FILLS, TradingView's Style tab): shown or not, and its colour when it has a single one. */
+export const studyFillStyleSchema = z
+  .object({
+    visible: z.boolean().optional(),
+    color: color.optional(),
+  })
+  .strict();
+
 /** One indicator on the charts (FD-INDICATORS §4). */
 export const studySchema = z
   .object({
@@ -91,6 +99,7 @@ export const studySchema = z
     visible: z.boolean().default(true),
     plots: keyed(studyPlotStyleSchema, 40).optional(),
     hlines: keyed(studyHlineStyleSchema, 40).optional(),
+    fills: keyed(studyFillStyleSchema, 40).optional(),
     /** Height of its own pane, as a ratio to the price pane. */
     height: z.number().min(0.05).max(3).optional(),
   })
@@ -101,7 +110,7 @@ export type Study = z.infer<typeof studySchema>;
  * The last settings of each indicator (FD-STUDYMEMORY): what it comes back with when added again. A list, not an
  * object keyed by id, so that saving one replaces it whole (the settings merge objects key by key).
  */
-export const studyMemoryEntrySchema = studySchema.pick({ id: true, inputs: true, plots: true, hlines: true, height: true }).strict();
+export const studyMemoryEntrySchema = studySchema.pick({ id: true, inputs: true, plots: true, hlines: true, fills: true, height: true }).strict();
 export type StudyMemoryEntry = z.infer<typeof studyMemoryEntrySchema>;
 export const studyMemorySchema = z
   .array(studyMemoryEntrySchema)

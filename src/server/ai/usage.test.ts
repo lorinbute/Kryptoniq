@@ -9,7 +9,7 @@ describe("what each user's AI key spends (FD-AICLARITY, FD-AIKEYS)", () => {
     const db = await testDb();
     let now = Date.parse('2026-10-14T23:50:00Z');
     const u = new AiUsage(db, () => now);
-    expect(await u.today(1)).toEqual({ day: '2026-10-14', sentiment: zero, summary: zero });
+    expect(await u.today(1)).toEqual({ day: '2026-10-14', sentiment: zero, summary: zero, translate: zero, bot: zero });
     await u.record(1, 'sentiment', { items: 25, input: 1200, output: 800, model: 'gpt-6-luna' });
     await u.record(1, 'sentiment', { items: 7, input: 500, output: 210, model: 'gpt-6-luna' });
     await u.record(1, 'summary', { input: 9000, output: 3000, model: 'gpt-6-astra' });
@@ -18,7 +18,14 @@ describe("what each user's AI key spends (FD-AICLARITY, FD-AIKEYS)", () => {
       day: '2026-10-14',
       sentiment: { calls: 2, items: 32, input: 1700, output: 1010, model: 'gpt-6-luna' },
       summary: { calls: 1, items: 0, input: 9000, output: 3000, model: 'gpt-6-astra' },
+      // FD-WATCHLISTS §3: the descriptions translated, apart; FD-BOT: the bots' questions too.
+      translate: zero,
+      bot: zero,
     });
+    await u.record(1, 'translate', { items: 1, input: 30, output: 12, model: 'gpt-6-luna' });
+    expect((await u.today(1)).translate).toEqual({ calls: 1, items: 1, input: 30, output: 12, model: 'gpt-6-luna' });
+    await u.record(1, 'bot', { input: 900, output: 60, model: 'gpt-6-luna' });
+    expect((await u.today(1)).bot).toEqual({ calls: 1, items: 0, input: 900, output: 60, model: 'gpt-6-luna' });
     expect((await u.today(2)).summary).toMatchObject({ calls: 1, model: 'gemini-3.8-flash' });
     now = Date.parse('2026-10-15T00:05:00Z');
     expect((await u.today(1)).sentiment.calls).toBe(0);

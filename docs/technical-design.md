@@ -97,7 +97,8 @@ Timp = **epoch ms (`BIGINT`)** peste tot. Schema e versionată în `schema_versi
 | `calendar_raw`, `calendar_custom` | evenimentele FF / TV / rezultate; evenimentele personale (`user_id`) | v1, FD-USERS |
 | `job_state` | starea job-urilor (și date persistate, ex. săptămânile FF, bugetul Twelve Data) | v1 |
 | `job_lease` | ce proces rulează job-urile (§4) | FD-AZURE |
-| `watchlist` | favoritele per utilizator (`kind` crypto / stock, `name`, `exchange`, aliasuri, ordine) | v1–FD-USERS |
+| `watchlist` | registrul simbolurilor urmărite de fiecare utilizator: reuniunea listelor lui (`kind` crypto / stock / index, `name`, `exchange`, aliasuri, ordinea comună) | v1–FD-USERS, FD-WATCHLISTS |
+| `watch_lists`, `watch_list_items` | listele de urmărire (nume, ordine) și simbolurile lor, în ordine (TD-WATCHLISTS) | v9 |
 | `exchange_accounts`, `cost_basis` | conturile (credențiale criptate, `env`, `user_id`, tranzacționarea pornită și piețele ei) și prețul mediu introdus manual | v1–FD-USERS, FD-TRADING |
 | `trade_log` | ordinele, anulările și pornirile / opririle tranzacționării trimise din Sentiq (fără chei), cu cheia formularului (unică pe utilizator) | FD-TRADING |
 | `market_cache` | contextul pieței (F&G, CoinGecko, CNN, Nasdaq), lista de monede | v1 |
@@ -129,10 +130,11 @@ Cu mai multe procese pe aceeași bază, **job-urile rulează doar în procesul c
 |---|---|---|
 | `news.fetch` | 60 s tick | sursele active cu `next_fetch_at ≤ now` (max 4 în paralel): fetch condițional, parse, ingest; interval normal 5 min; eșec → backoff `min(60, 5·2^(failures−1))` min |
 | `sentiment.score` | 20 s + după ingest | scorează știrile fără sentiment (cele mai noi primele), loturi de 16 (local) / 25 (Claude) |
+| `sentiment.ai` | 60 s + după ingest | AI-ul propriu al fiecărui utilizator (FD-AIKEYS): runde de câte un lot de 25 pe utilizator, utilizatorii în paralel (câte 4), nicio rundă nouă după 5 min; un lot are 3 min, reîncercările cu tot; pauza după o eroare trecătoare crește 1 → 15 min (FD-AISLOW) |
 | `sentiment.daily` | 2 min | recalculează ziua curentă, finalizează zilele trecute; o dată după o schimbare de ponderare, recalculează istoricul (FD-IMPACT §3) |
 | `calendar.ff` | 15 min tick | descarcă FF doar dacă `now − last_ok ≥ 60 min` și `now ≥ blocked_until` |
 | `calendar.tv` | 15 min + rafale | [azi−7z, azi+14z]; alimentează și pagina Economie; aproape de un eveniment High / Medium și până apare Actual, rulări la ~1–2 min |
-| `calendar.earnings` | 6 h | rezultatele trimestriale ale acțiunilor din favoritele tuturor (Nasdaq) |
+| `calendar.earnings` | 6 h | rezultatele trimestriale ale acțiunilor din favoritele tuturor (Nasdaq, cu data confirmată de la TradingView: FD-EARNTV) |
 | `econ.history` | 24 h | istoricul indicatorilor (~400 de zile, o dată) și calendarul publicărilor |
 | `market.context` | 60 min | Fear & Greed, CoinGecko global, top 250 monede (pentru detectare; la schimbare, reetichetarea ultimelor 3 zile) |
 | `stocks.market` | 5 min | starea bursei SUA, S&P 500, Nasdaq 100, VIX, Fear & Greed CNN |
@@ -249,7 +251,7 @@ Pentru intervalul cerut:
 5. Glosar RO (`calendar/glossary.ts`) atașat după cuvinte cheie normalizate.
 
 ### 7.4 Rezultatele companiilor (`calendar/service.ts`)
-Pentru acțiunile din favoritele tuturor, calendarul de rezultate Nasdaq pe zilele lucrătoare următoare (o cerere pe zi), salvat în `calendar_raw` cu sursa `earn`: înainte de deschidere la 08:00 ET, după închidere la 16:30 ET, altfel toată ziua; EPS estimat și EPS-ul de anul trecut. Fiecare utilizator vede doar rezultatele acțiunilor lui (filtrul `calendar.earnings`).
+Pentru acțiunile din favoritele tuturor, calendarul de rezultate Nasdaq pe zilele lucrătoare următoare (o cerere pe zi), salvat în `calendar_raw` cu sursa `earn`: înainte de deschidere la 08:00 ET, după închidere la 16:30 ET, altfel toată ziua; EPS estimat și EPS-ul de anul trecut. Data pe care compania a confirmat-o (scanner-ul TradingView, o cerere pentru toate acțiunile) are întâietate asupra datei Nasdaq, iar o dată Nasdaq la mai puțin de 45 de zile după ultima publicare e sărită (TD-EARNTV). Fiecare utilizator vede doar rezultatele acțiunilor lui (filtrul `calendar.earnings`).
 
 ## 8. Piață
 
@@ -725,7 +727,7 @@ Banda de prețuri: 11 monede × 1 cerere de lumânări 1h pe minut (greutate 3, 
 - **`EdgeLabel`** (primitivă nouă): caseta `label_left` cu vârf spre stânga, la bara `n+1` (= `bar_index + 2`), la valoarea curentă:
   - fundal: culoarea semnalului @ alfa 230;
   - textul: BULLISH / BEARISH / NEUTRAL.
-- **`barcolor`**: când `colorBars` e activ și LMA e afișat, lumânările primesc per bară `color` și `wickColor` = culoarea semnalului.
+- **`barcolor`**: când `colorBars` e activ și LMA e afișat, lumânările primesc per bară doar `color` (corpul) = culoarea semnalului; marginea și fitilul rămân ale setărilor graficului (FD-BARCOLORBODY).
 - **Panouri:**
   - LMA se creează sau se elimină odată cu `showLma`;
   - factorii de înălțime sunt `1 − share` / `share` (`charts.lmaPane`, implicit 0.25);
@@ -760,6 +762,7 @@ Banda de prețuri: 11 monede × 1 cerere de lumânări 1h pe minut (greutate 3, 
 - **Starea**: `'off' | 'native' | 'css'`.
 - **`enter()`**:
   - `el.requestFullscreen()` sau `webkitRequestFullscreen()`; dacă lipsesc sau sunt respinse → `'css'`;
+  - pe iPhone / iPad nu le cere deloc → `'css'` (TD-IPADFS2);
   - `fullscreenchange` / `webkitfullscreenchange` sincronizează starea, inclusiv când ieși din meniul browserului.
 - **`exit()`**: `document.exitFullscreen()` / `webkitExitFullscreen()` doar dacă elementul e chiar în ecran complet; în modul css trece la `'off'`.
 - **Esc**: un `keydown` cu `Escape` iese din ecran complet (în modul css, și în modul nativ când tasta ajunge la pagină), mai puțin când `blockEsc` (sertarul de setări deschis): Esc îl închide întâi pe el. În modul nativ, de obicei browserul iese singur la Esc, iar `fullscreenchange` sincronizează starea.
@@ -2425,8 +2428,8 @@ Doar configurare: app setting `SENTIQ_MCP=1` pe `sentiq` (App Service); `SENTIQ_
     - Coinbase / Binance spot: doar stop-limită;
     - Bitget unificat (UTA): refuzat la verificare, spot și futures (vezi mai jos).
   - **Futures:**
-    - modul de poziție: `fetchPositionMode` (Binance, OKX, KuCoin) sau contul Bitget (clasic: `privateMixGetV2MixAccountAccount` → `posMode`; unificat: setările v3 → `holdMode`), ținut 10 min; hedge → `HEDGE_MODE`;
-    - Bitget clasic one-way → `oneWayMode: true`;
+    - modul de poziție: `fetchPositionMode` (Binance, OKX, KuCoin) sau contul Bitget (clasic: `privateMixGetV2MixAccountAccount` → `posMode`; unificat: setările v3 → `holdMode`), ținut 10 min; hedge → ordinul pleacă cu `hedged: true` (TD-KUCOINHEDGE, TD-HEDGEALL; Bybit: modul din lista pozițiilor perechii); KuCoin unificat → `HEDGE_MODE`;
+    - Bitget clasic one-way → `oneWayMode: true` (în hedge nu, ar suprascrie `hedged`);
     - **Bitget unificat (UTA):**
       - recunoscut după `GET /api/v3/account/settings` (îl primesc doar conturile unificate; `accountMode` `upgrading` / `switching` → refuzat până se termină), ținut 10 min și dat lui ccxt (`options.uta`). O eroare de rețea → eroare, nu „clasic” (ccxt ar păstra presupunerea);
       - ccxt 4.5 trimite parametrii brut pe `POST /api/v3/trade/place-order`: marja ca `crossed` / `isolated`, fără `oneWayMode`;
@@ -2545,7 +2548,8 @@ Doar configurare: app setting `SENTIQ_MCP=1` pe `sentiq` (App Service); `SENTIQ_
 - Testul de odinioară devine:
   - `withdraw` / `transfer` (apeluri) nu apar nicăieri în `src/server`;
   - `createOrder` / `cancelOrder` / `setLeverage` / `setMarginMode` / `POST`-urile de ordin apar doar în `src/server/exchange/trading/`;
-  - `cancelAllOrders`, `closeAllPositions` și `editOrder` nu apar nicăieri.
+  - `cancelAllOrders` și `closeAllPositions` nu apar nicăieri;
+  - FD-ORDEREDIT: `editOrder` și `PATCH`-urile (modificarea unui ordin sau a SL / TP-ului unei poziții) apar doar în `src/server/exchange/trading/`, ca plasarea și anularea.
 - Jurnalul păstrează doar ce a plecat (fără chei). Log-urile serverului: o linie pe acțiune (contul, simbolul, latura, cantitatea, rezultatul), niciodată chei.
 
 ### 8. Teste
@@ -2555,7 +2559,7 @@ Doar configurare: app setting `SENTIQ_MCP=1` pe `sentiq` (App Service); `SENTIQ_
   - rotunjirea, contractele;
   - levierul, marja, reduce-only, TP / SL;
   - stopul, clientOrderId-ul;
-  - modul hedge refuzat;
+  - modul hedge: poziția numită pe fiecare exchange (TD-KUCOINHEDGE, TD-HEDGEALL §6, pe clasele ccxt reale, inclusiv Binance, OKX și Bitget clasic); refuzat doar pe contul unificat KuCoin;
   - TP / SL după intrare la Binance;
   - contul unificat KuCoin și Bitget (marja, stop-urile, suma la cumpărarea spot la piață), modul contului Bitget citit din setările v3;
   - erorile: răspuns ilizibil după trimitere → necunoscut; Binance `-2015` → permisiune.
@@ -3369,3 +3373,2594 @@ Doar configurare: app setting `SENTIQ_MCP=1` pe `sentiq` (App Service); `SENTIQ_
   - legenda Slingshot: `SLINGSHOT_SHORT_TITLE`;
   - numele butoanelor din legenda Slingshot și LMA (etichetele lor): numele scurte.
 - **`order.test.ts`:** ordinea cu numele noi.
+
+## TD-CHARTTV — implementează FD-CHARTTV
+
+### 1. iPad (`web/chart/fullscreen.ts`, `Charts.tsx`)
+- `isIPad()`: `/iPad/` în user agent, sau `Macintosh` cu `navigator.maxTouchPoints > 1` (iPadOS se prezintă ca Mac).
+- În `ChartView`, cu `fs.mode === 'native' && isIPad()`, partea din stânga a antetului primește `pl-20` (80 px; `pl-14` până la TD-IPADFS).
+- **Retras de TD-IPADFS2:** `isIPad()` devine `isAppleTouch()`, iar `pl-20` și `iPad` din `ChartView` dispar.
+
+### 2. Bara (`Charts.tsx`)
+- Rândul din dreapta: `flex flex-wrap items-stretch gap-2.5`, cu două copii:
+  - intervalele;
+  - grupul butoanelor, `flex flex-nowrap items-stretch gap-2.5`.
+- Așa, fiecare element ia înălțimea rândului.
+- Butonul listei (`PanelRightOpen` / `PanelRightClose`, `aria-pressed`) și ieșirea din ecranul complet (`btn btn-primary`, doar iconița, cu `title` și `aria-label`): `w-[38px] px-0`, `pointer-coarse:w-11`.
+
+### 3. Lista (`web/components/Watchlist.tsx`)
+- **Props:** `current` (ținta graficului), `onPick(path)`, `onHide()`. Lățimea și-o măsoară singură.
+- **Conținutul:**
+  - capul (titlul, numărul, butonul de ascundere), căutarea (logica din `SymbolPicker`, mutată aici) și antetul coloanelor;
+  - rândurile în `FavoritesDnd` (`layout="rows"`, `keyMove(…, 'y')`).
+- **Date:**
+  - monede: `useSparks` (aceeași cheie ca banda de sus), cu prețul = ultima închidere orară, Var = ultima − cea de acum 24 de închideri, Var% = `sparkChange`;
+  - acțiuni și indici: `useStockQuotes`, cu `last`, `change`, `changePct`.
+- **Coloanele după lățime** (măsurată cu `ResizeObserver`): „Var” sub 280 px, „Ultimul” sub 220 px. Cotația monedei („/USDT”) apare doar de la 340 px. Coloanele cu numere au o lățime minimă (70 / 56 / 54 px), deci un preț lung le lărgește.
+- **Locul în pagină (`ChartView`):**
+  - rândul `flex flex-col md:flex-row`: panoul graficului (`min-w-0 flex-1`), apoi marginea (`hidden md:flex`, `role="separator"`, `aria-orientation="vertical"`, `aria-valuenow`, `tabIndex 0`), apoi lista;
+  - lista: `<aside>` `relative flex flex-col`, fără `overflow-hidden`, ca rezultatele căutării (cel puțin 260 px) să poată ieși peste grafic când lista e îngustă. Pe `md+`, conținutul e un strat `absolute inset-0`, deci nu adaugă înălțime rândului (ia înălțimea graficului). Sub `md`, `max-h-[360px]`, iar conținutul și lista (`min-h-0 flex-1`, în lanț) se strâng la ea. Derulează doar rândurile (`overflow-y-auto overscroll-contain`), capul și căutarea rămân sus.
+  - *TD-WATCHDRAWER înlocuiește aranjamentul de sub `md`:* rândul e `flex` (fără `flex-col`). Marginea și `<aside>` (cu `absolute inset-0`) apar doar de la 768 px (`useMediaQuery`); sub 768 px, lista e în `ListDrawer`.
+- **Marginea:**
+  - tragerea: `pointerdown` pe margine, cu `setPointerCapture`, apoi `pointermove` / `pointerup` / `pointercancel` pe ea; lățimea se salvează la eliberare;
+  - lățimea = dreapta rândului − x − 6 (jumătatea marginii), între 200 și min(560, 50 % din rând);
+  - tastele ← / → (±16 px); dublu-click → 300.
+- **Memoria:** `web/chart/watchlist-prefs.ts` (`parsePrefs`, `clampWidth`, `readPrefs`, `writePrefs`) ține în `localStorage` cheia `sentiq:watchlist` = `{ width, hidden }`, cu `try / catch` și 300 / vizibilă implicit. Pe ecran lat, `md:max-w-[50%]` strânge lista dacă fereastra se îngustează.
+- **Ce dispare:** `SymbolPicker` (pastilele) dispare din pagină.
+
+### 4. Graficul (`web/chart/CandleChart.tsx`, `primitives.ts`)
+- **`frameOptions`:**
+  - etichetele cursorului: `labelBackgroundColor: '#3C414C'`;
+  - linia cursorului: `LargeDashed`, ca până acum.
+- **Seria lumânărilor:**
+  - `lastValueVisible: false`;
+  - `priceLineVisible: true`, `priceLineColor: '#F0CF2B'`, `priceLineStyle: Dotted`.
+- **`CurrentPriceLabel`** (primitivă, `priceAxisPaneViews`, `zOrder` `normal`: pe stratul principal al scalei, sub eticheta cursorului, ca eticheta proprie a bibliotecii):
+  - desenează pe scala prețului eticheta prețului curent: fundal `#FFF3A3`, text `#14161B`, prețul `toFixed(precision)`;
+  - sub preț, numărătoarea până la `lastBarTime + tfMs`, cu `fmtBarCountdown`: `mm:ss` sub o oră, `hh:mm:ss` sub o zi, `Nz hh:mm` peste;
+  - fără numărătoare când `countdown === false` (acțiuni și indici: bursa închisă, sau 1w);
+  - la acțiuni, sfârșitul e `min(lastBarTime + tfMs, market.closesAt)` (`closeCap`);
+  - se redesenează la o secundă, cu `requestUpdate`.
+- **Props noi:** `tfMs`, `countdown`, `closeCap`, `logScale`, `onLogScale(on)`. Ultima lumânare e `candles.at(-1)`.
+- **Cursorul:** gazda graficului are `cursor: crosshair`. Biblioteca nu pune cursor pe panouri, decât un `ns-resize` pe linii, prin `hitTest`.
+- **Tragerea liberă** (în același `pointerdown` în captură ca liniile, când nu e prinsă o linie, în panoul prețului), doar dacă scala era pe automat:
+  - **scala normală:** după primii 3 px pe verticală, `k` = prețul pe pixel, din `coordinateToPrice` la ¼ și ¾ din panou; apoi `range0 = getVisibleRange()` și `setAutoScale(false)`; fiecare mișcare face `setVisibleRange(range0 + dy · k)`. O tragere doar orizontală lasă scala pe automat;
+  - **scala logaritmică:** `setVisibleRange` din biblioteca graficului (5.2.1) pune prețurile direct în spațiul logaritmic intern al scalei, deci nu se poate folosi. Așa că scala trece pe manual de la apăsare, iar biblioteca mută singură în ambele direcții (`startScrollPrice`). Dacă tragerea n-a avut nici 3 px pe verticală, scala revine pe automat la eliberare;
+  - **al doilea deget** (un `pointerdown` cu alt `pointerId` în timpul tragerii, adică pinch): tragerea se încheie ca la eliberare, iar biblioteca face zoom-ul. Altfel, primul deget ar muta prețurile în timpul zoom-ului;
+  - **dacă era deja pe manual:** biblioteca mută singură și pe verticală.
+- **Butonul A:**
+  - starea `auto`, citită din `options().autoScale` la `pointerup`, `dblclick` și `wheel` pe gazdă (biblioteca o schimbă când tragi de scală) și setată la click;
+  - click: `setAutoScale(true)`;
+  - la schimbarea `viewKey`: `setAutoScale(true)`.
+- **Butonul L:** `applyOptions({ mode: logScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal })`; click → `onLogScale(!logScale)`.
+- **A și L:** în colțul de sub scala prețului (`left = plotWidth`, `top` = capătul ultimului panou, `height` = înălțimea gazdei − acesta). `Boxes` primește `height`.
+- **„+”:** pătrățel `bg-[#3C414C] text-white` de 20 px, `left = plotWidth − 21`.
+- **»:** `left = plotWidth − LATEST_SIZE − 44`.
+
+### 5. Setări
+- `charts.logScale: boolean` (implicit `false`).
+
+### 6. Teste și verificare
+- **`fmtBarCountdown`** (test unitar), cu limitele: 59:59, 1:00:00, 23:59:59, 1z.
+- **Setarea:** `logScale` în `server.test.ts` (implicit `false`, salvată, o valoare greșită refuzată, setările vechi).
+- **Lista și iPad-ul** (teste unitare): `clampWidth` / `parsePrefs`; `isIPad` (iPad, iPadOS „Macintosh” cu atingere, Mac, iPhone, Windows); din TD-IPADFS2, `isAppleTouch` în `apple-touch.test.ts`, unde iPhone-ul e inclus.
+- **În Chrome:**
+  - lista: coloanele, prețurile, rândul curent, click, tragerea marginii, ascunderea și readucerea, memoria după reîncărcare, telefonul (390 px);
+  - tragerea pe verticală stinge A; A reîncadrează; L schimbă scala;
+  - cu atingeri emulate: tragerea cu un deget pe verticală stinge A, pinch-ul nu (pe ambele scale);
+  - etichetele galbenă și gri, cursorul cruce, „+” lipit de etichetă, » mutat;
+  - bara la 1024 / 1180 px în ecran complet, pe un singur rând.
+
+## TD-KUCOINHEDGE — implementează FD-KUCOINHEDGE
+
+### 1. Cercetare (ccxt 4.5.85, KuCoin API)
+- **Modul:** `fetchPositionMode` (`GET /api/v2/position/getPositionMode`, `positionMode` 0 / 1) e al contului, pentru toate perechile. Sentiq îl citea deja înainte de fiecare ordin futures (`assertOneWay`, ținut 10 min).
+- **Ordinul pe contul clasic** (`kucoinfutures`, `createContractOrderRequest`): cu `params.hedged = true`, ccxt pune `positionSide`:
+  - deschidere: `buy` → `LONG`, `sell` → `SHORT`;
+  - cu `reduceOnly`: `sell` → `LONG`, `buy` → `SHORT`.
+  Aceeași cerere merge și la `/st-orders` (TP / SL atașate) și la ordinele stop.
+- **Contul unificat** (`createUtaOrderRequest`): `hedged` e citit doar pentru `accountMode` clasic. Documentația UTA marchează `positionSide` „Not supported”, deci UTA în hedge rămâne refuzat.
+- **Pozițiile:** `parsePosition` ia direcția din semnul lui `currentQty` (negativ la short, și în hedge). `info.positionSide` (BOTH / LONG / SHORT) e citit întâi, ca să nu depindem de semn.
+- **Ordinele:** lista futures are `positionSide` în `info`.
+- **Eroarea de nepotrivire a modului:** `330012` → `InvalidOrder` („Your order is in One-Way Mode, while your account is set to Hedge Mode”).
+- **Levierul cross** (`/api/v2/changeCrossUserLeverage`): pe pereche, fără `positionSide`. Neschimbat.
+
+### 2. Server (`exchange/trading/crypto.ts`)
+- **`hedgedOf(ex, m)`** (fostul `assertOneWay`, fără refuz): citește modul ca acum (Bitget clasic / unificat, `fetchPositionMode` în rest), ținut 10 min în `positionModes`. Întoarce `true` / `false` / `null` (necitibil).
+- **`place`**, pentru futures:
+  - `hedged === true`: KuCoin clasic → `params.hedged = true`; KuCoin unificat → `HEDGE_MODE` (mesajul UTA); celelalte → `HEDGE_MODE` (mesajul de acum);
+  - Bitget clasic → `oneWayMode: true`, ca acum.
+- **Nepotrivirea modului** la `createOrder` pe KuCoin futures (`ExchangeError` cu `330012` / „one-way mode” / „hedge mode” / `positionSide` în mesaj):
+  - `positionModes.clear()`: modul e al contului, pentru toate perechile, iar cache-ul e ținut pe pereche;
+  - `TradingError('REJECTED', '…s-a schimbat pe KuCoin…')`; pe contul unificat, `HEDGE_MODE` cu mesajul UTA (acolo nu ajută o retrimitere). Răspunsul e un refuz, deci nu e `UNKNOWN_OUTCOME`. Erorile de rețea și `BadResponse` (nu sunt `ExchangeError`) rămân `UNKNOWN_OUTCOME`.
+- **`normalize` / `instrument`** (doar KuCoin futures): `hedgedOf` (din cache, de obicei); UTA + hedge → eroare la verificare. La `instrument`, un mod necitibil e doar lăsat deoparte (`positionMode` lipsește); la `normalize`, eroarea oprește verificarea.
+  - `availability(…, hedged)`: pozițiile perechii cu `positionSideOf`. În hedge: `position = null` și `hedgePositions = { long, short }`; altfel `position` ca acum. `instrument` și `normalize` adaugă `positionMode` (`hedge` / `one-way`) când modul a fost citit.
+  - Avertismentele din FD §3: cel pentru direcția opusă, „nu are ce închide” pe partea cerută, reduce-only mai mare decât poziția (KuCoin, ambele moduri; ținta e poziția închisă: în hedge partea ei, în one-way `position`).
+  - `OrderPreview.positionMode` = modul citit.
+- **`positionSideOf(p)`** (`exchange/accounts.ts`, exportat): partea numită de exchange în hedge (`hedgeSide`: `positionSide` LONG / SHORT, `posSide` long / short, `positionIdx` 1 / 2, după TD-HEDGEALL), altfel `p.side` (`long` / `short`), altfel `null`.
+- **`orderPositionSide(info)`**: aceeași `hedgeSide` pe un ordin, altfel `null` (BOTH, net, 0, lipsă).
+
+### 3. Tipuri (`shared/trading.ts`, `exchange/accounts.ts`)
+- `HeldPosition = { side: 'long' | 'short'; amount: number; entryPrice: number | null }`, folosit de `InstrumentInfo.position`.
+- `InstrumentInfo.positionMode?: 'one-way' | 'hedge'` și `hedgePositions?: { long: HeldPosition | null; short: HeldPosition | null }`.
+- `OrderPreview.positionMode?: 'one-way' | 'hedge'`.
+- `OrderRow.positionSide?: 'long' | 'short' | null` (portofoliu: `orderPositionSide(o.info)`). Binance pune același `positionSide` pe ordinele și pozițiile unui cont în hedge, deci acolo (doar citire) se arată la fel.
+- `PositionRow.side`: `positionSideOf(p) ?? String(p.side ?? '')`.
+
+### 4. Pagina
+- **`OrderTicket.tsx`:**
+  - `hedge = futures && ins?.positionMode === 'hedge'`;
+  - sub pereche: „Mod hedge · long x · short y” (cele deschise);
+  - butoanele de direcție, cu `hedge && reduceOnly` (și la închiderea din Tranzacții): `[['buy', 'Închide short'], ['sell', 'Închide long']]`. La închidere, eticheta e doar ea, fără „(închide poziția)”;
+  - confirmarea: cu `p.positionMode === 'hedge'`, Direcție „Închide long” / „Închide short” pentru reduce-only, plus rândul „Mod poziții”.
+- **`Trades.tsx`, ordine:** `o.positionSide` lângă direcție (`text-faint`, „long” / „short”).
+- **`chart/pnl.ts`:**
+  - `roleOf`: un ordin cu `positionSide` diferit de partea tranzacției → `null`;
+  - titlurile: cu un long și un short futures pe pereche, eticheta e LONG / SHORT în loc de „futures” (două poziții pe aceeași parte, ex. USDT și USDC, rămân „futures”).
+
+### 5. Teste
+- **Simulat** (`crypto.test.ts`):
+  - KuCoin clasic în hedge: ordinul pleacă cu `hedged: true`, la deschidere și la reduce-only;
+  - verificarea dă `positionMode: 'hedge'`, pozițiile long / short separate și avertismentele;
+  - UTA în hedge: eroare la verificare și refuz la trimitere;
+  - celelalte exchange-uri în hedge: tot `HEDGE_MODE`;
+  - nepotrivirea (`330012`): `REJECTED` cu mesajul, cache-ul uitat (modul se citește din nou); pe contul unificat, `HEDGE_MODE` cu mesajul UTA;
+  - eroarea de rețea după trimitere: tot `UNKNOWN_OUTCOME`.
+- **ccxt real** (cererile capturate):
+  - hedge pe `kucoinfutures`: `positionSide` `LONG` la un buy, `SHORT` la un sell, `LONG` la un sell reduce-only, `SHORT` la un buy reduce-only; modul citit o dată;
+  - la TP / SL (`/st-orders`), `positionSide` pe aceeași cerere.
+- **Portofoliu:** `positionSideOf` / `orderPositionSide` (unitare, în `server.test.ts`); `PositionRow.side` și `OrderRow.positionSide` le folosesc direct.
+- **`pnl.test.ts`:** long + short pe aceeași pereche (titluri LONG / SHORT); ordinul short nu e TP al long-ului.
+- **Chrome:** formularul pe un cont KuCoin în hedge, simulat (serverul de test cu un client KuCoin fals): eticheta modului, butoanele „Închide long / short”, avertismentele, confirmarea.
+
+## TD-HEDGEALL — implementează FD-HEDGEALL
+
+### 1. Ce face ccxt 4.5.85 cu `params.hedged = true` (citit în cod)
+| Exchange | Deschidere | Reduce-only | Altele |
+|---|---|---|---|
+| Binance (`createOrderRequest`) | `positionSide` = LONG la buy, SHORT la sell | `reduceOnly` scos; `positionSide` al poziției închise (sell → LONG) | la fel pentru `stopLossPrice` / `takeProfitPrice` (ordinele TP / SL separate) |
+| Bybit (`createOrderRequest`) | `positionIdx` 1 la buy, 2 la sell | `reduceOnly` scos; `positionIdx` al poziției închise | TP / SL atașate în aceeași cerere |
+| OKX (`createOrderRequest`) | `posSide` long / short | `reduceOnly` scos; `posSide` opus direcției ordinului | TP / SL atașate (`attachAlgoOrds`) în aceeași cerere |
+| Bitget clasic (`createOrderRequest`) | `tradeSide: 'Open'` | `side` inversat + `tradeSide: 'Close'` | `oneWayMode`, dacă e trimis, suprascrie `hedged`: în hedge nu se trimite |
+| Bitget unificat (`createUtaOrderRequest`) | `posSide` long / short | `posSide` al poziției închise | — |
+
+Levierul în hedge, cu marjă izolată:
+- **OKX:** `setLeverage(lev, sym, { marginMode: 'isolated', posSide })`, unde `posSide` e implicit `net`, deci trebuie dat `long` / `short`;
+- **Bitget clasic:** `setLeverage(lev, sym, { marginMode, holdSide })`.
+
+Cross, Binance, Bybit, KuCoin: neschimbat.
+
+### 2. Server (`exchange/trading/crypto.ts`)
+- **`hedgedOf`, pentru Bybit:** `privateGetV5PositionList({ category: 'linear', symbol: m.id })`. Orice `positionIdx` 1 / 2 → hedge; 0 → one-way; listă goală → `null`. Cache-ul e pe pereche, ca la ceilalți; pe Bybit modul chiar e pe pereche.
+- **`instrument` / `normalize`:** modul se citește pentru orice exchange cu futures (nu doar KuCoin). Avertismentele hedge și `positionMode` vin pentru toți. Avertismentul „reduce-only mai mare decât poziția” rămâne doar pe KuCoin (singurul documentat).
+- **`place`:**
+  - `hedged === true`: KuCoin unificat → `HEDGE_MODE`; altfel `params.hedged = true`;
+  - Bitget clasic: `oneWayMode: true` doar când modul nu e hedge;
+  - `prepareFutures` primește `hedged`: OKX și Bitget clasic, cu marjă izolată și fără reduce-only, pun partea pe levier (`posSide` / `holdSide` = `long` la buy, `short` la sell);
+  - Binance, ordinele TP / SL de după intrare: `hedged: true` când contul e în hedge (ccxt scoate `reduceOnly` și pune `positionSide`).
+- **Nepotrivirea modului** (orice exchange cu futures): `ExchangeError` cu un mesaj din lista KuCoin `330012`, Binance `-4061` („position side does not match”), Bybit („position idx not match position mode”), OKX (`posSide`), Bitget `40774` („unilateral position”), sau „hedge mode” / „one-way mode” / „position side”.
+  - Efect: `positionModes.clear()` (Bitget: și `this.bitget = null`), apoi `REJECTED` cu mesajul care numește exchange-ul (`providerById(…).name`).
+  - KuCoin unificat: `HEDGE_MODE`, ca acum.
+- **`tradingErrorOf`:** expresia `HEDGE_MODE` rămâne pentru o eroare despre mod prinsă altundeva (citirea modului, levierul). Mesajul nu mai spune „doar one-way”, ci „Exchange-ul a refuzat din cauza modului pozițiilor (one-way / hedge): <mesajul lui>. Verifică modul pe exchange și încearcă din nou.”
+
+- **Partea pozițiilor și a ordinelor** (`accounts.ts`, `hedgeSide`): pe lângă `positionSide` (KuCoin, Binance), `posSide` long / short (OKX, Bitget; ccxt inversează `side` la un close Bitget în hedge, deci `posSide` e poziția ordinului) și `positionIdx` 1 / 2 (Bybit). Așa, eticheta „long” / „short” din Tranzacții și rolul ordinului pe grafic merg pe toate.
+
+### 3. Brokeri
+- **eToro, `instrument`:** cu poziții pe ambele părți, `position = null`, `hedgePositions = { long, short }` (unități însumate, prețul de intrare al primei), `positionMode = 'hedge'`. Cu o singură parte, `position` ca acum.
+- **Alpaca, `normalize`:**
+  - textul avertismentului de vânzare peste long spune că poziția e netă;
+  - avertisment nou la o cumpărare cu un short deschis: acoperă întâi short-ul.
+- **Trading 212, IBKR:** neschimbat.
+
+### 4. Pagina
+- **`OrderTicket`:**
+  - rândul de sub instrument arată `hedgePositions` și la acțiuni (eToro), cu „Poziții separate” în loc de „Mod hedge”;
+  - închiderea pe rânduri (eToro), când toate rândurile sunt short-uri (`shortsOnly`): „Închide” / „De închis” în loc de „Vinde” / „De vândut”;
+  - butoanele „Închide long / short” rămân doar la futures (eToro închide pe poziții).
+- **`Trades.tsx`, pozițiile:** cheia rândului = simbol + parte + `ref.positionIds` (eToro), altfel indexul. Două short-uri eToro pe același instrument nu mai au aceeași cheie.
+
+### 5. Tipuri, `shared/trading.ts`
+Textele de configurare:
+- OKX: fără „modul net”;
+- Bybit: „modul de marjă se alege din Bybit; modul pozițiilor (one-way / hedge) e citit de Sentiq”.
+
+### 6. Teste
+- **ccxt real, cererile capturate:**
+  - Binance hedge: `positionSide`, fără `reduceOnly`, la intrare și la TP / SL;
+  - Bybit: modul citit din lista pozițiilor; `positionIdx` 1 / 2 la deschidere și reduce-only;
+  - OKX: `posSide` la deschidere și reduce-only; `setLeverage` cu `posSide` la izolat;
+  - Bitget clasic: `tradeSide` open / close, fără `oneWayMode`; `holdSide` la levierul izolat;
+  - Bitget unificat: `posSide`.
+- **Simulat:**
+  - nepotrivirea modului pe Binance (`-4061`): mesajul cu „Binance”, modul citit din nou;
+  - Bybit cu listă goală → one-way.
+- **eToro:** long + short → `hedgePositions`.
+- **Alpaca:** cele două avertismente.
+- **Chrome:** formularul pe un cont Binance simulat în hedge (aceleași componente ca la KuCoin), eToro cu long + short.
+
+## TD-WATCHDRAWER — implementează FD-WATCHDRAWER
+
+### 1. `web/media.ts` (nou)
+`useMediaQuery(query)`: `matchMedia(query).matches`, apoi urmărește `change`. Fără `matchMedia` (teste), `false`.
+
+### 2. `Charts.tsx`
+- `wide = useMediaQuery('(min-width: 768px)')` (pragul `md` din Tailwind).
+- `listOpen` (stare, nu ținută minte): panoul de telefon. Se pune `false` când `wide` devine `true`.
+- **Ce se arată:** `listShown = wide ? !list.hidden : listOpen`.
+- **Butonul listei:**
+  - pe ecran lat comută `list.hidden` (ținut minte), pe telefon `listOpen`;
+  - `aria-pressed` / eticheta după `listShown`.
+- **Rândul grafic:**
+  - `flex`; marginea și `<aside>` doar cu `wide && !list.hidden` (fără clasele `max-md:` de până acum);
+  - pe telefon, sub rând: `<ListDrawer open={listOpen} onClose>` cu `<Watchlist>`. `onPick` închide panoul, apoi navighează; `onHide` îl închide.
+- **Panoul e în cadrul paginii** (`frame`), ca să se vadă și în ecranul complet nativ (acolo se desenează doar elementul pus pe tot ecranul).
+- `useFullscreen(frame, { blockEsc: … || listOpen })`: Esc închide întâi panoul.
+- **Grupul butoanelor:** `flex flex-wrap md:flex-nowrap`.
+
+### 3. `ListDrawer` (`components/Watchlist.tsx`)
+- **Stratul:** `fixed inset-0 z-[46] overflow-clip`; `pointer-events-none` când e închis. Cu `clip`, nu cu `hidden`: un strat tăiat nu se poate derula deloc, nici de un focus, iar panoul închis, mutat în dreapta, nu lățește pagina. Toate browserele lui Tailwind 4 (Safari 16.4+) știu `clip`.
+- **Umbra:** `bg-scrim`, `opacity` 0 / 100 cu tranziție; click → `onClose`.
+- **Panoul:** `role="dialog"`, `aria-modal="true"`, `aria-label="Lista de simboluri"`, `tabIndex={-1}`, `inert` când e închis.
+  - Clase: `w-[min(340px,88vw)]`, `translate-x-full` / `translate-x-0`, `transition-transform duration-200`, `motion-reduce:transition-none`.
+- **Deschis:**
+  - `useScrollLock(open)`;
+  - focusul pe panou (nu pe căutare: tastatura telefonului nu sare singură), cu `preventScroll`, iar la închidere înapoi pe elementul de dinainte. Fără `preventScroll`, focusul dat în timpul glisării derula stratul la panou: panoul sărea spre stânga și revenea (raportat după deploy);
+  - Esc (dacă nu l-a folosit altcineva) → `onClose`.
+  - Tab / Shift+Tab se rotesc în panou (un dialog modal: focusul nu ajunge la pagina umbrită).
+
+### 4. Teste
+- `media.ts`: fără `matchMedia` → `false`; cu `matchMedia` stubuit: valoarea și schimbarea.
+- **Chrome, telefon** (320 / 360 / 390 / 430 px, cu atingere, cont cu tranzacționarea pornită):
+  - glisarea, cadru cu cadru: marginea stângă a panoului coboară continuu de la lățimea ecranului la locul ei, iar `scrollLeft` al stratului rămâne 0;
+  - fără lățime în plus (`scrollWidth` = lățimea ecranului), butonul listei pe ecran;
+  - panoul se deschide din dreapta și se închide cu ✕, cu umbra și cu un simbol ales; redeschiderea merge;
+  - ecranul complet.
+- **Chrome, tabletă și desktop** (768, 1024, 1440): panoul lateral ca înainte.
+
+## TD-CHARTTOUCH — implementează FD-CHARTTOUCH
+
+### 1. Cercetare (lightweight-charts 5.2.1, `MouseEventHandler`)
+- `_touchMoveHandler` (ascultat pe `documentElement`, după `touchstart`) pune `_pinchPrevented = true` la **orice** `touchmove` al degetului activ, înainte de pragul de 5 px. Apoi `_checkPinchState` (la al doilea `touchstart`) nu mai pornește pinch-ul.
+- Pinch-ul bibliotecii face `preventDefault` pe `touchmove`-urile cu două degete doar când a pornit. Altfel, Safari face zoom pe pagină.
+- Chrome nu trimite paginii `touchmove`-urile din „slop”-ul atingerii (mișcări mici). Reproducerea se face cu `TouchEvent`-uri DOM trimise direct pe panoul graficului.
+
+### 2. `CandleChart.tsx`
+- **Containerul graficului** (gazda și suprapunerile: legende, A / L, », „+”): clasa `touch-none` (`touch-action: none`), deci niciun gest de browser (zoom, dublă atingere) nu pornește pe grafic. `touch-action` nu se moștenește, dar se aplică pe intersecția cu strămoșii, deci ajunge și pe gazdă. Derularea verticală nu se schimbă: biblioteca (`handleScroll.vertTouchDrag`, implicit `true`) o oprea deja pe grafic.
+- **Ascultători în captură pe gazdă** (`touchstart`, `touchmove`, `touchend` / `touchcancel`, pasivi):
+  - cu un singur deget, cât timp el n-a trecut de `TOUCH_DRAG_PX` (8 px, distanță Manhattan de la `touchstart`), `touchmove` e oprit (`stopPropagation`), deci nu ajunge la bibliotecă;
+  - după 8 px, sau cu două degete, totul trece;
+  - la `touchend` / `touchcancel` fără degete, starea se șterge;
+  - efect: biblioteca anulează apăsarea lungă (240 ms, crucea în modul de urmărire) la 5 px. Mișcările oprite n-o mai anulează, deci pragul ei devine 8 px.
+- **Tragerea liberă** (`onPanMove`): pragul de preluare pe verticală e `TOUCH_DRAG_PX` la `pointerType === 'touch'`, 3 px altfel.
+- **Al doilea deget** (`onDown` cu alt `pointerId`): `endPan(true)` → `setAutoScale(true)`, `setAuto(true)` (tragerea pornește doar cu scala pe automat, deci asta e starea de dinainte), pe ambele scale. `endPan()` fără argument, ca acum.
+
+### 3. `Charts.tsx`
+Butonul listei, după butonul de ecran complet, cu `ml-auto` (la telefon îl duce la marginea dreaptă a rândului; pe ecran lat grupul e cât conținutul, deci nu schimbă nimic). Partea din dreapta a barei: `ml-auto justify-end`; când trece singură pe rând, se aliniază la dreapta, deasupra listei.
+
+### 4. Teste (Chrome)
+- **Pinch ca în Safari** (`TouchEvent`-uri DOM pe panou): primul deget mișcat 0 / 1 / 3 / 6 px înainte de al doilea → `barSpacing` crește de fiecare dată, „A” aprins, mișcările cu două degete ținute de la pagină;
+- un deget peste 8 px apoi al doilea → tragere;
+- `touch-action: none` pe gazdă;
+- pinch prin CDP (cu „slop”-ul Chrome);
+- tragerea cu un deget pe orizontală și pe verticală (A stins la verticală);
+- tap-ul (crucea);
+- butonul listei ultimul / la dreapta pe 320 / 390 / 768 / 1440;
+- desktop: tragerea cu mouse-ul ca înainte.
+
+## TD-CHARTPOLISH — implementează FD-CHARTPOLISH
+
+### 1. `Watchlist.tsx`
+- **Rândurile:** containerul derulant `flex flex-col gap-1`. dnd-kit măsoară rândurile cu tot cu spații.
+- **`overscroll-contain` doar în panoul de telefon** (prop `inDrawer`) și, din TD-IPADFS, în ecranul complet (prop `contained`). În panoul lateral, în afara ecranului complet, `overscroll-auto`, deci browserul înlănțuie derularea la capăt (cu „latching”: gestul rămâne pe elementul pe care a început).
+- **Capul:** fără butonul de ascundere; prop-ul `onHide` dispare.
+- **`ListDrawer`:**
+  - tragerea spre dreapta, cu pointer, pe panou;
+  - pornește când `dx > 10` și `|dx| > 2·|dy|`, cu `setPointerCapture`; panoul urmează degetul (`transform: translateX(dx)`, fără tranziție);
+  - la eliberare: `dx > 80` → `onClose`, altfel revine;
+  - panoul are `touch-action: pan-y`: derularea verticală rămâne a browserului, cea orizontală vine ca evenimente pointer.
+
+### 2. `Charts.tsx`, bara
+- Partea din dreapta: `flex flex-[1_1_auto] flex-wrap items-stretch gap-2.5`, fără `ml-auto` / `justify-end`. Baza e cât conținutul, deci rândul se rupe ca înainte, iar pe rândul lui partea crește la toată lățimea.
+- Butonul listei iese din grupul nedespărțit: e ultimul copil al părții din dreapta, cu `ml-auto`.
+- Pe telefon, grupul e `contents` (de la `md`, `flex flex-nowrap`), deci butoanele lui și al listei împart rândurile, iar al listei stă la capătul ultimului rând, nu singur pe unul nou.
+- În panoul de telefon, containerul rândurilor are și el `touch-pan-y`: un container care derulează își începe propriul lanț `touch-action`, iar fără el browserul lua tragerea laterală (`pointercancel` după ~28 px).
+
+### 3. `CandleChart.tsx`
+- **A / L:** `top = main.top + main.height − 24`, `height = 24`, `left = plotWidth`, `right = 0`, cu `bg-chart`. Condiția: `main` există.
+- **`HLinePlus`:**
+  - `onMove` ignoră evenimentele programatice (`p.point` fără `p.sourceEvent`) și ține minte `p.time` al ultimei poziții reale;
+  - cât `menu || hover`: `chart.setCrosshairPosition(at.price, lastTime, series)`;
+  - la final, fără mouse pe grafic (`cursor.current === null`), după 80 ms: `chart.clearCrosshairPosition()` și butonul pleacă.
+
+### 4. Teste (Chrome)
+- **Rândurile:** distanța dintre dreptunghiurile a două rânduri vecine ≥ 4 px; captură la hover (mouse) lângă rândul deschis.
+- **Derularea la 1440 px, cu rotița** (14 favoriți): lista derulează; la capăt, rotița derulează pagina (`scrollY` crește); înapoi, lista.
+- **Capul listei** fără buton (panou lateral și de telefon).
+- **Telefon:** tragerea spre dreapta închide panoul (> 80 px), una scurtă îl lasă deschis; derularea verticală a listei merge.
+- **Bara la 320 / 390 / 768 / 1024 / 1440:** intervalele încep la marginea stângă a conținutului; butonul listei la marginea dreaptă; fără lățime în plus.
+- **A / L:** dreptunghiul lor se termină la baza panoului cu lumânări (cu LMA și fără), în coloana scalei.
+- **„+”:** mouse pe „+” → crucea vizibilă (pixelii liniei orizontale pe stratul de sus al panoului; eticheta gri pe scală); captură. Mouse plecat în afara graficului → crucea dispare.
+
+## TD-NAVOVERFLOW — implementează FD-NAVOVERFLOW
+
+### 1. `web/components/PriorityNav.tsx` (nou)
+- **`fitCount(widths, avail, gap, more)`** (pură, testată): câte elemente încap, de la început.
+  - Toate încap (`Σw + gap·(n−1) ≤ avail`) → `n`;
+  - altfel, cel mai mare `k` pentru care `Σw[0..k) + gap·k + more ≤ avail`, unde `more` e lățimea lui „»”.
+- **`PriorityNav({ items })`:**
+  - un rând `flex min-w-0 flex-1`, plus o riglă invizibilă (`aria-hidden`) cu toate paginile la lățimea lor, cu `font-semibold` ca pagina activă (mai lată). Rigla stă într-o cutie `absolute size-0 overflow-hidden`: e așezată, deci măsurabilă, dar nu lățește pagina (fără cutie, pe telefon pagina ajungea la ~950 px);
+  - `useLayoutEffect` + `ResizeObserver` pe rând, plus `document.fonts.ready` → `fitCount` → `fit`;
+  - vizibile `items.slice(0, fit)`, ascunse restul.
+- **„»”** (`ChevronsRight`):
+  - atribute: `aria-haspopup="menu"`, `aria-expanded`, `aria-label` „Mai multe pagini (N)”;
+  - activ (`bg-nav-active`) când o pagină ascunsă e cea deschisă (`matchPath({ path, end })`).
+- **Lista:**
+  - `role="menu"`, `absolute top-full left-0 mt-2 z-40`, cu paginile ca `NavLink` `role="menuitem"`;
+  - se închide la `pointerdown` în afară, la Esc (focusul revine pe „»”), la schimbarea rutei și când `fit` ajunge la `n`;
+  - ↓ / ↑ mută focusul între pagini; deschisă de la tastatură, focusul trece pe prima.
+
+### 2. `App.tsx`, `TopNav`
+- Rândul: `flex items-center gap-x-3 sm:gap-x-6`, fără `flex-wrap`.
+- Logo `shrink-0`; `<PriorityNav items={useMemo(forRole(NAV, user))}>`; partea din dreapta `shrink-0`.
+- Scos: `order-last` / derularea / masca de pe telefon.
+- Sub `md`: textul căutării și `⌘K` ascunse (`md:inline`), iar „Rezumat” doar iconița (`max-md:sr-only`). Spațiile mai mici sub `sm` (`gap-x-2`, `gap-3`). Rândul meniului are `min-w-[38px]`, deci „»” are mereu loc.
+
+### 3. Teste
+- `fitCount`: toate încap; niciunul; „»” care nu mai lasă loc ultimului; spațiile.
+- **Chrome**, la 320 / 390 / 768 / 1024 / 1280 / 1440 / 1700 / 2000:
+  - bara pe un rând (înălțimea antetului = un rând; toate elementele pe același `top`);
+  - nicio pagină tăiată; fără lățime în plus;
+  - „»” deschide lista cu paginile ascunse; Esc / click în afară o închid;
+  - pagina activă ascunsă colorează „»”;
+  - Tab / Enter / ↓;
+  - capturi.
+
+## TD-FULLWIDTH — implementează FD-FULLWIDTH
+- **`App.tsx`:** `<main>` fără `mx-auto max-w-[1600px]`, deci `w-full flex-1 px-4 py-5 sm:px-6`.
+- **Paginile:** rădăcina fără `mx-auto max-w-[…]`, deci `flex w-full flex-col …`:
+  - `News` 1240, `Trades` (ambele rădăcini) 1240, `Settings` 1240, `SettingsAdmin` 1240, `Health` 1240, `Users` 1240;
+  - `Security` 1100, `Economy` 1400.
+- **Teste (Chrome, 1440 și 1920):** pe fiecare pagină, rădăcina conținutului are aceeași stânga / dreapta ca pe Calendar (marginile lui `<main>`); capturi pentru așezarea panourilor.
+
+## TD-IPADFS — implementează FD-IPADFS
+
+### 1. `Watchlist.tsx`
+- Prop nou `contained`:
+  - containerul rândurilor e `overscroll-contain` când `inDrawer || contained`, altfel `overscroll-auto`;
+  - `touch-pan-y` rămâne doar pentru `inDrawer`.
+- `Charts.tsx` îl dă panoului lateral: `<Watchlist … contained={fs.active} />`. Se schimbă odată cu ecranul complet (intrare / ieșire), fără reîncărcarea listei.
+
+### 2. `Charts.tsx`, cadrul
+- Neschimbat: `overscroll-contain` în ecranul complet, ca în versiunea care mergea. `overscroll-none` ar opri și „bounce”-ul cadrului; pe iPad nu se poate verifica dacă gestul Safari ar porni atunci.
+
+### 3. Antetul pe iPad
+- `pl-14` → `pl-20` (cu `fs.mode === 'native' && iPad`, ca înainte). **Retras de TD-IPADFS2** (pe iPad nu mai e ecranul complet al sistemului).
+
+### 4. Teste (Chrome)
+- **iPad, ecranul complet al sistemului:**
+  - user agent iPad, click real prin CDP (gest de utilizator, deci API-ul Fullscreen îl acceptă), la 1024 × 768 și 1366 × 1024;
+  - în ecranul complet: `document.fullscreenElement` setat, `overscroll-behavior-y` al cadrului `contain`, al rândurilor `contain`, `padding-left` al numelui 80 px (h1 la 96 px), pagina de lățimea ecranului;
+  - ieșit: rândurile `auto`, fără padding;
+  - captură.
+- **Ecranul complet „din pagină”** (fără API-ul Fullscreen), la 1024 × 768, 820 × 1180, 844 × 390, 932 × 430: cadrul `contain`, rândurile `contain`; în afara lui, `auto`.
+- **Rotița peste listă, la 1440 × 900, cu 23 de favoriți:**
+  - în afara ecranului complet: lista ajunge la capăt, apoi pagina derulează (FD-CHARTPOLISH §1);
+  - în ecranul complet „din pagină”, cu cadrul făcut mai înalt decât ecranul (deci ar putea derula): lista ajunge la capăt, iar cadrul și pagina rămân la 0;
+  - în ecranul complet nativ, Chrome headless nu derulează nimic cu rotița, nici cadrul singur (verificare de control), deci acolo contează doar clasele.
+- **Telefon 390 × 844:**
+  - pagina derulată 180 px, apoi panoul;
+  - capul panoului la `top` 0 și vizibil (`elementFromPoint` în panou), în și în afara ecranului complet;
+  - rândurile `contain`.
+
+## TD-IPADFS2 — implementează FD-IPADFS2
+
+### 1. `web/chart/fullscreen.ts`
+- **`isAppleTouch()`** (în locul lui `isIPad()`): `/iPhone|iPod|iPad/` în user agent, sau `Macintosh` cu `navigator.maxTouchPoints > 1` (iPadOS și iPhone-ul cu „Site pentru desktop”). Un Mac are 0 puncte de atingere.
+- **`nativeFullscreenAllowed()`** = `!isAppleTouch()`.
+- **`enter()`:** fără `nativeFullscreenAllowed()`, nu cere `requestFullscreen` / `webkitRequestFullscreen` (`request = null`). Restul e ca înainte: `fullscreenElement() === el` e fals, deci `'css'`, cu `lockScroll`.
+
+### 2. `Charts.tsx`
+- Scoase `isIPad`, `iPad` (`useMemo`) și `pl-20` de pe antet: în `'css'` nu e ✕-ul Safari.
+- `contained={fs.active}` rămâne (TD-IPADFS).
+
+### 3. Teste
+- **`apple-touch.test.ts`** (fostul `ipad.test.ts`):
+  - iPad (cu UA de iPad sau de Mac cu atingere), iPhone, Chrome pe iPad → `isAppleTouch`;
+  - Mac fără atingere, Android, Windows cu atingere → nu;
+  - `nativeFullscreenAllowed` invers.
+- **Chrome, click real prin CDP** (un gest de utilizator, deci API-ul Fullscreen ar accepta cererea):
+  - iPad (UA de Mac, atingere) la 1024 × 768 și 820 × 1180; iPhone (UA iOS 26) la 390 × 844, 430 × 932 și 844 × 390:
+    - `document.fullscreenElement` gol;
+    - cadrul `fixed` de la 0, cât fereastra, `overscroll-contain`; `html` cu `overflow: hidden`;
+    - lista `contain`; numele fără padding;
+    - pagina de lățimea ecranului; Esc iese (lista înapoi `auto` pe ecranele late);
+  - iPhone: panoul de simboluri deschis în ecranul complet, capul la `top` 0 și vizibil (captură);
+  - Mac (UA Mac, fără atingere) la 1440 × 900: ecranul complet al sistemului (`document.fullscreenElement` setat), ca până acum.
+
+## TD-CHARTAUDIT — implementează FD-CHARTAUDIT
+
+### 0. Unealta de test (doar în scratchpad, nu în aplicație)
+- **Serverul de test:**
+  - schemă de test (niciodată `dbo`);
+  - servește o copie a `dist/web` cu `<script src="/__audit.js">`;
+  - rutele `/__audit/next.js` (pagina își ia comanda ca script, permis de CSP `script-src 'self'`), `/__audit/result` și `/__audit/cmd` (din shell), câte o coadă pentru fiecare dispozitiv;
+  - `/__audit/login` pune cookie-ul de sesiune.
+- **Simulatorul:**
+  - `xcrun simctl openurl` cu `http://127.0.0.1:4398` (`localhost` mergea pe IPv6);
+  - `xcrun simctl io screenshot`;
+  - atingerile sunt `TouchEvent` / `PointerEvent` sintetice.
+
+### 1. `CandleChart.tsx`, `HLinePlus`
+- **Poziția, direct pe element:**
+  - `live` (ref) ține ultima poziție;
+  - `place()` scrie `box.style.top = main.top + y − 10` chiar în `onMove` (handlerul `subscribeCrosshairMove`), deci în același cadru cu crucea desenată de bibliotecă;
+  - `useLayoutEffect(place)` după fiecare randare (montarea, `main.top` schimbat);
+  - React nu mai scrie `top` (`style={{ left }}`);
+  - `setAt` rămâne pentru vizibilitate și pentru preț.
+- **Hover doar de la mouse:** `onPointerEnter` / `onPointerLeave` cu `pointerType === 'mouse'`, în locul `onMouseEnter` / `onMouseLeave` (iOS trimite `mouseenter` la atingere, dar niciodată `mouseleave`).
+- **`dismiss()`** (atingere sau creion):
+  - `setMenu(false)`, `setHover(false)`, `setAt(null)`, `live = null`, `cursor.current = null`;
+  - `chart.clearCrosshairPosition()`;
+  - `quietUntil = now + 600 ms`: `onMove` nu readuce butonul cât ține atingerea care a închis meniul.
+- **Unde se cheamă `dismiss()`:**
+  - `pointerdown` în afara cutiei, cu meniul deschis: `pointerType !== 'mouse'` → `dismiss()`, altfel doar `setMenu(false)`, ca acum;
+  - „Linie orizontală la …”: `lastPointer` (ref, setat de `onPointerDown` pe cutie) ≠ `'mouse'` → `dismiss()` după `onAdd`.
+
+### 2. `Charts.tsx`, `SettingsDrawer`
+- `fixed top-0 right-0 bottom-0` în locul lui `h-screen` (100vh e „ecranul mare” pe iOS).
+- Lățimea: `w-[400px] max-w-full max-[440px]:w-full`.
+
+### 3. `IndicatorPicker.tsx`
+- Prop nou `studiesOn: Readonly<Record<string, number>>`: de câte ori e fiecare indicator pe grafic. Charts îl calculează din `studies` (`useMemo`).
+- Pe rândul unui indicator obișnuit, după „Adăugat”: „Pe grafic”, sau „Pe grafic × N” pentru N > 1. Butonul rămâne activ (dublurile sunt permise).
+
+### 4. `Watchlist.tsx`, `SymbolSearch`
+- **Opțiunile:** `options` = perechi, apoi acțiuni, apoi indici, fiecare cu `path`, plus `active` (index, −1). `active` revine la −1 la fiecare termen nou.
+- **Tastele, în `onKeyDown` pe input:**
+  - ↓ / ↑ (cu `preventDefault`): `active` circular, apoi `scrollIntoView({ block: 'nearest' })` pe opțiune;
+  - Enter: `pick(options[active ≥ 0 ? active : 0])`, dacă există;
+  - Escape cu text: `setQ('')` și `preventDefault()`. Charts (`useFullscreen`) și `ListDrawer` sar peste un Esc cu `defaultPrevented`.
+- **ARIA:**
+  - input `role="combobox"` cu `aria-expanded`, `aria-controls`, `aria-activedescendant`, `aria-autocomplete="list"`;
+  - butoanele rezultatelor `role="option"` cu `id` și `aria-selected`; titlurile grupelor `role="presentation"`;
+  - cel ales primește `bg-hover`.
+
+### 5. `primitives.ts`, `EdgeLabelRenderer`
+- `w = tip + tw + 2·padX`. Dacă `x + w > bitmapSize.width` și `x − w ≥ 0`, desenul e în oglindă:
+  - vârful pe ancoră, cutia de la `x − w` la `x − tip`;
+  - textul la `x − w + padX`.
+- Altfel rămâne ca înainte.
+
+### 6. `Charts.tsx`, încărcarea
+- `chartHeight = 560 + 120 · ((lmaDrawn ? 1 : 0) + paneStudies.length)`: aceeași valoare ca stilul graficului, din ce e pornit (valorile LMA vin abia cu lumânările).
+- Mesajul „Se încarcă…” și eroarea stau într-o cutie cu `style={{ height: chartHeight }}` în afara ecranului complet, `h-full` în ecranul complet. Mesajul e centrat (`grid place-items-center`).
+
+### 7. Bannerul „nu răspunde”
+- `components/OfflineBanner.tsx` (mutat din `App.tsx`), cu `framed` (rotunjit, cu chenar, pentru interiorul ecranului complet).
+- `App` îl folosește ca până acum; Charts îl pune primul în cadru când `fs.active`. Aceeași interogare `usePing`, deci nicio cerere în plus.
+- În cadru are `role="status"` (bannerul paginii, din spate, are deja `role="alert"`, deci un cititor de ecran nu anunță de două ori).
+
+### 8. Bara (`Charts.tsx`)
+- Butonul listei e ultimul copil al grupului `contents md:flex md:flex-[1_1_auto] md:flex-nowrap` (cu `ml-auto shrink-0`), nu mai e frate cu grupul.
+- **De la `md`:** grupul crește la lățimea rândului lui, deci butonul stă la marginea din dreapta; dacă grupul nu încape lângă intervale, trece întreg pe rândul următor.
+- **Sub `md`:** grupul e `contents`, deci butonul curge cu celelalte, ca înainte.
+
+### 9. Meniul lui „+” (`HLinePlus`)
+- `style={{ minWidth: min(240, plotWidth − 8), maxWidth: plotWidth − 8 }}` în locul lui `min-w-[240px]`. E aliniat la dreapta lui „+”, deci nu mai trece de marginea stângă a graficului.
+
+### 10. Teste
+- **Unitare:**
+  - opțiunile și tastele căutării (`searchNav`: ↓ / ↑ circular, Enter fără alegere = primul, listă goală);
+  - eticheta LMA în oglindă (`edgeLabelBox`: încape → dreapta; nu → stânga; nici stânga → dreapta).
+- **Safari (simulator):**
+  - iPad și iPhone, în și în afara ecranului complet;
+  - panoul de setări: butoanele de jos pe ecran;
+  - „+”: apare la atingere, dispare după o atingere în afara meniului și după adăugarea liniei;
+  - Esc în căutare; eticheta LMA întreagă pe iPhone; bannerul.
+- **Chrome, desktop:**
+  - „+” cadru cu cadru: decalajul față de cruce în pixeli, la mișcări rapide ale mouse-ului;
+  - meniul și clicul în afară;
+  - intervalul nou: înălțimea panoului cadru cu cadru;
+  - ↓ / ↑ / Enter / Esc în căutare;
+  - bara la 320–1440 px, în și în afara ecranului complet: butonul listei niciodată singur pe un rând;
+  - telefon 320 / 390, cu atingeri, în ecranul complet: fiecare fereastră deasupra și pe ecran, pagina de lățimea ecranului.
+- **Încărcarea:** `chartHeight` se calculează din ce e pornit (`lmaDrawn`, `paneStudies`), nu din valorile LMA, care vin abia cu lumânările. Altfel panoul scădea cu 120 px cât se încărca.
+
+### 11. Modul cruce al bibliotecii, pe ecran tactil (FD §13)
+- **Biblioteca (lightweight-charts 5.2.1), pentru fiecare panou:**
+  - o apăsare de 240 ms fără mișcare (`longTap`) intră în modul cruce: pune crucea, cu evenimentul atingerii;
+  - cât e în modul cruce, o tragere mută crucea, nu graficul;
+  - o atingere scurtă pe panou iese din modul cruce și ia crucea (cu eveniment).
+- **În efectul care trage liniile și prețurile (`CandleChart`):**
+  - `lastType`: ultimul `pointerType` de pe grafic (`pointerdown` / `pointermove`, în captură);
+  - `touchCross`, din `subscribeCrosshairMove`: `p.point !== undefined && p.paneIndex === 0 && lastType !== 'mouse'`;
+  - crucea pusă înapoi de „+” (fără `sourceEvent`) nu schimbă `touchCross` (biblioteca e tot în modul cruce).
+- **`onPanMove`:** la fiecare mișcare a unei atingeri sau a unui creion (`pan.mouse` fals), cu `touchCross` adevărat → `endPan(true)`: tragerea se oprește, iar scala revine la „A” (era pornit la apăsare, altfel tragerea nu pornește; scala logaritmică îl oprise de la apăsare).
+  - `touchCross` adevărat de la început (crucea rămasă după o apăsare lungă) → oprită la prima mișcare, înainte să mute ceva;
+  - devenit adevărat în timpul apăsării (apăsarea lungă de 240 ms) → oprită la prima mișcare de după.
+- **Nu în `onDown`:** o apăsare care închide meniul lui „+” trece întâi prin `onDown` (captură pe grafic), abia apoi prin `pointerdown`-ul documentului, care cheamă `dismiss` și scoate biblioteca din modul cruce. Hotărâtă la apăsare, tragerea n-ar mai fi mutat prețurile.
+- **Crucea mouse-ului** (`lastType === 'mouse'`) nu e modul cruce: o tragere cu degetul după ea mută prețurile ca până acum.
+
+### 12. Ieșirea din modul cruce (FD §14)
+- **`chart/touch-cross.ts`, `endTouchCross(chart)`:** pentru fiecare panou, pe canvasul de sus al bibliotecii (al doilea din celula panoului, cel care primește atingerile), un `touchstart` și un `touchend` sintetice, departe de grafic (−10000 px).
+- **Ce face biblioteca:**
+  - la `touchstart`: `exitOnNextTry = startTrackPoint !== null`;
+  - la `touchend`: `tryExitTrackingMode()` iese din modul cruce și ia crucea, cu eveniment, deci `touchCross` devine fals;
+  - fără modul cruce, nimic.
+- Fără `Touch` / `TouchEvent` (un browser fără atingere): nimic.
+- **`HLinePlus.dismiss()`** îl cheamă după `clearCrosshairPosition()`. Acela nu trimite eveniment și nu scoate biblioteca din modul cruce.
+- **Efecte secundare verificate:**
+  - „tap”-ul bibliotecii ajunge la `subscribeClick`, nefolosit în Sentiq;
+  - nu există dublu tap: poziția e departe, iar o atingere reală în următoarele 500 ms trebuie să fie la sub 30 px ca să conteze;
+  - biblioteca scoate focusul de pe elementul activ la `touchstart` (`blur`); la `dismiss` acesta e cel mult butonul din meniu sau „+”;
+  - ascultătorii noștri de atingeri de pe grafic: FD-CHARTTOUCH pune și scoate `first`; înălțimile panourilor nu se schimbă.
+
+### 13. „⌥H” (FD §15)
+- `<kbd>` din meniul lui „+” primește `hidden md:inline`, ca scurtătura din `App.tsx`.
+
+### 14. Teste (§11–§13)
+- **Unitar:** `endTouchCross`:
+  - fără `Touch`: nimic;
+  - cu panouri: `touchstart` apoi `touchend` pe al doilea canvas, departe de grafic;
+  - panou fără element sau fără canvas: sărit.
+- **Safari (simulator, iPhone și iPad):**
+  - apăsare lungă, apoi tragere: „A” rămâne pornit; a doua tragere, cu crucea rămasă: la fel;
+  - tragere obișnuită: „A” se oprește, ca până acum;
+  - după adăugarea liniei, după o atingere pe „Indicatori” cu meniul deschis și după o glisare cu meniul deschis: o glisare derulează graficul (vederea salvată se schimbă), iar „+” nu revine;
+  - cu meniul deschis, o tragere verticală mută prețurile („A” se oprește);
+  - „⌥H”: ascuns pe iPhone, vizibil pe iPad.
+
+### 15. Atingerea pe o linie (FD §18)
+- `active` ține și `startX`.
+- `onMove`, pentru o atingere: distanța e `|dx| + |dy|`, cu pragul de 10 px. Pentru mouse și creion rămâne doar `|dy|`, cu pragul de 3 px.
+- Peste prag, `moved = true`, deci `onUp` nu mai cheamă `onOpenHLine`. Pe ecran tactil linia tot nu se trage.
+- **Safari:**
+  - glisare orizontală de pe linie: setările nu se deschid, iar vederea salvată se schimbă;
+  - atingere scurtă: setările se deschid.
+- **Așteptarea în teste:** vederea salvată se citește la 3,5 s după glisare. Derularea din inerție continuă după ridicarea degetului, iar vederea se salvează abia la 400 ms după ultima schimbare, deci o valoare „neschimbată” citită mai devreme nu dovedește nimic.
+
+## TD-MODALFIT — implementează FD-MODALFIT
+### 1. Înălțimea din partea vizibilă
+- Stratul fiecărei ferestre e `fixed inset-0`, adică exact partea vizibilă a ferestrei (fără `vh`), verificat în Safari la panoul de setări (TD-CHARTAUDIT §2).
+- Fereastra din el: `max-h-full` în locul lui `max-h-[88vh]` / `sm:max-h-[94vh]`. Stratul e un container flex cu înălțime definită, deci procentul se raportează la el, minus `pt` / `pb`.
+- **Căutarea (⌘K):** fereastra e `flex max-h-full flex-col`; lista are `min-h-0` (se strânge) și păstrează `max-h-[50vh]`.
+
+### 2. Tastatura: `visible-area.ts`
+- `areaStyle(vv, innerHeight)` (pur):
+  - fără `visualViewport`, sau când acesta e toată fereastra (`height ≥ innerHeight − 1` și `offsetTop ≤ 0`): `undefined`, deci rămâne CSS-ul;
+  - altfel (tastatura, mărirea): `{ top: offsetTop, height, bottom: 'auto' }` în px.
+- `useVisibleArea()`: ascultă `resize` și `scroll` pe `visualViewport` și dă stilul de mai sus.
+- Folosit pe straturile din `Modal`, `AccountWizard`, `DaySummary`, `CommandPalette`, pe `SettingsDrawer` (Charts) și pe stratul panoului listei (`Watchlist`, telefon).
+- Un element `fixed` stă pe „layout viewport”; cu tastatura deschisă, Safari derulează partea vizibilă în interiorul lui (`offsetTop`), deci `top = offsetTop` îl aduce în dreptul ei.
+
+### 3. Teste
+- **Unitar:** `areaStyle`:
+  - fără `visualViewport`: `undefined`;
+  - toată fereastra: `undefined`;
+  - tastatura (înălțime mai mică): `top` / `height`;
+  - derulată (`offsetTop > 0`): `top`;
+  - valori fracționare: rotunjite.
+- **Safari (un simulator):** „Indicatori” → „Toți” și „Ordin nou”: marginea de jos a ferestrei ≤ `innerHeight`, în și în afara ecranului complet; `100vh` în px față de `innerHeight` (de câți px trecea înainte).
+
+## TD-SCOREWHY — implementează FD-SCOREWHY
+### 1. Server
+- `daily-index.ts`: `interface ScoreWhy { engine; meta; relevance; impact; impactSource: 'ai' | 'rules'; ruleImpact }`; `Driver.why?: ScoreWhy`.
+- `DailySentimentService.explainDrivers(day, scope)`: o singură interogare pentru cei (cel mult zece) driveri, cu aceeași alegere ca `loadItems` / `queryNews`:
+  - indicele comun: `n.sentiment_engine`, `n.sentiment_meta`, `n.sentiment_impact`;
+  - indicele unui utilizator (`scope`): `a.*` acolo unde `a.score IS NOT NULL` (scorul AI-ului lui, fără meta), altfel cel comun; importanța `COALESCE(a.impact, n.sentiment_impact)`, ca `loadItems`;
+  - `impact = sentiment_impact ?? n.impact`, `impactSource = sentiment_impact !== null ? 'ai' : 'rules'`, `ruleImpact = n.impact`;
+  - `meta` citit cu `safeJson`; o știre fără rând (ștearsă) rămâne fără `why`.
+- **Ruta `/api/sentiment/today`:** `today()` (care salvează instantaneul fără `why`), apoi `explainDrivers`. `why` nu ajunge în baza de date și nici în rezumatul AI (`summary/context.ts` cheamă `today()` direct).
+
+### 2. Web
+- `components/ScoreWhy.tsx`: `<details>` „De ce acest scor?” (motorul, modelul, regulile, relevanța / importanța, cu numele AI-ului din `engine`), plus `children` pentru rânduri în plus. Mutat din `NewsRow`, care îl folosește la fel.
+- `format.ts`, `fmtDayShare(contribution, sentiment)`: `contribution / sentiment` (partea din greutatea zilei, același semn deci pozitivă) → „12%”, „sub 1%” sub 0,5%, „—” pentru 0 sau valori nefinite.
+- `Today.tsx`, `DriversTile`: în coloana titlului, titlul și sub el `<ScoreWhy why={x.why ?? null}>` cu „Cântărește … din indicele zilei”.
+
+### 3. Teste
+- **Server** (`drivers-why.test.ts`, pe schema de test):
+  - indicele comun: model local cu meta (model, reguli), importanță din cuvinte-cheie și din AI;
+  - indicele unui utilizator cu AI-ul lui: motorul AI-ului, fără meta, importanța lui;
+  - o știre ștearsă: fără `why`;
+  - fără driveri: nicio interogare / nimic.
+- **Unitar:** `fmtDayShare`.
+
+## TD-INDEXWHY — implementează FD-INDEXWHY
+### 1. `daily-index.ts` (pur)
+- `select(items, window, asOf)`: fereastra, excluse, fără scor, etichetele; folosit de `computeIndex` și de `explainIndex` (aceeași selecție).
+- `weigh`: fiecare rând ține și termenii (`decay`, `clusterN`, `cluster = (1 + boost·log₂ n) / n`, `spec`). `aggregate` adaugă `cap` (factorul plafonului sursei, 1 fără plafon).
+- `explainIndex(items, window, asOf, p)` → `IndexExplain`:
+  - `counts`, `breakdown` (ca `computeIndex`);
+  - `total: { raw, weight, shrunk, index, confidence }`;
+  - `sources[]: { id, name, sourceWeight, count, base (Σ înainte de plafon), weight (după) }`, `capActive` (≥ 4 surse cu pondere); o sursă cu Σ 0 are factorul plafonului 1 (nu are ce tăia; ponderea rămâne 0, deci indicele nu se schimbă);
+  - `items[]` (toate cele eligibile, după pondere descrescător): termenii, `weight`, `share = weight / W`, `contribution = weight · s / W`.
+- `INDEX_RULES`: `labelT` 0,2, pragurile încrederii 3 / 10, factorii 0,2 / 0,5, exportate pentru fereastră.
+- `computeIndex` neschimbat numeric (testul compară cele două).
+
+### 2. Serviciul și ruta
+- `DailySentimentService.explainToday(tz, now, scope)`: `loadItems` → `explainIndex`; primele 100 cu `why` (motorul, meta, sursa importanței; aceeași interogare ca `explainDrivers`, scoasă în `whyOf(ids, scope)`); restul: `rest: { count, share, contribution }`.
+- `GET /api/sentiment/today/explain` → `{ day, tz, asOf, params, rules, counts, total, breakdown, sources, capActive, items, rest }`.
+
+### 3. Web
+- `components/IndexExplain.tsx`: `Modal` (lățime 980). Interogarea `['sentiment', 'explain']`, la deschidere, fără reîmprospătare automată; „Recalculează” o reface.
+- Secțiunile din FD §2. Numerele cu `fmtNum` (virgulă), scorurile cu `fmtScore` (ca în restul paginii). Lista: 20, „Arată încă 20” până la `items.length`, apoi rândul „Celelalte”.
+- `Today.tsx`, `SentimentTile`: rândul de sub carduri: butonul (stânga) și „în analiză” (dreapta).
+
+### 4. Teste
+- **Pur** (`index-explain.test.ts`):
+  - `explainIndex` dă același `raw`, `weight`, `index`, `confidence`, `counts`, `breakdown` ca `computeIndex`, pe un set cu poveste, plafon, sponsorizat, știri vechi;
+  - suma contribuțiilor = `raw`; suma `share` = 1;
+  - termenii fiecărei știri înmulțiți dau ponderea;
+  - plafonul: activ cu ≥ 4 surse, inactiv sub;
+  - fără știri: zero și 50.
+- **Serviciul** (pe schema de test): primele 100 și restul (cu 105 știri); `why` la cele din listă; scope cu AI-ul utilizatorului.
+
+## TD-WHYPLAIN — implementează FD-WHYPLAIN
+### 1. Efectul unei știri (pur, `daily-index.ts`)
+- `indexValue(raw, weight, p)`: indicele nerotunjit (`toIndex` îl rotunjește la 0,1, prea grosier pentru 0,1 puncte).
+- `effects(items, window, asOf, ids, p)`: pentru fiecare id, indicele refăcut fără știrea aceea (aceleași `select` / `weigh` / `aggregate`, deci cu plafonul și apropierea de neutru) → `{ without, effect = value − without }`. Cost: k × n (k = 10 la „Ce mișcă piața”, 100 în fereastră).
+- `IndexExplain.total.value`: indicele nerotunjit.
+
+### 2. Serviciul
+- `explainDrivers(day, scope, items?)`: știrile zilei (primite, sau încărcate cu aceeași fereastră și același `asOf` ca `day`), `explainIndex` pentru termenii fiecărui driver și `effects` pentru cei (cel mult 10) driveri. Fiecare driver primește `why`, `effect`, `without` și `weighs: { relevance, impact, sourceWeight, spec, flags, decay, clusterN, cap, share }`.
+- `todayExplained(tz, now, scope)`: ce cere ruta `/api/sentiment/today` (la fiecare minut, de pe pagina Azi). Încarcă știrile o dată, calculează ziua (`dayFrom`), o salvează fără explicații, apoi `explainDrivers` cu aceleași știri. `computeDay` = `loadItems` + `dayFrom`.
+- `explainToday`: `effects` pentru primele 100; fiecare rând are `effect` și `without`.
+
+### 3. Web
+- **`DriversTile`:**
+  - sub titlu: „Din cele N știri de azi: …” (N = pozitive + neutre + negative);
+  - sub fiecare titlu: „Fără ea, indicele ar fi X (acum Y): ±Z puncte.”;
+  - în `ScoreWhy`, explicația ponderii. Raportul față de o știre obișnuită: `share × N`. Termenii se pun doar când spun ceva: relevanța sub 1, povestea peste o sursă, factorul sub 1, plafonul sub 1.
+- **`Tile`:** `onLabel` (și `labelHint`): titlul din `h2` devine un `button` (`aria-haspopup="dialog"`, `title` și `aria-description` = indicația), subliniat punctat, accent la hover. **`SentimentTile`:** `onLabel` deschide `IndexExplain` (doar cu ziua încărcată); `actions` rămâne doar cu cifrele; sub categorii, doar „în analiză”.
+- **`IndexExplain`:** titlul `Modal` e un nod: textul și `PremiumBadge` (din `IndicatorPicker`); „Pe scurt” sus (din `counts`, `items`, `sources`, `total`); la fiecare rând, „fără ea”.
+
+### 4. Motivul AI-ului (migrarea 6)
+- **`schema.ts`:** migrarea 6, `ALTER TABLE news_ai_scores ADD reason NVARCHAR(400) NULL`.
+- **`ai-scorer.ts`:**
+  - schema răspunsului primește `reason`, string **obligatoriu**: schemele stricte OpenAI nu permit câmpuri opționale, iar `default` (din `.catch`) s-ar putea să nu fie acceptat; descrierea cere română, o propoziție, cel mult 120 de caractere; gol când nu e nimic de spus;
+  - promptul de sistem spune la fel;
+  - `AiScore.reason`: tăiat la 160 de caractere, gol → null.
+- **`service.ts` (`scoreUsers`):** scrie `reason` cu scorul. O știre cu titlul nou își pierde scorul, deci și motivul (ca acum).
+- **`whyOf`:** `a.reason` când `a.score IS NOT NULL` → `ScoreWhy.reason`. **`queryNews`:** la fel, în `meta` nu (meta e a modelului local): câmp nou `reason` în `sentiment`.
+- **`ScoreWhy.tsx`:** primul rând, „Motivul (Claude): …”, când există.
+- **Pornirea:** codul refuză o bază mai nouă (`migrate`). Ordinea e deploy (migrarea 6 pe baza reală, cu codul care o știe), apoi orice pornire locală pe baza reală.
+
+### 5. Teste
+- **Pur:** `effects`: fără știri → 50; o știre → `without` 50; suma… nu (efectele nu se adună: neliniar); efectul = indicele − indicele fără ea, cu `computeIndex` pe setul fără ea (± rotunjire).
+- **Serviciul:** driverii au `effect`, `without`, `weighs`; fereastra are `effect` la primele 100.
+- **AI:** `reason` citit, tăiat, gol → null; scris în `news_ai_scores`; citit de `whyOf` și `queryNews`.
+
+## TD-HISTORYCHART — implementează FD-HISTORYCHART
+### 1. `web/history-chart.ts` (pur)
+- `daySlots(today, n)`: cele n zile (`addDays`), cea mai veche prima.
+- `byDay(points, keyOf)`: `Map<day, value>` (ultima valoare câștigă).
+- Zilele: Sentiq din `HistoryPoint.day`; crypto `dayKey(timestamp, 'UTC')`; CNN `dayKey(timestamp, 'America/New_York')`.
+- `chartScale(values)`: pe `values ∪ {50}`, marginea `max(1, 10 % din interval)`: `lo = floor(min − margine)`, `hi = ceil(max + margine)`, în 0–100, cel puțin 4 puncte (altfel lărgită în jurul mijlocului). Mai strânsă decât `DayChart` (45–55 minim), ca zilele 47–49 să se vadă.
+- Marginea din dreapta (24 px) pentru etichetele scării; `x` și alegerea zilei la hover pe lățimea fără ea.
+- `fearGreedLabel(v, kind)`: benzile fiecărui indice, în cuvinte.
+- Ziua de azi a liniei Sentiq: indicele live (`useSentiment`, ca pe card), provizoriu; istoricul o are doar de la ultima salvare.
+- `segments(slots, map)`: bucățile continue (index, valoare) pentru o linie întreruptă (Sentiq); `points(slots, map)` pentru o linie continuă peste goluri (CNN).
+### 2. `Today.tsx`, `HistoryTile`
+- Aceeași interogare `['market', 'context']` ca banda.
+- Mărimea din `ResizeObserver` (lățime și înălțime).
+- SVG cu linia lui 50, liniile, punctele Sentiq (gol pentru `final` fals), zona de hover (o coloană pe zi, `pointermove` / `pointerleave`), eticheta HTML poziționată absolut și ținută în panou.
+- Legenda: butoane `aria-pressed`; cel puțin una afișată.
+### 3. Teste
+- **Unitar:** `daySlots`, `byDay` (zilele UTC și New York), `chartScale` (50 inclus, limitele 0–100, valori egale), `segments` (golurile rup linia).
+- **Chrome:** 390 și 1440 px; panoul plin; legenda ascunde / arată; hover-ul arată valorile zilei; fără context de piață.
+
+## TD-MULTICAT — implementează FD-MULTICAT
+### 1. Baza (migrarea 7)
+- `ALTER TABLE sources ADD categories NVARCHAR(100) NULL`: categoriile, despărțite prin virgulă, în ordinea fixă `crypto, stocks, macro, geopolitics`, când sunt cel puțin două; NULL pentru o singură categorie.
+- `category` rămâne (cu CHECK-ul ei): prima categorie a sursei (afișare, ordonare, categoria știrilor fără semn).
+- `SOURCE_COLUMNS` și `SourceRow` primesc `categories`.
+
+### 2. `news/categorize.ts`
+- `CATEGORY_ORDER`, `normalizeCategories(list)` (unice, în ordine), `sourceCategories(row)` (`categories` sau `[category]`), `encodeCategories(list)` → `{ category, categories }`.
+- `categorize(title, summary, coins, allowed, isCrypto)` → `{ category, matched }`:
+  - semne: termenii fiecărei categorii (expresii regulate, termeni distincți), plus 2 pentru o monedă crypto numită (`isCrypto`), plus 2 pentru o companie / acțiune / indice (`#CO`, `#…`, `^…`, sau un simbol care nu e crypto);
+  - cea mai mare sumă dintre `allowed`; egalitate → `CATEGORY_ORDER`; zero peste tot → prima din `allowed`, `matched` fals.
+- `CoinDetector.isCrypto(sym)`: simbolul e în lista de monede și nu e o acțiune din favorite.
+
+### 3. Clasarea unei știri (`ingest.ts`)
+- `weighItem(source, title, summary, coins, classifierCoins, detector)`:
+  - o categorie → `classify(category, …)`, categoria sursei;
+  - mai multe → `categorize`, apoi `classify(categoria aleasă, …)`; fără semn → relevanța 0 și `lowRelevance`.
+- Folosit de `ingestItems` (știre nouă, și titlu schimbat: acum și `category` în UPDATE) și de `retagRecent` (care citește acum și categoriile sursei: `JOIN sources`; la sursele cu mai multe categorii scrie și `category`).
+- `reclassifySource(db, sourceId, detector, classifier)`: toate știrile păstrate ale sursei, cu `weighItem` (categorie, relevanță, importanță, flaguri). Chemat de `PUT /api/sources/:id` când se schimbă categoriile.
+
+### 4. Ruta
+- `POST /api/sources`: `categories: string[]` (1–4, cele patru valori) sau, ca înainte, `category`. Normalizate, apoi `{ category, categories }`.
+- `PUT /api/sources/:id`: `categories` (sau `category`) doar pentru sursele adăugate; la o schimbare, `reclassifySource`.
+### 5. Web (`SettingsAdmin`)
+- `CategoryPicker`: patru butoane `aria-pressed` și „Toate (general)”; folosit la adăugare și la „Schimbă” în tabel (doar surse adăugate).
+- `categoriesLabel(row)`: „General” (patru), altfel numele unite cu „ + ”.
+### 6. Teste
+- `categorize`: titluri reale pe fiecare categorie, egalități, restrângerea la `allowed`, fără semn.
+- **Pe schema de test:** o sursă generală prin API (știri pe categorii, cea fără semn cu relevanța 0); titlu schimbat; `retagRecent` nu readuce relevanța; `PUT` cu alte categorii reclasează; validări (zero categorii, sursă implicită).
+
+## TD-HTMLFEED — implementează FD-HTMLFEED
+### 1. Baza (migrarea 8)
+- `ALTER TABLE sources ADD read_as NVARCHAR(20) NULL, read_url NVARCHAR(MAX) NULL`.
+- `read_as`: NULL (feed RSS, ca înainte) | `declared` (feed din pagină, `read_url`) | `sitemap` (sitemap de știri, `read_url`; secțiunea = calea adresei sursei) | `jsonld` | `page`.
+- `SOURCE_COLUMNS` / `SourceRow` le primesc.
+- Știrile „văzute” fără dată ale unei surse: `market_cache`, cheia `page-seen:<id>` (lista adreselor, cel mult 1000).
+
+### 2. `news/page-reader.ts` (pur)
+- `declaredFeeds`, `jsonLdItems`, `pageItems` (scanare cu stivă de elemente: titluri în `h1–h4` sau carduri; `nav` / `header` / `footer` / `aside` / `menu` / `dialog` / `form` ignorate; data = primul `<time>` din cel mai mic element care nu conține alt titlu, altfel `urlDate`), `sameSite`, `absoluteUrl`.
+- `parseSitemap(xml)` → `{ kind: 'index', children: { loc, lastmod }[] } | { kind: 'urls', items }` (doar intrările cu `news:title`; data din `news:publication_date`, altfel `lastmod`).
+- `parseRobots(txt)` → `{ sitemaps, disallowed(path) }`: grupul `User-agent: *`, `Allow` / `Disallow` cu `*` și `$`, cea mai lungă regulă câștigă.
+- `isBlocked(status, body)`: 401 / 403 / 429 / 503 sau provocare („Just a moment…”, `cf-chl`, `captcha`).
+
+### 3. `news/page-feed.ts`
+- `resolveSource(url, fetch)` → `{ readAs, readUrl, items, note }`, ordinea din FD §2; folosit de `/api/sources/test` și la adăugare. Înainte de pagină și de sitemap: `robots.txt` al site-ului (o dată pe rezolvare / citire): interzis → nu se citește; 404 → permis; 5xx / fără răspuns → nu acum (eroare, reîncercare).
+- `readSource(source, fetch)` → items, după `read_as` (fără o nouă rezolvare).
+- `fetch` = `fetchText` cu `Accept` pentru HTML / XML, 5 MB, 15 s.
+### 4. `fetcher.ts`
+- `read_as` NULL: ca acum. Altfel `readSource`.
+- Fără dată: cu `last_success_at` NULL (prima citire), adresele intră în `page-seen` și nu se adaugă. Mai târziu, cele din `page-seen` se sar, iar restul intră (`effectivePublishedAt(null)` = acum).
+- `next_fetch_at`: +10 min pentru `read_as` ne-NULL.
+### 5. Rute și web
+- `POST /api/sources/test` → `{ ok, count, sample, error?, method?, dated?, note? }`.
+- `POST /api/sources` → rezolvă (dacă nu `skipTest`) și salvează `read_as` / `read_url`.
+- **Admin:** mesajul testului cu modul; în tabel, modul lângă stare.
+### 6. Teste
+- **Pur:** `pageItems` (fixture după structurile CNBC / CoinDesk: carduri cu `<time>`, date în adresă, meniuri, linkuri duble, chrome), `jsonLdItems`, `declaredFeeds`, `parseSitemap` (index, știri, fără titluri), `parseRobots`, `isBlocked`, `sameSite`.
+- **Rezolvare** (cu `fetch` fals): feed; feed declarat; JSON-LD; pagină; pagină blocată → sitemap din `robots.txt` cu secțiune; nimic → mesaj.
+- **Pe schema de test:** prima citire a unei pagini (fără dată → văzute), a doua (noile intră), datate intră din prima.
+
+## TD-AIQUOTA — implementează FD-AIQUOTA
+### 1. `ai/types.ts`
+- `AiError` primește:
+  - `detail: string | null`: cuvintele furnizorului, curățate cu `providerWords`, doar pentru `quota` și `rate`;
+  - `resetsAt: number | null`.
+- Constructorul are un al 6-lea parametru, `extra?: Partial<AiExplained> | null`. `said` înlocuiește descrierea implicită a tipului.
+- `providerWords(text)`:
+  - adună spațiile;
+  - înlocuiește tot ce seamănă cu o cheie (`sk-…`, `AIza…`) cu „…”;
+  - taie la 600 de caractere.
+- `aiErrorLine(err)` = mesajul + ` (Google: cuvintele furnizorului)`, pentru jurnal.
+- `describe()` ascunde și el cheile din textul furnizorului pe care îl pune în mesaj (permisiune, cerere respinsă, conexiune, altă eroare): `providerWords(detail).slice(0, 300)`.
+
+### 2. `ai/http.ts`
+- `JsonCall.explain?: (kind, status, body, text) => AiExplained | null`, unde `AiExplained = { said, resetsAt }`.
+- `callJson` dă rezultatul către `AiError`.
+
+### 3. `ai/gemini.ts`
+- **`geminiKind`:** 402 sau „prepayment credits” → `quota`; o metrică `per_day` numită doar în mesaj → `quota`, ca `PerDay` din `quotaId`; în rest, ca acum.
+- **`geminiLimits(body, text)`** → `{ metric, id, model, limit }[]`:
+  - din `error.details[].violations[]` (`quotaMetric`, `quotaId`, `quotaDimensions.model`, `quotaValue`);
+  - plus rândurile „Quota exceeded for metric: M, limit: N, model: X” din mesaj, care completează limita lipsă (aceeași metrică).
+- **`explainGemini(kind, status, body, text, model, now)`:** doar pentru `quota`.
+  - **Prepay:** 402 sau `/prepayment credits/`.
+  - **Limita 0:** o încălcare cu limita 0. E pe nivelul gratuit dacă `quotaId` are `FreeTier` sau metrica are `free_tier`; altfel e pe unul plătit.
+  - **Limita zilnică:** o încălcare cu `PerDay` în `quotaId` sau `per_day` în metrică, gratuită sau plătită. `resetsAt = nextPacificMidnight(now)`, adică `dayBounds(dayKey(now, LA), LA).end`.
+  - **Altceva:** null (mesajul implicit).
+- `GeminiClient.generate` trimite `explain` cu modelul cerut; `listModels` (verificarea cheii) trimite `explain` fără model (`null`), iar mesajele nu numesc atunci niciun model.
+
+### 4. `sentiment/ai-scorer.ts`
+- `AiScorerStatus.lastError` primește `detail?` și `resetsAt?`, opționale pentru stările vechi. Se completează din `AiError`.
+- `AiScorerOptions.restored?: { lastError, pausedUntil }`:
+  - o eroare permanentă → pauză fără sfârșit;
+  - altfel `pausedUntil ?? 0`;
+  - eroarea veche se păstrează, ca primul răspuns bun să o șteargă (`onState`).
+- `resume()`: scoate pauza; eroarea rămâne până la primul răspuns.
+- Jurnalul folosește `aiErrorLine`.
+
+### 5. `sentiment/service.ts`
+- `storedState(userId, sig)`: starea salvată a acestei semnături. Citirea e comună cu `aiStatus`.
+- `scorerFor`:
+  - **scorer nou:** pornește din starea salvată, dacă semnătura e aceeași (repornire);
+  - **scorer păstrat și în pauză:** dacă starea salvată a dispărut (ștearsă de `retryNow`, pe oricare instanță), se apelează `resume()`. Asta înseamnă o citire pe minut, doar pentru utilizatorii în pauză.
+- `retryNow(userId)`: șterge rândul `ai:scorer:<id>`.
+
+### 6. Rute
+- `PUT /api/settings`: când se schimbă `ai`, apelează `await ctx.sentiment.retryNow(u.id)` înainte de nudge.
+- `PUT /api/ai/key`: după `setKey`, apelează `await ctx.sentiment.retryNow(u.id)`.
+
+### 7. Web (`AiSettings.tsx`)
+- Avertismentul are trei părți:
+  - mesajul;
+  - „Google resetează limita pe {fmtDateTime(resetsAt, timezone)}.”, dacă `resetsAt` e în viitor;
+  - „Răspunsul {furnizor}: „…”” (`text-[12px] text-faint`, `[overflow-wrap:anywhere]`).
+
+### 8. Rezumatul zilei
+- Jurnalul folosește `aiErrorLine`; mesajul către utilizator rămâne `describeAiError` (acum precis).
+
+### 9. Teste
+- **`providers.test.ts`:**
+  - `geminiKind` pentru 402 și 429 „prepayment”;
+  - `explainGemini` pentru fiecare rând din FD §1: detalii complete, doar text, limita 0 gratuit sau plătit, zilnic gratuit sau plătit, pe minut → null;
+  - `resetsAt` în PDT și în PST;
+  - `providerWords` (cheie ascunsă, tăiere, spații);
+  - `callJson` cap-coadă cu un corp Google real, inclusiv `detail` și `resetsAt`;
+  - `detail` doar pentru `quota` și `rate`.
+- **`sentiment.test.ts`:** `AiScorer` cu `restored`:
+  - pauză în curs → nicio cerere;
+  - permanentă → nicio cerere;
+  - expirată → cerere, apoi eroarea se șterge;
+  - `resume()`.
+- **Pe schema de test:**
+  - o „repornire” (un nou `SentimentService`) păstrează pauza;
+  - `retryNow` pe instanța paginii reia scorarea pe instanța joburilor;
+  - `aiStatus` are `detail` și `resetsAt`;
+  - ruta `PUT /api/ai/key` șterge starea.
+
+## TD-AISLOW — implementează FD-AISLOW
+### 1. `ai/types.ts`
+- `withinRo(ms)`: „într-o secundă”, „în 15 secunde”, „în 20 de secunde”, „într-un minut”, „în 3 minute”, „în 20 de minute”. Se folosesc minute când `ms` e multiplu de 60 000.
+- `AiError.passing`: `transient || kind === 'timeout'`. Sunt erorile după care scorul reîncearcă repede. `transient` rămâne pentru reîncercările din cerere, unde un timp depășit nu se repetă.
+
+### 2. Timpul cererii (`ai/http.ts`, `ai/anthropic.ts`)
+- **`callJson`:**
+  - `deadline = Date.now() + timeoutMs`;
+  - fiecare încercare are `once(call, fetch, deadline − now)`;
+  - o reîncercare a cărei pauză (1 s, 4 s sau Retry-After) ar ajunge la `deadline` nu se face: se aruncă eroarea primită.
+- **La timp depășit (`once`):** `new AiError(provider, 'timeout', 0, '', model, { said: `${name} nu a răspuns ${withinRo(timeoutMs)}` })`, cu timpul întregii cereri.
+- **`AnthropicClient.generate`:**
+  - `deadline = AbortSignal.timeout(timeoutMs)`, combinat cu semnalul apelantului și dat SDK-ului; `timeout` pe încercare rămâne `timeoutMs`;
+  - întreruperea de la `deadline`, fără ca apelantul să fi oprit, devine `AiError('anthropic', 'timeout', …, { said: 'Anthropic nu a răspuns în …' })`;
+  - oprirea apelantului rămâne o întrerupere.
+
+### 3. `sentiment/ai-scorer.ts`
+- `AI_CALL_TIMEOUT_MS = 180_000` pentru lot (înainte 90 000).
+- **Pauza:**
+  - `PASSING_PAUSE_MS = 60_000`, `PASSING_PAUSE_MAX_MS = 15 * 60_000`;
+  - după o eroare `passing`: `min(MAX, 60 000 · 2^(failures − 1))`;
+  - `quota`: 30 de minute; permanentă: ∞; altfel: 5 minute.
+- **`failures`:** erori la rând de la ultimul răspuns.
+  - Câmp privat, în `status()` ca `failures`, salvat în stare.
+  - Se restaurează din `restored.failures ?? 0`.
+  - `resume()` îl pune pe 0.
+  - Un răspuns, folosibil sau nu, îl pune pe 0. Când era peste 0 sau exista o eroare, se apelează `onState`.
+- `lastError.passing?: boolean`, opțional pentru stările vechi.
+- **Durata:** se măsoară în jurul lui `client.generate`. Peste 60 s, `log.info("AI scoring (engine): N headlines answered in S s")`.
+- O întrerupere (`signal.aborted`) nu e eroare, ca înainte.
+
+### 4. `sentiment/service.ts`
+- `AI_PER_RUN = AI_BATCH` (un lot pe utilizator pe rundă).
+- **`scoreUsers`:**
+  - lucrul unui utilizator se mută în `scoreUser(userId, signal, now)`;
+  - utilizatorii merg printr-un bazin de `AI_USERS_AT_ONCE = 4` lucrători, care iau pe rând din coadă;
+  - un lucrător prinde eroarea unui utilizator și trece la următorul;
+  - totalul e suma, iar prima eroare se aruncă după ce toți au terminat;
+  - `stateWrites` se așteaptă la sfârșit, ca înainte.
+- **`aiProgress(userId, now)`** → `{ total, scored, lastAt }`:
+  - `total` și `scored` folosesc același filtru ca scorarea (sursă activă, `relevance > 0`, publicate în `AI_WINDOW_MS`); `scored` = cu rând în `news_ai_scores` al utilizatorului;
+  - `lastAt` = `max(scored_at)` al utilizatorului.
+- `StoredScorerState` primește `failures?: number`. `onState` îl salvează, `storedState` îl dă mai departe la `restored`.
+- `scorerFor`: un scorer păstrat citește starea salvată când e în pauză **sau are erori la rând**. Dacă starea lipsește (ștearsă de `retryNow`), se apelează `resume()`, care șterge și seria.
+
+### 5. `jobs/register.ts` (`sentiment.ai`)
+- `aiRounds(round, signal, now)`: runde cât `now() − start < AI_RUN_BUDGET_MS (5 min)`, cel mult `AI_MAX_ROUNDS = 40`, până la o rundă cu 0 sau până la oprire. Întoarce câte runde a făcut.
+- Jobul: `aiRounds(() => scoreUsers(signal), signal)`; `timeoutMs` rămâne 10 minute.
+
+### 6. Rută și tipuri
+- `AiStatus.progress: { total, scored, lastAt } | null`, null când scorul AI e oprit sau nu e cheie.
+- `GET /api/ai/status` îl calculează doar când `scorer` nu e null.
+- `AiScorerStatus` primește `failures?: number` și `lastError.passing?`.
+
+### 7. Web (`AiSettings.tsx`)
+- **Avertismentul:**
+  - `show = !lastError.passing || (failures ?? 2) >= 2`;
+  - pentru `passing`: „{product}: {message} (a {n}-a eroare la rând). Se reîncearcă automat la {fmtTime(pausedUntil)} | în curând; între timp, titlurile nescorate au scorul modelului local. Dacă se repetă, alege alt model din listă: unele răspund mai repede.”;
+  - restul ca la FD-AIQUOTA.
+- **Rândul de progres** (`text-[12px] text-muted`), când `progress.total > 0`: `progressText(product, progress, now)` din `components/ai-progress.ts`.
+  - Textul: „Ultimele 48 h: {product} a scorat {scored} din {total} titluri; ultimul scor {fmtAgo(min(lastAt, now))}.”
+  - Variante: „toate cele N”, „singurul titlu”, „nu a scorat încă singurul titlu”.
+  - Acordul cu „de” e cel obișnuit (`tradesRo`).
+
+### 8. Teste
+- **`types.ts`:** `withinRo`, `passing`.
+- **`http.ts`:** mesajul la timp depășit („Google nu a răspuns în 3 minute”).
+- **Scorer:**
+  - seria (1, 2, 4, 8, 15, 15 minute);
+  - credit → 30 de minute, cu seria crescută;
+  - un răspuns readuce seria la 0 și apelează `onState`;
+  - `resume()`;
+  - restaurarea seriei;
+  - întreruperea nu crește seria;
+  - jurnalul pentru un lot lent.
+- **Serviciu:**
+  - doi utilizatori în paralel: unul lent nu-l întârzie pe celălalt (cel rapid termină înainte ca cel lent să răspundă);
+  - eroarea unuia nu oprește lotul celuilalt;
+  - un lot pe rundă;
+  - `aiProgress`.
+- **Timpul cererii:** fără reîncercare când pauza ar trece de timp; a doua încercare are doar ce a rămas; Anthropic: timpul depășit e „Anthropic nu a răspuns în …”, oprirea apelantului rămâne oprire.
+- **Job:** bugetul de timp (nicio rundă nouă după 5 minute).
+- **Rută:** `progress` în `/api/ai/status`.
+- **Web (`ai-progress.test.ts`):** variantele lui `progressText`.
+
+## TD-EARNTV — implementează FD-EARNTV
+### 1. `calendar/sources.ts`
+- `TV_SCAN_URL = 'https://scanner.tradingview.com/america/scan'`.
+- **`fetchTvEarnings(symbols)`:**
+  - un singur POST (`httpRequest`, 20 s), cu `Origin` / `Referer` TradingView, ca la calendarul economic;
+  - corpul: `{ filter: [{ left: 'name', operation: 'in_range', right: symbols }], columns: TV_EARN_COLUMNS, range: [0, 3 · n] }`;
+  - simbolurile trimise sunt doar cele care arată ca acțiuni (`/^[A-Z][A-Z0-9]*(\.[A-Z0-9]+)?$/`); fără niciunul, nicio cerere;
+  - un răspuns non-200 aruncă `HttpError`.
+- **`parseTvEarnings(body)`** → `Map<symbol, TvEarnings>`, cu zod:
+  - `{ data: [{ s, d: unknown[] }] }`, coloanele în ordinea `TV_EARN_COLUMNS`;
+  - un rând de altă formă e sărit;
+  - la același `name`: câștigă rândul cu tipul de publicare, apoi cel principal;
+  - o dată care nu e un `Date` valid e null;
+  - coloana `type` (ultima): dacă răspunsul are acțiuni (`stock` / `dr`), dar niciun rând nu are vreo dată (următoare sau ultima), se aruncă „TradingView: nicio dată de rezultate pentru N acțiuni (s-au schimbat coloanele?)”, pentru că o coloană necunoscută vine ca null, nu ca eroare.
+- **`TvEarnings`:**
+  - `next: { day, time, confirmed, quarter, eps } | null`, null fără zi;
+  - `day` = ISO-ul UTC al lui `…next_trading_date_fq`;
+  - `time`: −1 → `pre`, 1 → `after`, altfel `unknown`;
+  - `confirmed` = tipul 11 / 12 / 13;
+  - `quarter` = „Sep/2026” din `…next_calendar_date` (luna UTC);
+  - `eps` număr finit sau null;
+  - `lastDay` = ISO-ul UTC al lui `earnings_release_trading_date_fq`, sau null.
+
+### 2. `calendar/service.ts`
+- **`earningsEvent(day, row, from?)`:**
+  - `from = { date?: 'tv', numbers?: 'tv' }`;
+  - `period` = `time|quarter|date|numbers` (câmpurile goale pentru Nasdaq), deci evenimentele vechi (`time|quarter`) se citesc la fel.
+- **`planEarnings(day, rows, wanted, tv)`** (pură), pentru o zi la care Nasdaq a răspuns. Pentru fiecare rând Nasdaq al unei acțiuni din favorite, cu `t = tv.get(symbol)`:
+  - **păstrat**, dacă `t` lipsește;
+  - **sărit**, dacă `t.next?.confirmed` și ziua nu e nici `t.next.day`, nici `t.lastDay`;
+  - **sărit**, dacă `t.lastDay` < ziua < `t.lastDay + 45 de zile` și ziua nu e cea confirmată;
+  - **altfel păstrat**: în ziua confirmată, ora TradingView când e `pre` / `after`, altfel cea Nasdaq, iar `date: 'tv'`.
+  - Apoi, pentru fiecare acțiune din favorite cu `t.next.confirmed` și `t.next.day === day`, fără rând Nasdaq în ziua aceea, un eveniment numai TradingView:
+    - `forecast` = `formatEps(eps)` („$0.13”, „-$0.09”);
+    - `previous` null;
+    - `name` = simbolul;
+    - `from = { date: 'tv', numbers: 'tv' }`.
+- **`refreshEarnings(symbols, fetchDay, now, fetchTv?)`:**
+  - `fetchTv` se cheamă o dată, înaintea zilelor;
+  - o eroare a lui duce la un `log.warn`, iar harta rămâne goală (doar Nasdaq);
+  - zilele merg ca înainte, cu `planEarnings` în loc de filtrul simplu.
+- **`query`:** nota după `period`:
+  - `date === 'tv'` adaugă „Data e confirmată (TradingView).”;
+  - `numbers === 'tv'` schimbă fraza Prognozei („…(TradingView); Nasdaq nu are încă rezultatele în calendar.”).
+
+### 3. `jobs/register.ts`
+- `refreshEarnings(symbols, (day) => nasdaq.earnings(day), undefined, (s) => fetchTvEarnings(s))`.
+
+### 4. Teste
+- **`parseTvEarnings`:**
+  - codurile (10 / 11 / 12 / 13, −1 / 0 / 1);
+  - zilele UTC, trimestrul, EPS null;
+  - rânduri duble (cu date / principal);
+  - rânduri stricate, corp care nu e JSON;
+  - ETF fără date.
+- **`fetchTvEarnings`:** corpul cererii (doar simbolurile de acțiuni), fără cerere fără simboluri, HTTP 403 → eroare.
+- **`planEarnings`:**
+  - SPCX doar la TradingView azi;
+  - Nasdaq altă zi decât cea confirmată (sărit);
+  - aceeași zi (ora TradingView, numerele Nasdaq);
+  - estimare TradingView (Nasdaq neschimbat);
+  - după publicare (ziua ultimei publicări păstrată, o dată Nasdaq la < 45 de zile sărită, una la ≥ 45 păstrată);
+  - fără date TradingView;
+  - confirmată fără oră (ora Nasdaq).
+- **`refreshEarnings`:** TradingView căzut (doar Nasdaq, avertisment, fără eroare); ziua Nasdaq căzută (neatinsă); nota pentru cele trei feluri; evenimentele vechi `time|quarter`.
+
+## TD-WATCHLISTS — implementează FD-WATCHLISTS
+### 1. Baza (migrarea 9)
+- **`watch_lists`:** `id` IDENTITY, `user_id` → `users` ON DELETE CASCADE, `name NVARCHAR(40)`, `position`, `created_at`; index `(user_id, position)`.
+- **`watch_list_items`:** `list_id` → `watch_lists` ON DELETE CASCADE, `coin NVARCHAR(64)`, `position`, `added_at`, cheia `(list_id, coin)`.
+- **Umplerea:** o listă „Favorite” pe fiecare utilizator cu rânduri în `watchlist`, cu rândurile lui în ordinea `position`.
+- **`watchlist` rămâne registrul simbolurilor urmărite** (pereche, aliasuri, nume, bursă), adică reuniunea listelor. Toți cititorii de azi merg neschimbați: scanner, știri, calendar, feed-uri, detectorul, Rezumatul, Azi, banda.
+- Nu există cheie străină `coin` → `watchlist`: ar face două căi de ștergere în cascadă de la `users`, pe care SQL Server le refuză. Legătura o ține serviciul.
+- `TABLES` primește `watch_list_items` și `watch_lists`, înaintea lui `users`; `IDENTITY_TABLES` primește `watch_lists`.
+
+### 2. `watchlists/service.ts` (`WatchlistService`)
+Toate operațiile într-o tranzacție. Fiecare începe cu `reconcile(userId)`, care scrie doar când e nevoie:
+- **utilizator fără liste:** „Favorite” cu rândurile din `watchlist`, în ordine; e cazul unui utilizator nou sau al seed-ului adminului;
+- **rânduri din `watchlist` care nu sunt în nicio listă** (adăugate de o versiune veche): la sfârșitul primei liste;
+- **elemente ale căror simboluri nu mai sunt în `watchlist`** (șterse de o versiune veche): scoase.
+
+După orice schimbare, `syncUnion(userId)`:
+- `watchlist.position` = ordinea primei apariții (listele după `position`, apoi elementele);
+- rândurile din `watchlist` care nu mai sunt în nicio listă se șterg;
+- întoarce simbolurile adăugate sau scoase din reuniune.
+
+Metode:
+- `view(userId)` → `{ lists: { id, name, coins[] }[], items: WatchItem[] }`;
+- `create(name)`, `rename(id, name)`, `remove(id)` (refuzat la ultima listă), `orderLists(ids)`;
+- `add(listId, body)`:
+  - un simbol nou intră în registru (validat ca înainte), cu limita de 50 diferite;
+  - unul deja în registru intră doar în listă, cu `note` dacă perechea cerută diferă;
+  - unul deja în listă e un conflict;
+- `orderItems(listId, coins)`;
+- `copy(from, to, coins)`, `move(from, to, coins)`, `removeItems(listId, coins)` → `{ done, already, missing, gone }`, unde `gone` = simbolurile care au ieșit din reuniune.
+- Limitele: `MAX_LISTS = 20`, `MAX_WATCHED = 50`; numele: tăiat la capete, 1–40 de caractere, unic fără deosebire de litere mari / mici; „Lista nu mai există” → `NotFoundError`.
+
+### 3. Rute
+- **Noi:**
+  - `GET /api/watchlists`;
+  - `POST /api/watchlists {name}`;
+  - `PUT /api/watchlists/order {ids}`;
+  - `PUT /api/watchlists/:id {name}`, `DELETE /api/watchlists/:id`;
+  - `POST /api/watchlists/:id/items` (corpul de la `POST /api/watchlist`);
+  - `PUT /api/watchlists/:id/items/order {coins}`;
+  - `POST /api/watchlists/:id/items/copy | move {coins, to}`, `POST /api/watchlists/:id/items/delete {coins}`.
+  Toate întorc `view` (plus `note` / numărătorile).
+- **Cele vechi rămân, peste serviciu,** pentru o filă deschisă înainte de actualizare:
+  - `POST /api/watchlist` → în prima listă;
+  - `DELETE /api/watchlist/:coin` → din toate listele;
+  - `PUT /api/watchlist/order` → ordinea primei liste;
+  - `PUT /api/watchlist/:coin` (pereche, aliasuri) și `GET /api/watchlist` (reuniunea), neschimbate.
+- **`afterWatchlistChange`** (detectorul, feed-urile, reetichetarea, nudge-urile) rulează doar când reuniunea s-a schimbat: un simbol nou (cu nudge-urile pentru acțiuni) sau `gone`.
+  - Reetichetarea nu mai e așteptată: `ctx.retag` (`news/retag-queue.ts`) o rulează în fundal, câte o trecere; o cerere în timpul unei treceri cere încă una după ea; o eroare se notează în jurnal; `idle()` e pentru teste.
+  - La fel la ștergerea unui utilizator.
+- **`GET /api/symbols/profile?kind=crypto|stock|index&symbol=`** → `SymbolProfile`.
+- **`POST /api/symbols/translate {kind, symbol}`** → `{ text }`, cu AI-ul utilizatorului; `ValidationError` fără cheie.
+
+### 4. `market/profile.ts`
+- **Acțiuni:**
+  - Nasdaq `company-profile` dă descrierea, sectorul și industria; `data: null` înseamnă fără descriere.
+  - TradingView (un POST, `name` exact) dă coloanele: `type`, `total_revenue_fq_h`, `gross_profit_fq_h`, `ebitda_fq_h`, `net_income_fq_h`, `earnings_per_share_diluted_fq_h`, `free_cash_flow_fq_h`, `fiscal_period_end_fq` și cele ale datei următoare (FD-EARNTV).
+  - Trimestrul i (0 = cel mai nou, cel mult 4): `end` = `fiscal_period_end_fq` minus 3·i luni (ultima zi a lunii), valorile `x_h[i]`.
+  - Comparația cu anul trecut: venituri `r[i] / r[i+4] − 1` (doar cu `r[i+4] > 0`); EPS `(e[i] − e[i+4]) / |e[i+4]|` (doar cu `e[i+4] ≠ 0`).
+  - `type = fund` → `kind: 'fund'`, fără trimestre.
+  - Tipul poate veni de la TradingView sau din registrul `watchlist`.
+- **Crypto:**
+  - CoinGecko `search?query=` → simbolul exact, cu cea mai bună poziție (fără poziție, la urmă);
+  - apoi `coins/{id}` (fără piață / tickere): `description.en` (fără HTML și entități, tăiat la ~1.500 de caractere la sfârșit de frază), primele 5 categorii, `genesis_date`, primul `homepage`.
+- **Indici:** `IndexInfo.description` (română), adăugat în catalog.
+- **Cache în `market_cache`:**
+  - `profile:<kind>:<symbol>`: 12 ore la acțiuni, 7 zile la crypto; un profil cu o parte eșuată nu se ține minte;
+  - traducerile, sub `translate:ro:<sha256(text)[:32]>`, fără termen: comune tuturor, fiind un text public.
+
+### 5. Traducerea și consumul
+- `translateDescription(text)`, cu clientul utilizatorului: `{ text }`, `effort: 'low'`, 3.000 de tokeni, 60 de secunde.
+- `AiUsage` primește felul `translate` (`AiUsageDay.translate`, zero la stările vechi).
+- Rândul „Traduceri” apare în „Ce a consumat cheia ta azi”.
+
+### 6. Setări
+- `charts.listId: number | null` (null = prima listă).
+
+### 7. Web
+- **Hook-uri:**
+  - `useWatchlists()` (`['watchlists']`);
+  - mutațiile pun răspunsul în `['watchlists']` și reuniunea în `['watchlist']`, apoi reîmprospătează scanner-ul, știrile, sursele și calendarul, ca înainte.
+- **`FavoritesDnd`** primește `onSave(coins)` în loc de ordinea reuniunii: `useReorderList(listId)`, salvări una după alta, ca înainte.
+- **`components/AddSymbol.tsx`:** comutatorul, căutarea și indicii, mutate din Setări.
+- **`components/SymbolInfo.tsx`:** popup-ul (`Modal`), cu traducerea cerută după profil, dacă există cheie și nu e deja tradus.
+- **`pages/Watchlists.tsx`:** coloana listelor (sau câmpul de selecție pe telefon) și tabelul cu selecție.
+  - Selecția e `Set` + ultima bifată. Shift + clic selectează intervalul, prin `selectRange` (testabil, în `watch-select.ts`).
+- **`Watchlist.tsx` (Grafice):** `<select>` cu listele; `charts.listId` se salvează în setări.
+- **`watch-guess.ts`:** starea pe care o va face o schimbare (`guessAdd`, `guessRemove`, `guessCopy`, `guessRename`, `guessDropList`, cu reuniunea recalculată), pusă imediat în cache.
+  - Mutația `['watchlists', 'change']` are `scope`, deci pleacă în ordine.
+  - Răspunsul se aplică doar dacă e ultima mutație în așteptare.
+  - La eroare, mesajul și recitirea.
+- **Bara selecției** e mereu acolo. **Mesajele** sunt în `Toast`, fix jos.
+- **„+”** din antetul listelor deschide `NamePopover`; redenumirea pe ecrane late e în rând.
+- **Indicii** sunt în lista derulantă a lui `AddSymbol`.
+- **Panoul listei** are `px-5`, cât intră `table-bleed`.
+- **Setări:** fără `WatchlistSection`.
+- **Textele „favorite”** care însemnau reuniunea (FD §6).
+- **Meniul:** `NAV` primește `/watchlists` după `/trades`.
+
+### 8. Teste
+- **Migrarea:** umplerea listelor pe o bază v8 cu favorite.
+- **Serviciul:**
+  - `reconcile` (fără liste, orfani, elemente fără registru);
+  - CRUD și limite (50 diferite, 20 de liste, nume);
+  - `add` (nou, deja urmărit cu altă pereche, deja în listă);
+  - `copy` / `move` / `removeItems` (numărătorile, `gone`);
+  - ordinea reuniunii; ultima listă; lista altcuiva (negăsită).
+- **Rutele:** cele noi, cele vechi peste liste, `afterWatchlistChange` doar la schimbarea reuniunii, popup-ul și traducerea (fără cheie, din cache).
+- **Profilul:**
+  - trimestrele din coloanele TradingView (lunile, comparația cu anul trecut, mai puțin de 4, fond, lipsă);
+  - CoinGecko (HTML, tăierea, ambiguitate);
+  - Nasdaq fără date;
+  - cache-ul (o parte eșuată nu se ține minte).
+- **Web:** `selectRange`, formatul sumelor, textul de progres / ETF.
+
+
+---
+
+## TD-SLINGSHOT34 — implementează FD-SLINGSHOT34
+
+### Fișiere
+| Fișier | Schimbare |
+|---|---|
+| `Sling Shot System/sling-shot-system-3.4.pine` | **nou**: copia 3.3 + grupul „Signals” + mașina de stări SHORT + afișarea și alertele ei. `sling-shot-system.pine` (3.3) nu se atinge. |
+| `src/shared/indicator/params.ts` | `SLINGSHOT_VERSION = '3.4'`; câmpuri noi `showLong` (true), `showShort` (false), `shortColor` (`#2196F3`); `.refine`: cel puțin unul dintre `showLong` / `showShort` |
+| `src/shared/indicator/slingshot.ts` | portul 3.4, linie cu linie după fișierul Pine nou; `atrShort` lângă `atr` |
+| `src/web/chart/slingshot-draw.ts` (nou, mutat din `CandleChart.tsx`) | `buildSegments` (liniile și etichetele TP/SL ale fiecărei părți) și `slingshotShapes` (triunghiurile LONG / SHORT / TAKE PROFIT); fără grafic, deci testabile |
+| `src/web/chart/CandleChart.tsx` | le folosește |
+| `src/web/pages/Charts.tsx` | grupul „Signals” în setări (cu ultima casetă blocată), alertele noi, tabelul de semnale cu partea, caseta TP/SL cu rândurile fiecărei părți; căsuțele formularului nu se mai strâng lângă o etichetă lungă (`shrink-0`) |
+| `src/web/components/icons.tsx` | iconițele alertelor noi |
+| `src/server/scanner/scanner.ts` | `ScanRow`: `lastSignal.side`, `entry` (fost `entryLow`), `liveShortSignal`, `waitingShortTP`, `atr.side`, `atrShort` |
+| `src/web/pages/Today.tsx` | ultimul semnal cu partea, „SHORT în formare”, TP/SL ale fiecărei părți |
+| `src/server/summary/context.ts` | partea semnalului și short-ul în formare, în contextul AI |
+| `docs/slingshot-port.md` | sursa 3.4 și diferențele |
+
+### Pine 3.4: ordinea pe bară
+1. Seriile (neschimbate).
+2. **Mașina LONG din 3.3.** Singura schimbare: `showLong and` la V1 candidat și la fixarea deal-ului. Fără ele, `bullDealIdx`, `bullV1Idx` și `bullTrendIntegrity` nu se setează niciodată, deci nicio altă ramură LONG nu rulează.
+3. **Mașina SHORT**, pasul 2 inversat (variabile `bear*`):
+   - **V1 candidat:** `showShort and isDowntrend and kLine >= stochOverbought and cloudTouchShortTol` → `bearCandidV1High := high`.
+   - **Deal:** `showShort and isDowntrend and kLE20` (cu toleranță).
+   - **Invalidare** la `not isDowntrend`.
+   - **Start V2:** `kLine >= stochOverbought`, atinge norul, `bar_index > bearDealIdx`, `high < bearV1High`.
+   - **Urmărire V2:** cât timp `kGE80`. Anulare dacă `high >= bearV1High`; altfel se reține maximul cel mai mare.
+   - **Ieșirea din supracumpărare confirmă** dacă `bearV2BestHigh < bearV1High and isDowntrend`, exact ca LONG-ul. Atunci:
+     - semnalele SHORT urmărite devin roșii (`superseded`);
+     - apare eticheta SHORT și `waitingShortTP := true`;
+     - se rețin `storedLowestLow` (`getLowestLow(lookback)`) și ATR-urile;
+     - se declanșează alerta.
+
+     Variabilele LONG nu se ating.
+   - **Reset complet:** `not isDowntrend and not bearV2Search and not na(bearDealIdx)`. Semnalele SHORT urmărite devin roșii (`trendFlip`).
+   - Gărzile 3.3 `if not waitingShortTP`, inversate.
+4. **TP / ATR TP / SL / istoric LONG:** neschimbate.
+5. **TP / ATR TP / SL / istoric SHORT**, inversate:
+   - eticheta TAKE PROFIT short: `low < storedLowestLow`, sub lumânare, mutată la minimul cel mai jos;
+   - ATR TP: `low <= storedLowestLow - storedShortTakeProfitAtr`;
+   - SL: `high > activeShortSignalHigh + storedShortStopLossAtr`;
+   - istoric: succes dacă `low < breakout` sau `low <= tp`, verificat primul; altfel roșu dacă `high >= sl`.
+6. **Afișarea ATR, separat pe fiecare parte.**
+   - **Blocul LONG** e cel din 3.3: tranzacția urmărită (dacă TP-ul nu e atins sau „hide on TP” e oprit), altfel setup-ul în formare. Garda „ascunde la SL” e și ea neschimbată.
+   - **Blocul SHORT** e același, inversat, cu variabile proprii (`shortDisplayTP`, `shortDisplaySL`, `shortDisplayBar`, `shouldShowShort`).
+   - **Desenarea:**
+     1. se șterg desenele barei trecute: liniile și etichetele LONG, liniile și etichetele SHORT (`shortTPLine`, `shortTPLabel`, `shortSLLine`, `shortSLLabel`), apoi tabelul;
+     2. se desenează LONG-ul, ca în 3.3;
+     3. se desenează SHORT-ul. TAKE PROFIT e `label_up` sub linie, iar STOP LOSS e `label_down` deasupra.
+   - **Ordinea creării etichetelor** e: TP LONG, SL LONG, TP SHORT, SL SHORT. Contează pentru limita de 500, iar portul o urmează.
+   - **Tabelul** are 2 coloane și 2 sau 4 rânduri: rândurile LONG („TAKE PROFIT” / „STOP LOSS”), apoi cele SHORT („TAKE PROFIT (SHORT)” / „STOP LOSS (SHORT)”). Cu doar LONG, e tabelul 2 × 2 din 3.3.
+7. Market Structure, ploturile: neschimbate.
+8. Alertele noi: „Short Signal”, „Short Take Profit Signal”, „Short ATR Take Profit Hit”, „Short ATR Stop Loss Hit”. Cele 6 din 3.3 rămân, cu aceleași titluri.
+9. `if not showLong and not showShort` → `runtime.error(...)`.
+
+Etichetele SHORT folosesc `shortColor`, iar TAKE PROFIT short folosește `longTPColor`. Toate etichetele stau sub aceeași limită de 500 (`max_labels_count`), în ordinea creării, ca în port.
+
+### Portul (`slingshot.ts`)
+- **Tipuri:**
+  - `AlertType`: plus cele 4 alerte short.
+  - `SlingshotMarker.kind`: plus `short`, `shortPreview`, `shortTakeProfit`; `color` primește și `'short'`.
+  - `SlingshotSignal`: `side: 'long' | 'short'`, iar `entryLow` se redenumește `entry` (minimul V2 la LONG, maximul V2 la SHORT; `sl` / `tp` / `breakout` sunt prețuri reale).
+  - `AtrDisplay.side`. `SlingshotResult.atr` rămâne afișarea LONG (ca în 3.3), iar `atrShort` e afișarea SHORT; fiecare e `null` când partea ei nu arată nimic.
+  - `last`: plus `waitingShortTP`, `shortTpHit`, `liveShortSignal`.
+- `LabelRegistry`: tipurile noi de etichete; GC-ul comun rămâne.
+- **Ordinea instrucțiunilor** urmează exact pașii 1–9 din Pine. Contează pentru GC-ul etichetelor și pentru ordinea alertelor pe aceeași bară.
+- **Cu `showShort = false`**, bucla nu atinge nicio variabilă SHORT înafara condițiilor cu `showShort`. Rezultatul e identic cu 3.3; un test pe datele reale îl verifică (vezi Teste).
+
+### Setările în Sentiq
+- `slingshotParamsSchema.refine(p => p.showLong || p.showShort, { path: ['showShort'], message: 'Bifează cel puțin una dintre Long Signals și Short Signals.' })`.
+  - Zod 4: `refine` pe un `z.object` rămâne `ZodObject`, deci `.prefault({})` din `settingsSchema` și `parse({})` funcționează.
+  - Un PATCH cu amândouă `false` primește 400 cu mesajul.
+- **Cheile necunoscute.** `z.object` elimină cheile pe care nu le știe. Un `shortCloseBelowCloud` salvat cu prima variantă 3.4, sau trimis de un client vechi, e ignorat; nu se ajunge la o eroare.
+- **`IndicatorForm`:** câmpurile `bool` primesc opțional `lockedWhen(draft) → motiv | null`. Caseta e atunci dezactivată, cu motivul în `title`. Long e blocată când Short e debifat, și invers.
+  - Mesajul de eroare din formular folosește `issue.message` pentru erorile `custom`; pentru celelalte rămâne lista de câmpuri.
+- Setările salvate înainte primesc valorile implicite → doar Long → identic cu 3.3.
+
+### Graficul
+- **`slingshotShapes`:**
+  - `short` / `shortPreview` → `position: 'above'` la maximul lumânării, text „SHORT”, culoarea `shortColor` (roșu dacă `color === 'sl'`);
+  - `shortTakeProfit` → `'below'` la minim, „TAKE PROFIT”, `longTPColor`.
+- **`buildSegments`:** desenează `r.atr`, apoi `r.atrShort`, fiecare cu liniile și etichetele lui. La `side === 'short'`, eticheta TP e `below`, iar SL e `above`.
+- **`Charts`:**
+  - `ALERT_RO` + 4;
+  - `REASON_RO`: `takeProfitSignal` → „maximul depășit” (LONG) / „minimul depășit” (SHORT);
+  - tabelul are coloana „Semnal (V2)” cu eticheta LONG / SHORT;
+  - mesajul gol: „Niciun semnal în istoricul încărcat.”;
+  - caseta TP/SL are rândurile `atr`, apoi rândurile `atrShort` cu sufixul „(SHORT)”. E poziționată `absolute` peste grafic, deci nu mută nimic din pagină;
+  - titlul panoului folosește `SLINGSHOT_VERSION`.
+
+### Scanner, Azi, AI
+- **`summarize`:**
+  - `lastSignal = { side, time, entry, sl, tp, outcome, provisional }`;
+  - `liveSignal` rămâne LONG în formare; `liveShortSignal` e cel short;
+  - `waitingShortTP`;
+  - `atr: { side, tp, sl }` (LONG) și `atrShort: { side, tp, sl }` (SHORT).
+  - Un client vechi citește în continuare `atr`, cu aceeași formă.
+- **Azi:**
+  - ultimul semnal: „LONG 19 oct., activ” / „SHORT 19 oct., TP atins”;
+  - „SHORT în formare”;
+  - câte un rând pentru fiecare parte afișată: „TP x SL y”, apoi „SHORT · TP x SL y”;
+  - fără semnal: „fără semnal” (era „fără semnal LONG”).
+- **AI:** `semnal LONG în formare`, `semnal SHORT în formare`, `ultimul semnal SHORT tp`.
+
+### Teste
+1. **Oglinda exactă.** Pe fixture-urile reale BTC 1h și 4h se compară două rulări:
+   - `runSlingshot` cu `showLong:false, showShort:true`, pe lumânările reale;
+   - `runSlingshot` cu Long, pe lumânările negate.
+
+   Trebuie să fie identice:
+   - semnalele (bare, confirmare, prețuri × −1, rezultat, motiv);
+   - marcajele (tipuri inversate);
+   - alertele LONG ↔ SHORT;
+   - `atrShort` ↔ `atr` (× −1, partea);
+   - `last`.
+
+   Market Structure e exclusă, fiindcă nu e simetrică.
+2. **3.4 doar Long = 3.3.** Pe BTC 1h și 4h, istoricul semnalelor, marcajele, alertele, `atr`, `ms` și `last` sunt identice cu fixture-ul generat cu portul 3.3 înaintea schimbării, `__fixtures__/btc-usdt.v3.3.json`. `entryLow` se compară ca `entry`; `atrShort` e `null`.
+3. **Independența.**
+   - Pe BTC 1h și 4h, cu ambele bifate: partea LONG (semnale, marcaje, alerte, `atr`, starea LONG din `last`) e identică cu Long singur. Partea SHORT e identică cu Short singur.
+   - Un scenariu construit de mână: LONG confirmat → trend întors → SHORT confirmat. `waitingLongTP` rămâne true și alerta *ATR Stop Loss Hit* a LONG-ului vine la fel ca fără Short. `atr` și `atrShort` sunt afișate amândouă.
+4. **Schema.** Amândouă `false` sunt respinse. Implicitele sunt Long da, Short nu. Cheia veche `shortCloseBelowCloud` e ignorată.
+5. **Web** (`slingshot-draw.test.ts`):
+   - etichetele TP/SL ale unui short (sub / deasupra) și ale unui long;
+   - ambele părți afișate deodată;
+   - triunghiurile și culorile lor;
+   - marcajul din afara lumânărilor, ignorat.
+
+   Textele din Azi sunt JSX și se verifică în Chrome (vezi mai jos).
+6. **Server:** `summarize` cu un semnal short și `atrShort`.
+
+### Verificare înafara testelor
+- **Pe toate cele 192 de serii de backtest:**
+  - oglinda (testul 1);
+  - doar Long = portul 3.3 salvat în scratchpad înaintea schimbării;
+  - independența (testul 3).
+- **Pine:** codul SHORT se compară mecanic cu codul LONG. Fiecare linie LONG e transformată cu tabelul de inversare (`bull` → `bear`, `low` ↔ `high`, `<` ↔ `>`, …), iar rezultatul se compară cu liniile SHORT. Diferențele rămase trebuie să fie doar cele de afișare: culoarea, poziția etichetei, textul.
+- **În Chrome**, pe serverul de test (desktop și telefon, cont cu tranzacționare activă):
+  - graficul: etichetele SHORT, liniile, caseta TP/SL cu ambele părți;
+  - setările: casetele blocate;
+  - cardurile din Azi după o trecere a scanner-ului;
+  - fără depășire pe lățime și fără deplasarea paginii.
+
+## TD-SS34LIVE — implementează FD-SS34LIVE
+
+### Pine 3.4 (`sling-shot-system-3.4.pine`)
+**Inputs noi:**
+- în grupul „Signals”: `longColor`, `longTpColor`, `shortColor` (există), `shortTpColor`, `failedColor`, `invalidColor`, `signalSizeOpt` (Tiny / Small / Normal / Large / Huge → `signalSize`);
+- grupul nou „Cloud”: `cloudUpColor`, `cloudDownColor`.
+
+**Funcții:**
+- `fade(c, k) => color.new(c, 100 - (100 - color.t(c)) * k)`: opacitatea culorii înmulțită cu `k`. La o culoare opacă, e exact `color.new(c, 100 - 100k)` din 3.3.
+- `showValid(lbl, c, up)`: triunghiul părții, în culoarea ei.
+- `showInvalid(lbl)`: `label.style_xcross`, în `invalidColor`.
+- `showFailed(lbl)`: `failedColor`; forma rămâne.
+
+**Unde se folosesc:**
+- etichetele LONG (confirmate și în formare): `longColor`, `size = signalSize`;
+- TAKE PROFIT LONG: `longTpColor`. La SHORT: `shortColor` și `shortTpColor`;
+- semnalele active înlocuite la confirmarea unuia nou, și cele invalidate la întoarcerea trendului: `showInvalid`, în locul culorii `longSLColor`;
+- istoricul:
+  - eșec → `showFailed`;
+  - succes → `showValid` (poate fi X dacă un semnal nou era în formare).
+
+**Invalidarea live**, imediat după resetul complet LONG, la fiecare bară:
+```pine
+for lbl in activeSignalLabels
+    if bullV2Search
+        showInvalid(lbl)
+    else
+        showValid(lbl, longColor, true)
+```
+- La SHORT e la fel, după resetul complet SHORT, cu `bearV2Search` și `activeShortLabels`.
+- `bullV2Search` e adevărat la sfârșitul barei exact cât timp eticheta în formare e pe grafic: e creată la start și ștearsă la orice oprire a căutării.
+- Pe bara confirmării, semnalele vechi au ieșit deja din listă, invalidate.
+
+**Desenele:**
+- **Norul:**
+  - EMA-urile: `isUptrend ? cloudUpColor : cloudDownColor`;
+  - umplerea: `fade(…, 0.5)`.
+- **Liniile ATR:** `longTPColor` / `longSLColor` direct (în 3.3 era `color.new(c, 0)`, deci la culori opace e la fel). Fundalul etichetelor ATR: `fade(c, 0.2)`.
+- **Market Structure:** fundalul etichetelor e `fade(c, 0.15)`.
+
+### Portul (`slingshot.ts`)
+**`LabelColor`** devine aspectul etichetei: `'signal' | 'failed' | 'invalid'`. La TAKE PROFIT e mereu `'signal'`.
+- **Desenarea:** X dacă e `'invalid'`, altfel triunghi.
+- **`SlingshotMarker.color`** are aceleași valori.
+
+**Ordinea pe bară** urmează Pine:
+- invalidarea live vine după resetul complet al fiecărei părți: `labels.setColor(lbl, bullV2Search ? 'invalid' : 'signal')`;
+- istoricul: succes → `'signal'`, eșec → `'failed'`;
+- înlocuirea și întoarcerea trendului → `'invalid'`.
+
+Semnalele (`SlingshotSignal.outcome`), alertele, TP/SL și `last` nu se schimbă.
+
+### Setările (`params.ts`)
+- **Câmpuri noi:** `longColor`, `longTpColor`, `shortTpColor`, `failedColor`, `invalidColor`, `signalSize` (enum), `cloudUpColor`, `cloudDownColor`.
+- **`hex`** acceptă `#RRGGBB` și `#RRGGBBAA`.
+
+### Desenarea
+**`slingshot-draw.ts` → `slingshotShapes`:**
+- culoarea după tip și aspect;
+- `shape: 'x'` la `'invalid'`;
+- mărimea din `SIGNAL_SIZES[p.signalSize]`.
+
+`SIGNAL_SIZES` (px CSS):
+
+| Mărime | Lățime | Înălțime | Text |
+|---|---|---|---|
+| Tiny | 14 | 11 | 9 |
+| Small | 24 | 18 | 11 |
+| Normal | 32 | 24 | 13 |
+| Large | 44 | 33 | 16 |
+| Huge | 60 | 45 | 20 |
+
+**`primitives.ts`:**
+- **`ShapeLabel`:** primește `shape` și `size`.
+- **Renderer-ul:**
+  - desenează triunghiul cu lățimea și înălțimea date;
+  - sau un X de lățimea triunghiului, cu linii groase (`max(2, w / 6)`) și capete rotunde;
+  - textul stă la distanța formei.
+- **`hexA(c, k)` devine `fade(c, k)`:**
+  - citește `#RRGGBB(AA)` și `rgba()`;
+  - înmulțește opacitatea;
+  - îl folosesc norul (0,5) și fundalul etichetelor de pe linii (0,18).
+
+**`CandleChart`:** EMA-urile și norul folosesc `cloudUpColor` / `cloudDownColor`.
+
+**`Charts`:**
+- grupurile „Signals” (culorile, „Signal Size”) și „Cloud”;
+- tabelul de semnale: un semnal `active` al părții care are acum un semnal în formare (`last.liveSignal` / `last.liveShortSignal`) apare „invalidat (semnal nou în formare)”.
+
+### Teste
+- **Invalidarea live:** activ → în formare (X) → căutare anulată (din nou valid) → în formare din nou (X) → confirmat (X definitiv).
+- **Succesul** în timp ce un semnal nou e în formare: valid. **Eșecul**: `'failed'`.
+- **Independența părților:** marcajele fiecărei părți, cu aspectul lor, sunt aceleași cu ambele bifate ca atunci când partea e singură. Testul o verifică pe BTC 1h / 4h, iar verificarea pe 192 de serii. Scenariul SHORT e cel LONG întors.
+- **3.3** (fixture-ul): semnalele, alertele, TP/SL și `last` sunt identice. Marcajele au aceleași bare și tipuri. Culoarea `'tp'` din 3.3 devine `'signal'`, iar `'sl'` devine `'failed'` sau `'invalid'`, după rezultatul semnalului.
+- **Oglinda** (graficul întors) și **independența** pe datele reale: rămân.
+- **Web:**
+  - `slingshotShapes`: culorile fiecărui tip, X-ul și mărimile;
+  - `fade` cu `#RRGGBBAA`.
+
+## TD-OPACITY — implementează FD-OPACITY
+
+### Culori (`src/web/color.ts`, nou)
+- **`parseColor(css)`:**
+  - întoarce `{ hex: '#RRGGBB', alpha: 0..255 }`;
+  - citește `#RGB(A)`, `#RRGGBB(AA)` și `rgb()` / `rgba()`;
+  - mutat din `StudySettings.hexOf`.
+- **`formatColor(hex, alpha)`:** `#RRGGBB` la 255, altfel `#RRGGBBAA`, cu majuscule.
+- **`fade(css, k)`:** `rgba(r, g, b, a·k)`.
+
+### `ColorPicker` (`src/web/components/ColorPicker.tsx`, nou)
+- **Butonul:** 48 × 32 px, `aria-label` de la apelant. Arată culoarea peste carouri (`linear-gradient`), iar titlul e „#RRGGBB · 74 %”.
+- **Panoul:**
+  - `createPortal` în `document.body`, `position: fixed`, `z-50`;
+  - așezat sub buton, aliniat la dreapta lui. Dacă nu încape, deasupra; mereu cu 8 px față de marginile ferestrei;
+  - conține `input type=color`, câmpul hex (validat: `#RRGGBB`), glisorul `range` 0–100 și valoarea „74 %”.
+- **Închiderea:**
+  - `pointerdown` în afara panoului și a butonului (capture);
+  - Esc, ascultat pe `window` în capture, cu `preventDefault`: fereastra de setări vede tasta folosită și rămâne deschisă; focusul revine pe buton;
+  - focusul mutat cu Tab pe un element din afara panoului (`relatedTarget`). Fereastra de culoare a browserului nu dă focusul unui element, deci nu-l închide;
+  - butonul ieșit din ecran.
+- **Poziția:** la `scroll` în afara panoului (capture) și la `resize` (tastatura telefonului), panoul se reașază lângă buton, cu `requestAnimationFrame`.
+- **Focusul:** la deschidere, focusul trece pe glisor.
+- Fiecare schimbare cheamă `onChange(formatColor(…))`.
+
+### Unde se folosește
+- `Charts.IndicatorForm`: câmpul `color` (Slingshot, LMA);
+- `StudySettings`: `ColorField` (Intrări, Stil, palete, linii orizontale);
+- `HLineSettings`: `Color`.
+
+### Scheme
+- **`params.ts` și `lma-params.ts`:** `hex` acceptă `#RRGGBBAA`.
+- **`lma.ts → hexToRgba`:** citește și alfa (`a` = AA, implicit 255). Semantica Pine rămâne:
+  - `color.new` înlocuiește alfa;
+  - `from_gradient` amestecă alfa.
+- **`studies.ts`:** acceptă deja `#RRGGBBAA`.
+
+### Teste
+- **`color.ts`:** citiri și formatări, inclusiv `rgba(…, 0.5)` → `#RRGGBB80`; `fade`.
+- **Schemele:** `#RRGGBBAA` acceptat la Slingshot și LMA.
+- **`lma.ts`:** `hexToRgba('#00FFAA80').a === 128`.
+- **Chrome:**
+  - panoul deschis la 1440 / 390 / 320, în ecran, fără să mute pagina;
+  - Esc nu închide fereastra de setări;
+  - culoarea și opacitatea salvate apar pe grafic.
+
+## TD-SSSL — implementează FD-SSSL
+
+### Pine 3.4
+- **Inputs noi** în „Signals”, după `shortTpColor`:
+  - `longSlColor = input.color(color.red, "Long Stop Loss Color")`;
+  - `shortSlColor = input.color(color.red, "Short Stop Loss Color")`.
+- **Ramura de eșec a istoricului LONG**, după `showFailed(lbl)`:
+  `label.new(bar_index, low, "STOP LOSS", style=label.style_triangleup, yloc=yloc.belowbar, color=longSlColor, textcolor=longSlColor, size=signalSize)`.
+- **La SHORT:** `high`, `label.style_triangledown`, `yloc.abovebar`, `shortSlColor`.
+- **Ordinea:** etichetele se creează în bucla istoricului, după eticheta TAKE PROFIT a barei. Portul o urmează.
+
+### Portul
+- **Tipuri noi de etichetă:** `LabelKind` și `SlingshotMarker.kind` primesc `stopLoss` și `shortStopLoss`.
+- **Crearea:** `labels.create(i, 'stopLoss', 'signal')` în ramura de eșec, după `setColor(lbl, 'failed')`. La SHORT e la fel.
+- **`params.ts`:** `longSlColor`, `shortSlColor` (`#FF5252`).
+
+### Graficul
+- `slingshotShapes`:
+  - `stopLoss` stă sub lumânare, `shortStopLoss` deasupra;
+  - textul e „STOP LOSS”;
+  - culorile sunt `longSlColor` / `shortSlColor`.
+- `Charts`: cele două culori în grupul „Signals”.
+
+### Teste
+- **Scenariul de eșec:** eticheta STOP LOSS pe bara eșecului, la LONG și la SHORT.
+- **Eșec în timpul unei invalidări live:** `failed` plus STOP LOSS.
+- **3.3:** marcajele în afară de `stopLoss` sunt aceleași; iar fiecare eșec are exact o etichetă `stopLoss`, pe bara `closedBar` a semnalului.
+- **Desenarea:** poziția, textul și culorile.
+
+## TD-SSLIVEBOX — implementează FD-SSLIVEBOX
+
+### Pine 3.4 (afișarea ATR)
+**LONG:**
+```pine
+if liveSignalActive
+    [h, b] = getHighestHigh(lookback)
+    displayTP := h + takeProfitAtrValue
+    displaySL := liveSignalLow - stopLossAtrValue
+    displayBar := liveSignalBar
+    shouldShow := true
+else if waitingLongTP
+    if (not hideAtrOnTP or not tpHit)
+        … (ca în 3.3)
+```
+La SHORT e la fel, cu `liveShortActive` înaintea `waitingShortTP`. Garda „ascunde la SL” rămâne după.
+
+### Portul
+Aceeași ordine în cele două blocuri de afișare. `result.atr` / `atrShort` și scanner-ul urmează automat.
+
+### Teste
+- **Semnal urmărit + unul în formare:** `atr` are nivelurile celui în formare.
+- **După anulare:** din nou ale celui urmărit.
+- **După confirmare:** ale celui nou.
+- **TP atins cu „hide on TP”:** apare cel în formare.
+- **Datele reale:** oglinda și independența rămân. Comparația cu 3.3 exclude `atr` doar când e un semnal în formare la ultima bară.
+
+## TD-FILLS — implementează FD-FILLS
+
+### Cheile umplerilor (`src/web/indicators/style.ts`)
+- **`styleFills(mod, result)`** întoarce `{ key, title, plot1, plot2, color?, editable }[]`:
+  - **umplerile declarate:** din `mod.fillConfig` (`editable !== false`), cu cheia `id`; culoarea e `color`;
+  - **umplerile desenate:** din `result.fills`, cu cheia `fillKeyOf`; culoarea e `options.color` cu transparența `options.transp` inclusă (`#RRGGBBAA`);
+  - **deduplicarea** se face după cheie.
+- **Culoare editabilă:** doar fără `colors` și fără `gradient`.
+- **`fillKeyOf(fills)`** întoarce cheile, în ordine:
+  - `id` dacă există;
+  - altfel `f_` + titlul curățat (`[^A-Za-z0-9_]` → `_`, cel mult 60 de caractere);
+  - altfel `f_<plot1>_<plot2>`;
+  - la a doua apariție a aceleiași chei se adaugă `_2`, `_3`.
+
+  Aceeași funcție e folosită și la afișare, și la desenare.
+- **Titlul:** al umplerii; altfel „<titlul liniei 1> – <titlul liniei 2>” (din `plotConfig` / `hlineConfig`).
+
+### Aplicarea (`styledEntry`)
+- **`study.fills[key].visible === false`:** umplerea iese din `fillConfig` și din `result.fills`.
+- **`color`**, la o umplere cu o singură culoare:
+  - la `fillConfig`: `color`;
+  - la `result.fills`: `options.color = c`, fără `options.transp`.
+
+  Culoarea aleasă e cea finală, cu opacitatea ei.
+- **Umplerile liniilor ascunse** ies, ca până acum.
+
+### Schema și memoria
+- **`studies.ts`:**
+  - `studyFillStyleSchema = { visible?, color? }` (strict);
+  - `studySchema.fills = keyed(…, 40)`;
+  - `studyMemoryEntrySchema` include `fills`.
+- **`memory.ts`:** păstrează `fills`.
+
+### Interfața
+- **`Charts`** trimite către `SettingsDrawer` → `StudySettings` rezultatul curent al studiului (`studyStates.get(uid)?.result`).
+- **`StudySettings`:**
+  - secțiunea „Umpleri”, după liniile orizontale;
+  - fiecare rând are bifa, titlul și `ColorField` (doar pentru o culoare editabilă);
+  - draft-ul, cheia de resetare, salvarea (`clean`) și „Valorile implicite” includ `fills`.
+
+### Teste
+- **`style.test.ts`:**
+  - cheile: id, titlu, perechea și duplicatele numerotate;
+  - transparența inclusă în culoarea afișată;
+  - o umplere ascunsă iese din ambele liste;
+  - culoarea aleasă înlocuiește `options.color` și scoate `transp`;
+  - o umplere cu gradient nu se recolorează.
+- **`studies.test` / `memory.test`:** `fills` acceptat, validat, ținut minte.
+- **Chrome:**
+  - Bollinger: fundalul ascuns și apoi recolorat;
+  - RSI: banda 70 / 30;
+  - la 1440 / 390.
+
+## TD-ORDEREDIT — implementează FD-ORDEREDIT
+
+### Model (`src/shared/trading.ts`)
+```ts
+/** One change: a position's protection (an existing SL / TP order, or a new one), or an open order. */
+type ModifyChange =
+  | { what: 'sl' | 'tp'; orderId: string | null; level: number | null }   // orderId null: add; level null: remove
+  | { what: 'order'; orderId: string; trigger: boolean; price?: number; triggerPrice?: number; amount?: number;
+      takeProfit?: number | null; stopLoss?: number | null };
+modifyTicketSchema = {
+  accountId, idemKey, market, symbol,
+  position?: { side: 'long' | 'short'; ref?: string },   // ref: the eToro position id
+  changes: ModifyChange[] (1–4),
+}
+// Refuzat: un SL / TP fără poziție, o adăugare fără nivel, aceeași valoare a aceluiași ordin de două ori (SL-ul și TP-ul
+// unui `oco` OKX pot fi schimbate împreună), un ordin schimbat și, în același timp, ca SL / TP; mai mult de un SL și un TP noi.
+interface ModifyStepPlan { change: number; how: 'amend' | 'position' | 'place' | 'cancel' | 'place-then-cancel' | 'cancel-then-place';
+  before: {...}; after: {...}; orderId: string | null }
+interface ModifyPreview { ticket; displaySymbol; last; steps: ModifyStepPlan[]; warnings; errors; env; currency }
+interface ModifyResult { status: 'done' | 'partial' | 'failed' | 'unknown'; steps: { change: number; what: string; ok: boolean; orderId: string | null; message: string | null }[] }
+```
+- **`OrderRow`** primește:
+  - `stopLoss` / `takeProfit`: atașate, din `o.stopLossPrice` / `o.takeProfitPrice`;
+  - `contractSize`: monede pe contract (PnL-ul unui ordin fără poziție).
+- **Cum se poate schimba un ordin** nu e un câmp al rândului: pagina îl află cu `orderEditMode(exchange, row)` (shared), aceeași funcție pe care o folosește serverul.
+- **`PositionRow`:** neschimbat. SL / TP-ul ei sunt ordinele cu rolul `sl` / `tp` (`roleOf`) sau rândurile eToro `sl-<id>` / `tp-<id>`.
+
+### Citirea (`accounts.ts`)
+- **OKX:** în plus `{ method: 'privateGetTradeOrdersAlgoPending', ordType: 'conditional,oco' }`. Fără `method`, ccxt trimite tipul combinat la alt endpoint.
+- **Bitget:** în plus `{ type: 'swap', productType: 'USDT-FUTURES', planType: 'profit_loss' }`.
+- **Câmpurile noi:** `stopLoss` / `takeProfit` pe fiecare ordin.
+- **`orderEditMode(exchange, row)`**, după tabelul din FD:
+  - rândurile eToro `sl-` / `tp-` (`cancellable: false`) primesc `'amend'`, ordinele eToro în așteptare `null`;
+  - IBKR primește `null`.
+- **`pnl.ts → roleOf` / `pnlLines`:** un ordin fără `triggerPrice`, dar cu `stopLoss` / `takeProfit` (OKX `conditional` / `oco`, TP / SL Bybit / Bitget), dă câte o linie pentru fiecare nivel, legată de ordin.
+
+### Traderii (`Trader.modify`)
+- **Interfața:** `Trader` primește:
+  - `normalizeModify(ticket) → ModifyPlan` (`{ preview, internal }`: ce a citit traderul — ordinele, poziția — rămâne pe server);
+  - `modify(plan) → ModifyResult`.
+- **Ordinul real:** fiecare trader citește ordinul țintă din nou, pe simbol (cu listările de declanșare ale platformei), și refuză („NOT_FOUND”) un ordin care nu mai e deschis.
+
+**`CcxtTrader`:**
+- **Rotunjirea:** `priceToPrecision` / `amountToPrecision`; prețul de acum vine din `fetchTicker`.
+- **Bybit:**
+  - **Ordin:** `editOrder(id, symbol, type, side, amount, price, { triggerPrice, takeProfit, stopLoss })` → `/v5/order/amend`.
+  - **SL / TP de poziție:**
+    - `privatePostV5PositionTradingStop({ category: 'linear', symbol, tpslMode: 'Full', positionIdx, stopLoss | takeProfit })`;
+    - valoarea `'0'` șterge;
+    - se folosește când rândul are `info.stopOrderType` ∈ {`StopLoss`, `TakeProfit`}, sau la adăugare;
+    - alte ordine condiționale reduce-only: `amend` cu `triggerPrice`.
+- **OKX:**
+  - **Ordin normal:** `privatePostTradeAmendOrder({ instId, ordId, newPx?, newSz?, attachAlgoOrds?: [{ attachAlgoId, newTpTriggerPx, newTpOrdPx: '-1', newSlTriggerPx, newSlOrdPx: '-1' }] })`.
+  - **Ordin algo:** `privatePostTradeAmendAlgos({ instId, algoId, newSz?, newTriggerPx?, newOrdPx?, newTpTriggerPx?, newTpOrdPx?, newSlTriggerPx?, newSlOrdPx? })`. `'0'` șterge un TP / SL; un `conditional` cu un singur nivel, șters, se anulează.
+  - **Adăugare:** `createOrder(symbol, 'market', closing, amount, undefined, { stopLossPrice | takeProfitPrice, reduceOnly: true, hedged? })`.
+- **Binance:**
+  - **Futures, limită:** `editOrder(id, symbol, 'limit', side, amount, price)`.
+  - **Spot:** `editOrder` (`cancelReplace`, atomic).
+  - **Stop-urile futures:** înlocuire.
+- **Kraken:** `editOrder(id, symbol, type, side, amount, price, { triggerPrice })` (amend).
+- **Coinbase:** limită GTC → `editOrder(id, symbol, 'limit', side, amount, price)`; restul → înlocuire.
+- **KuCoin, Bitget și stop-urile Binance:** înlocuire, cu metodele existente:
+  - plasarea: aceleași parametri ca `place` (hedge, marja poziției, `reduceOnly`, direcția stop-ului `stopParams`);
+  - anularea: `cancel` (`trigger` / KuCoin `stop`).
+- **Ordinea înlocuirii:**
+  - `place-then-cancel` pentru un ordin futures care doar închide (`reduceOnly`, sau SL / TP de poziție), cu declanșare sau limită;
+  - `cancel-then-place` pentru restul.
+- **Ce copiază ordinul nou:** tipul (limită / la piață), partea, cantitatea (sau cea nouă) și declanșarea / prețul (cele noi), cu marja ordinului (altfel a poziției). TP / SL atașate le ia din ordinul citit, unde se citesc, sau din formular.
+- **Direcția declanșării se păstrează:** fiecare pas o ține (`dir`): KuCoin o spune (`stop`), altfel din locul declanșării față de prețul de acum (un ordin nedeclanșat așteaptă deasupra o urcare, dedesubt o coborâre); un SL / TP de poziție după rol.
+  - un ordin futures care doar închide pleacă drept SL / TP-ul care este (`stopLossPrice` / `takeProfitPrice`), un TP limită rămâne limită;
+  - restul, ca stop în aceeași direcție (`stopParams(…, dir)`); unde platforma nu o poate numi (o cumpărare la coborâre pe futures, stop-urile spot în afara KuCoin / Coinbase), înlocuirea e refuzată la verificare, înainte de orice anulare.
+- **Verificări în plus:** o declanșare mutată de cealaltă parte a prețului e refuzată (s-ar executa imediat); un SL / TP de poziție trebuie să închidă poziția și să se declanșeze ca acel nivel; un ordin care doar închide nu primește TP / SL atașate; un ordin negăsit când o listă n-a putut fi citită e spus ca atare.
+
+**`EtoroTrader`:**
+- `sl-<id>` / `tp-<id>` și adăugarea (`position.ref`) → `PATCH /api/v2/trading/{demo/}positions/{id}`, cu body-ul:
+  - `{ stopLossRate }`, `{ takeProfitRate }`;
+  - `{ clearStopLoss: true }`, `{ clearTakeProfit: true }`.
+- Răspunsul 202 înseamnă „acceptat”, deci starea e `sent`.
+- Ordinele în așteptare nu se modifică de aici (verificarea o spune: „anulează-l și pune altul”).
+
+**`AlpacaTrader`:** `PATCH /v2/orders/{id}` cu `limit_price` / `stop_price` / `qty` (cele schimbate). Ordinul nou are alt id.
+
+**`Trading212Trader`:** înlocuire (`DELETE /equity/orders/{id}`, apoi plasarea cu tipul ordinului citit).
+
+### Serviciul și rutele
+- **`TradingService.previewModify` / `modify`:**
+  - aceleași verificări ca `place` (`access` cu piața, `throttle`);
+  - jurnalul `action: 'modify'`, cu cheia formularului (a doua trimitere dă primul rezultat);
+  - `detail` = planul și rezultatul fiecărui pas;
+  - starea jurnalului: `sent` (toți pașii OK), `error` (niciunul), `unknown` (pas incert), `rejected` (verificarea).
+- **Rutele:**
+  - `POST /api/trading/:id/modify/preview`;
+  - `POST /api/trading/:id/modify`.
+
+  Corpul e validat cu `modifyTicketSchema`, iar contul trebuie să fie al utilizatorului.
+- **`TradeLogRow.action`** primește `'modify'` („Modificare” în jurnal).
+
+### Impactul pe PnL (`src/web/chart/pnl.ts`)
+- **`pnlAtLevel({ long, entry, qty, quote }, level) → { pnl, pct, text }`:** aceeași formulă ca liniile de acum.
+- **`pnlImpact(basis, before, after, wasBasis = basis)`:** „−42,10 USDT (−1,6%) · înainte −56,00 USDT (−2,1%) · +13,90 USDT”; fără `before` (nivel nou) doar PnL-ul; fără `after` (șters) „fără nivel (era …)”. `wasBasis`: ordinul de dinainte, când i se schimbă și cantitatea.
+- **`tradeLinesOf`:** linia de intrare primește `basis` (toată poziția), liniile SL / TP / ordin primesc `label` (titlul fără PnL, pentru titlul la alt nivel).
+- **eToro:** rândurile `sl-<id>` / `tp-<id>` aparțin doar poziției `<id>` (`roleOf`): două poziții pe același instrument au fiecare doar liniile ei.
+- **Un ordin de perpetual** (`BTC/USDT:USDT`) e futures oriunde e listat (contul unificat KuCoin îl dă cu cele spot): e SL / TP-ul poziției.
+
+### Interfața
+- **`src/web/components/modify-seeds.ts`** (pur, testat):
+  - `positionSeed(account, portfolio, pos)`, `holdingSeed(account, portfolio, balance)`: rândurile SL / TP (din `tradeLinesOf`, cu ce închide fiecare), `basis` pentru unul nou, `add` (se poate adăuga: futures crypto și eToro);
+  - `orderSeed(account, portfolio, order)`: un ordin care închide o poziție (PnL-ul la nivelul lui), unul de intrare (ce deschide), rândurile eToro `sl-` / `tp-` (formularul poziției lor);
+  - `stepImpact(step, context)`: PnL-ul unui pas planificat, din valorile serverului (rotunjite); același în formular și pe grafic.
+- **`src/web/components/ModifyTicket.tsx`:**
+  - formular (nivelurile cu „Șterge”, sau câmpurile ordinului după `orderEditFields`) cu impactul sub fiecare câmp → **Verifică** (`/modify/preview`) → confirmarea (`ModifyConfirm`: vechi → nou, cum pleacă, PnL, avertismente, erori, DEMO) → **Confirmă și trimite** (`/modify`, cu tichetul întors de verificare) → rezultatul fiecărui pas (`ModifyOutcome`);
+  - `useModifySend(accountId)`: cheia pe versiunea schimbărilor; `fresh()` o uită după o trimitere (aceleași schimbări făcute din nou sunt o acțiune nouă); refuzul PERMISSION / DISABLED recitește conturile.
+- **`Trades.tsx`:**
+  - poziții: **SL / TP** lângă „Închide”; dețineri: **SL / TP** (eToro cu o singură poziție; crypto spot când are deja ordine SL / TP);
+  - ordine: **Modifică** lângă „Anulează”, când `orderSeed` dă ceva.
+- **Graficul:**
+  - `useTradeLines` (înlocuiește `usePositionLines`): liniile `tradeLinesOf` ale fiecărui cont, cu contul lor;
+  - `src/web/chart/trade-drafts.ts` (pur, testat): `isDraggable`, `withDrafts` (linia trasă punctată, cu PnL-ul la noul nivel; TP / SL-ul unui ordin urmează prețul nou al ordinului), `liveDrafts` (o linie dispărută își ia schița), `draftGroups`, `anchorOf` (intrarea poziției sau linia ordinului), `draftTicket` (schimbările unui grup);
+  - **`CandleChart`:** `PriceLineSpec` primește `id` și `draggable`; props noi `onDragLine(id, price)`, `dragTitle(id, price)`, `lineOverlays` (`{ key, price, node }`);
+    - liniile care se trag rămân price lines (ținute după id), o tragere le mută pe loc (`applyOptions`); primitiva `DragTargets` (fără desen) prinde pointerul și dă cursorul ↕;
+    - mouse: direct; deget: o atingere selectează linia (grosime 2), apoi se trage; atingerile acelui deget nu mai ajung la grafic (oprite în captură pe gazdă); o atingere în altă parte deselectează;
+    - o linie care e trasă rămâne sub deget și când liniile se redesenează (PnL-ul de acum se schimbă cu fiecare preț);
+    - `lineOverlays`: HTML la y-ul prețului, urmărit cadru cu cadru cât există, la stânga panoului (titlul liniei e la dreapta), ținut în panou;
+  - **`TradeDraftBar`:** Confirmă (verificarea; erorile lângă butoane, liniile rămân trase; avertismentele → fereastra de confirmare, pe `document.body`; altfel trimiterea) și Renunță; o linie trasă din nou cât durează verificarea anulează trimiterea (pleacă doar nivelurile arătate); pe telefon doar iconițele (✓ / ✕), ca bara să lase liberă linia de lângă intrare;
+  - rezultatul: `Toast` (mutat în `ui.tsx`, folosit și de Liste).
+
+### Alinierea
+- antetul graficului: numele sursei e `self-center leading-6`, ca variația pe 24 h de lângă el;
+- tabelul pozițiilor: legătura simbolului și „isolated” într-un `inline-flex items-center`.
+
+### Siguranța codului
+- Testul de securitate (`server.test`): `editOrder` și `PATCH` doar în `src/server/exchange/trading/` (TD-TRADING §7, actualizat); retragerile, transferurile, `cancelAllOrders` și `closeAllPositions` nicăieri.
+
+### Teste
+- **`trading.test`:** schema (inclusiv SL + TP ale aceluiași `oco`, limita de 4) și `orderEditMode` / `orderEditFields`.
+- **`modify.test`** (client ccxt fals) și **`crypto.test`** (ccxt real, cereri înregistrate): KuCoin `place-then-cancel` / `cancel-then-place` și eșecurile, Binance, Bybit `trading-stop` și amend, OKX amend-algos / amend-order și citirea din algo pending, copia unui stop spot KuCoin.
+- **`brokers.test`:** eToro `PATCH`, Alpaca `PATCH`, Trading 212 anulare apoi plasare.
+- **`service.test`:** jurnalul `modify`, cheia formularului, accesul.
+- **`server.test`:** citirile OKX / Bitget.
+- **`pnl.test`, `modify-seeds.test`, `trade-drafts.test`:** liniile, rândurile formularelor, impactul pașilor, ce se trage, schițele și tichetele lor (inclusiv eToro).
+- **Chrome** (serverul de test cu KuCoin și eToro simulate, `createOrder` / `cancelOrder` / `PATCH` înregistrate), la 1440 / 390 / 320: formularele și confirmările din Tranzacții; pe grafic cursorul, tragerea, eroarea lângă butoane, Renunță, trimiterea (ordinul nou, apoi anularea celui vechi), confirmarea cu avertismente a unui ordin; telefonul cu atingeri; nimic nu mută pagina; alinierea măsurată.
+
+## TD-TRADEUI — implementează FD-TRADEUI
+
+### Casetele (`src/web/chart/trade-labels.ts`, pur, testat)
+- **Culorile:** `TRADE_COLORS` / `TRADE_COLORS_LIGHT` (long, short, tp, sl, buy, sell, liquidation, up, down).
+- **Conținutul și geometria:**
+  - `TradeLabelSpec`: `{ qty, text, textColor, close, fill }`;
+  - `labelGeometry(spec, plotWidth, measure)`: celulele (cantitate, text, × de 20 px) și `x`, cu marginea dreaptă la `plotWidth − 64` (minimum 4 px de la stânga);
+  - `labelPartAt(g, x)`: `'body' | 'close' | null`.
+- **Textul și culoarea liniei:**
+  - `labelText(line, price, last, entry?)`: PnL-ul doar în bani (intrarea, la `last`), felul ordinului, „Lichidare”;
+  - `orderText(o)`, `lineColor(line, palette)`, `lineQty(line)`.
+- **`chartLineOf(line, opts)`:** `PriceLineSpec`-ul liniei, cu titlul gol, stilul (continuu; ordin întrerupt; lichidare și schiță punctate) și `label`.
+
+### Graficul
+- **`PriceLineSpec.label`:** când există, biblioteca desenează linia și prețul pe scală (`title: ''`), iar caseta e a primitivei.
+- **`TradeLabels`** (în `primitives.ts`, înlocuiește `DragTargets`):
+  - **Desenul:** pe fiecare linie cu casetă, în spațiul bitmap (Retina), peste lumânări:
+    - fundalul graficului; cantitatea pe culoarea liniei la intrare; separatoarele; conturul (2 px la linia selectată sau trasă);
+    - textele, cu linia de bază la `mijloc + înălțimea lui „0” / 2`, deci cifrele sunt pe mijloc;
+    - ×-ul din două linii de 7 px, care se luminează sub mouse.
+  - **Linia trasă:** e desenată unde e pointerul, cu textul de acolo (`setDragged`).
+  - **Pointerul:** `hit(x, y)` dă caseta și partea ei; `lineAt(y)` dă linia trasabilă; `hitTest` dă cursorul (`pointer` pe ×, `ns-resize` pe casetă / linie).
+- **`CandleChart`:**
+  - **Apăsarea:** întâi caseta. Pe × e o acțiune (fără mișcare → `onLineAction(id)`; o atingere nu ajunge la grafic). Pe corpul unei casete trasabile e linia însăși.
+  - **Hover:** din `pointermove` (mouse).
+  - **`dragText(id, price)`:** textul casetei trase (înlocuiește `dragTitle`).
+  - **Suprapunerile** (Confirmă / Renunță): pe linie, cu marginea dreaptă la marginea stângă a casetelor de pe acel nivel minus 6 px (unde nu e casetă, la `plotWidth − 64`).
+    - Fără loc în stânga casetei (`right − w < 8`): deasupra casetei, cu marginea dreaptă a casetei, sau dedesubt. Revine pe linie doar cu 16 px în plus (histerezis pe cheie, `overlayStacked`).
+    - Eroarea se deschide în partea opusă casetei.
+    - Măsurate înainte de afișare, deci ascunse un cadru.
+    - Eroarea primește prin `data-open` / `data-msg` și variabile CSS (`--overlay-room`, `--overlay-span`, `--overlay-from`) unde se deschide.
+- **`Charts`:**
+  - **Liniile:** `useTradeLines` dă liniile (fără „PnL acum”) și portofoliile; fiecare linie → `chartLineOf`.
+  - **×:** `onLineAction` → `lineActionOf` (`trade-drafts.ts`):
+    - intrarea → `OrderTicket` cu `closeSeed` / `sellSeed`, mutate din `Trades.tsx` în `components/trade-seeds.ts`;
+    - SL / TP și TP / SL atașat → `LineActionDialog` cu o modificare (`level: null` / `stopLoss: null`);
+    - un ordin → `LineActionDialog` cu anularea.
+- **`LineActionDialog`:**
+  - ștergerea: verificarea la deschidere, apoi `ModifyConfirm` și „Confirmă și trimite”;
+  - anularea: ordinul și „Anulează ordinul”;
+  - rezultatul în `Toast`.
+- **`TradeDraftBar`:**
+  - **Butoanele:** casete ca ale trade-ului (`h-5`, `rounded-[3px]`, 12 px, `pointer-coarse:h-7`): „Renunță” (`border-line-strong bg-chart`), apoi „Confirmă” (`#2962FF`, text alb, cercul de încărcare peste textul ascuns, deci lățimea rămâne).
+  - **Eroarea:** poziționată după `data-*` (variantele `in-data-*` din Tailwind 4).
+- **O modificare neconfirmată:**
+  - `chartLineOf(…, { drafted })` → `label.pending`, culoarea liniei la 60 % (`#RRGGBB99`) și `axisLabelColor` plin (`PriceLineSpec.axisLabelColor` nou, trimis bibliotecii);
+  - linia trasă primește același aspect în timpul tragerii (`applyOptions`: punctată, estompată), apoi revine;
+  - caseta: `TradeLabels` o desenează în culoarea plină a liniei, cu fundalul colorat `fade(culoare, 0,22)` și conturul, textele și ×-ul la 70 %.
+
+### Alinierea
+- **Tiparul:** un element lângă un text de unul sau mai multe rânduri stă într-un `flex h-[1lh] items-center`, deci pe mijlocul primului rând al textului, la orice font. Înlocuiește ajustările `mt-px` / `mt-0.5` / `mt-1` din:
+  - `ui.tsx` (`ErrorNote`, `Warning`), `TradingControls` (`FundsRiskNote`);
+  - `Economy` (săgeata categoriei), `AiSettings` (radio), `DaySummary` (iconița titlului);
+  - `Charts` (iconița alertei, legată de nume într-un grup care nu se rupe).
+- **`Toast`:** textul pe `leading-5`, butonul × de `h-5`, centrat.
+- **Tabelele `Trades` cu butoane:** `[&_td]:align-middle` (precedentul Setări / Liste); simbolul (sigla și numele) e un `flex` de bloc, nu `inline-flex`, care s-ar așeza pe linia de bază a siglei.
+- **`Modal`, `AccountWizard`:** titlul e `flex items-center`.
+- **Liste:** bifele în `flex items-center`.
+- **Verificarea:** `scratchpad/audit/align-audit.ts`, scriptul Chrome cu detectorul (rânduri de tabel cu o celulă de acțiuni, rânduri flex, iconiță + text), pe toate paginile, derulate, și în ferestrele principale (ordin nou, SL / TP, Modifică, indicatori, setări Slingshot, căutare, cont nou, rezumatul zilei), la 1440 / 390 / 320. Pragul e 1,5 px.
+
+### Teste
+- **`trade-labels.test`:** textul, culorile, linia (fără titlu, cu casetă, stilurile), geometria, ce face ×-ul fiecărei linii (formularul de închidere, ștergerea, anularea, nimic fără tranzacționare, „Vinde” pe o deținere).
+- **Chrome:**
+  - casetele la 2× (măsurate pe pixeli: ×-ul centrat exact, cifrele la sub jumătate de pixel fizic);
+  - bara lângă caseta de intrare (centrul pe linie);
+  - ×-ul mesajului (0,5 px de text);
+  - tragerea cu mouse-ul și cu degetul la 1440 / 390 / 320;
+  - verificarea de aliniere: zero diferențe.
+
+## TD-REVERSE — implementează FD-REVERSE
+
+### Modelul (`shared/trading.ts`)
+- **`reverseTicketSchema`:** `{ accountId, idemKey, symbol, side: 'long' | 'short' }` (strict).
+- **`ReversePreview`:** `{ ticket, displaySymbol, base, from, to, leverage, marginMode, last, cancels, hedged, warnings, errors, env }`.
+- **Rezultatul** are forma `ModifyResult`.
+- **`subKey(idemKey, n)`:** cheia derivată a ordinului n al acțiunii (ultimul octet + n), deci fiecare ordin are id-ul lui de client, iar întregul se trimite o singură dată.
+- **`TradeLogRow.action`** primește `'reverse'` („Întoarcere poziție”).
+
+### Traderul crypto
+- **`normalizeReverse`:**
+  - poziția (`fetchPositions`, după latură; în hedge, după `positionSide`): mărimea (contracte × mărimea contractului), levierul rotunjit (1–125), marja;
+  - cele două ordine verificate prin `normalize`: închiderea (market, reduce-only, cheia `subKey(1)`) și deschiderea (market, levierul, marja, `subKey(2)`);
+  - erorile și avertismentele lor, fără nota „hedge: cealaltă poziție rămâne deschisă”, care nu se aplică;
+  - ordinele de anulat: ale părții care închide, reduce-only (OKX algo, plan Bitget), ale acestei poziții în hedge; SL / TP-ul de poziție Bybit, separat.
+- **`reverse`:**
+  1. `place(închidere)`. Refuzată sau eroare → stop.
+  2. `place(deschidere)`. Refuzată → pasul eșuat, cu mesajul „poziția a fost închisă, dar…”. Rezultat necunoscut → stop.
+  3. `cancelOpen` pe fiecare ordin vechi (funcția comună cu modificarea); Bybit: `trading-stop` cu 0 pe slotul vechii poziții.
+- **Brokerii:** nu implementează `normalizeReverse`, deci serviciul dă `UNSUPPORTED`.
+
+### Serviciul și rutele
+- **`claimAction`** (comun cu `modify`): rezervarea cheii în jurnal; a doua trimitere primește rezultatul primei.
+- **`previewReverse`, `reverse`:** acces futures, limita pe minut, jurnalul, `settle`.
+- **Rutele:**
+  - `POST /api/trading/:id/reverse/preview`;
+  - `POST /api/trading/:id/reverse`.
+
+### Pagina
+- **`ReverseDialog`:** verificarea la deschidere, confirmarea, `ModifyOutcome` cu etichetele întoarcerii; `canReverse(account, symbol)`.
+- **`Charts`:**
+  - suprapunerea fiecărei intrări futures întoarse are butonul ⇅ (casetă `BOX`, în culoarea poziției), fără `clamp` (dispare cu linia);
+  - cu schițe, rândul e `[⇅][Renunță][Confirmă]`, iar `TradeDraftBar` nu mai e poziționat, deci eroarea se așază față de toată suprapunerea.
+- **`Trades`:** „Întoarce” pe rândul poziției; starea dialogului ține contul.
+- **`CandleChart`:** o suprapunere mutată de pe linie (ecran îngust) alege, deasupra sau dedesubt, locul care nu acoperă altă casetă (suprapunerea minimă).
+
+### Zona
+- **`PriceLineSpec.zoneFrom`** (intrarea poziției, sau prețul ordinului), din `chartLineOf`.
+- **`TradeLabels`** are o a doua vedere (`zOrder 'bottom'`): dreptunghiul de la `zoneFrom` la prețul liniei trase, `fade(culoare, 0,14)`, pe toată lățimea, doar în timpul tragerii.
+
+### Etichetele de preț
+- **`CurrentPriceRenderer`:** desenează eticheta prețului curent cu geometria etichetelor bibliotecii (font de 11 px):
+  - lățimea: 1 + 2 × 4,58 + 5 + lățimea textului;
+  - înălțimea rândului: 11 + 2 × 2,29;
+  - colțurile exterioare rotunjite la 2 px;
+  - textul la 5 + 4,58 px.
+- Măsurat la 2×: toate etichetele, de la x 2008 la 2130, cu 13 px liberi până la margine.
+
+### Teste
+- **`modify.test`:** întoarcerea pe clientul simulat:
+  - one-way: închidere reduce-only, deschidere cu levier și marjă, chei de client diferite, anularea SL-ului;
+  - hedge: doar ordinele long-ului;
+  - deschiderea refuzată → `partial`, cu mesajul;
+  - fără poziție → eroare, nimic trimis.
+- **`service.test`:** verificarea fără trimitere (planul rămâne pe server), o singură trimitere, jurnalul `reverse`, accesul.
+- **`trading.test`:** schema și `subKey`.
+- **Chrome:**
+  - ⇅ înainte de casetă și întoarcerea trimisă (hedge: închiderea și deschiderea `hedged`, anularea SL / TP-ului long-ului);
+  - fereastra din Tranzacții;
+  - zona la tragerea SL-ului;
+  - etichetele de pe scală la 2×;
+  - 1440 / 390 / 320;
+  - verificarea de aliniere (zero).
+
+## TD-CHARTSETTINGS — implementează FD-CHARTSETTINGS
+
+### Setările
+- **`shared/chart-style.ts`:**
+  - `chartStyleSchema` (Zod 4, cu `prefault` pe fiecare parte): `candles`, `precision`, `timezone`, `status`, `canvas`, `alerts`;
+  - o culoare e `#RRGGBB(AA)`; una „a temei” e `null`;
+  - `DEFAULT_CHART_STYLE` = aspectul de dinainte (lumânări #26A69A / #EF5350 fără margini, fără grilă, cursor întrerupt, scala la 11 px, margini 20 / 10 % și 24 de bare, butoane mereu);
+  - `salvageChartStyle`: o salvare care nu se mai citește întreagă își păstrează părțile care se citesc.
+- **`settingsSchema.chartStyle`** (`prefault({})`); `chartStyle` e în `USER_KEYS`, deci e al fiecărui utilizator.
+- **Serverul:**
+  - `validate` refuză un fus orar al graficului necunoscut (400);
+  - la citire, un fus pe care serverul nu-l mai știe devine `null` (altfel orice salvare ulterioară ar fi refuzată);
+  - `salvage` folosește `salvageChartStyle`.
+
+### Graficul (`CandleChart`)
+- **Prop-uri noi:**
+  - `look`;
+  - `displayPrecision` (zecimalele afișate; `precision` rămâne a perechii, pentru prețurile puse prin tragere sau prin „+”);
+  - `watermark` (rândurile filigranului);
+  - `resetView` (un contor);
+  - `onSettings`;
+  - `onContextMenu({ x, y, price })`.
+- **`frameOptions(look)`:**
+  - `layout.background` plin sau `VerticalGradient`;
+  - `textColor`, `fontSize`, `separatorColor`;
+  - `grid` (vizibil, culoare, stil);
+  - marginile scalelor;
+  - `rightOffset`;
+  - cursorul (culoare, stil).
+
+  Se aplică la creare, la schimbarea temei și la schimbarea setărilor (zoom-ul rămâne).
+- **`backgroundOf(look)`:** `{ top, bottom }`, refăcut la schimbarea temei (`themeTick`). E folosit de:
+  - `TradeLabels.setBackground`: casetele, cu culoarea gradientului la mijlocul lor, `mixColor`;
+  - `--color-chart` pe container: plăcile legendelor, butoanele de lângă linii;
+  - banda A / L: în gradient, ultima lui parte;
+  - fiecare suprapunere de linie: `--color-chart` cu culoarea de la înălțimea ei.
+
+  Biblioteca pictează gradientul de la vârful la baza fiecărui panou, deci `mixColor(top, bottom, y / înălțimea panoului)`.
+- **Lumânările:**
+  - `candleOptions(look)`: o parte oprită devine transparentă;
+  - cu „închiderea anterioară”, fiecare bară primește culorile după `c ≥ c[i-1]`;
+  - culorile LMA rămân deasupra.
+- **Marginile de sus și jos:** `priceScale('right', 0).scaleMargins`.
+- **Filigranul:** `createTextWatermark(pane 0)`, 56 / 28 px, `fade(text, 0,12)` dacă nu are culoare; e detașat înaintea `chart.remove()`.
+- **„Resetează vizualizarea”:** `setVisibleLogicalRange(n − 180, n + 20)` + scara automată; vizualizarea ținută minte devine aceasta (prin salvarea obișnuită la schimbarea intervalului).
+- **Butoanele:**
+  - `hover` = mouse-ul pe grafic (`pointerenter` / `pointerleave`, doar mouse) sau `pointer: coarse`;
+  - „Navigare” condiționează „mergi la ultima lumânare”;
+  - „Panou” pune `data-pane-buttons` pe container, iar `LegendButtons` are `in-data-[pane-buttons=hidden]:hidden`.
+- **Legendele:**
+  - `data-legend-titles / inputs / values` + `LEGEND_TITLE / LEGEND_INPUTS / LEGEND_VALUES` (pe un `span.contents`, ca regula să nu se bată cu `hidden sm:inline`);
+  - `--legend-bg` = opacitatea plăcii (0 fără fundal).
+- **Eticheta prețului curent:** primește `fontSize` = mărimea textului scalelor (padding-urile și rândul se scalează ca ale bibliotecii); măsurat la 14 px: toate etichetele au 153 px la 2×.
+- **Click dreapta:** doar pe panouri (nu pe scale, axa timpului sau butoane), iar pe câmpuri rămâne meniul browserului; prețul de la cursor e transmis pentru „Copiază prețul” de mai târziu.
+- **⚙:** în rândul axei timpului, sub scala prețului.
+
+### Pagina (`Charts`)
+- **`look`:** ciorna ferestrei cât e deschisă, altfel `s.chartStyle`.
+- **Precizia și fusul orar:**
+  - `chartPrecision` dă afișarea (antetul, scala, tabelele, legendele);
+  - panoul liniei orizontale păstrează precizia perechii;
+  - `chartTimeZone` (fusul graficului, dacă browserul îl știe) se aplică axei, semnalelor și alertelor.
+- **Linia de stare:** `ChartStatusLine`, primul rând din `legends.main`. Conține:
+  - titlul: `statusTitle`, plus intervalul și sursa;
+  - numele: compania, sau numele monedei din aliasurile listei;
+  - punctul pieței: bursa deschisă, sau crypto non-stop;
+  - OHLC, `barChange`, volumul (`fmtVolume`), `dayChange`.
+
+  `dayChange` are `prevDayCloses(candles, tz)` calculat o dată și doar sub un interval de o zi. Semnul minus e „−” la ambele numere.
+- **Meniul:** `ChartMenu` (`role=menu`):
+  - măsurat ascuns, apoi pus la cursor sau întors spre stânga / în sus;
+  - focusul pe primul rând după așezare (un element ascuns nu primește focus);
+  - săgeți, Home / End, Enter, Esc (capturat), Tab;
+  - se închide la click în afară, derulare, redimensionare sau pierderea ferestrei.
+- **Rândurile meniului:**
+  - „Resetează vizualizarea ⌥R / Alt+R”;
+  - „Șterge N desene” (`countRo`), dacă există;
+  - „Șterge N indicatori” (studiile + Slingshot + LMA), dacă există;
+  - „Setări…”.
+- **Ștergerile:**
+  - optimiste;
+  - indicatorii trec prin `formSave` și `rememberStudy` (memoria lor rămâne), iar panoul lor se închide;
+  - `Toast` are `action` („Anulează”), care pune lista de dinainte la loc, plus ce s-a adăugat între timp (în limite).
+- **Alt+R:** pe `code === 'KeyR'` (pe Mac, ⌥R dă „®”); nu în câmpuri, nici sub o fereastră modală deschisă (`[aria-modal=true]` care nu e `inert`: lista de simboluri închisă de pe telefon rămâne în pagină).
+- **Simbolul schimbat** închide fereastra (ca „Renunță”) și meniul.
+- **`Toast.autoHide`** = `look.alerts.autoHideToasts`.
+
+### Fereastra (`ChartSettingsDialog`)
+- **`Modal`:**
+  - `clear`: fără voal și blur, ca previzualizarea să se vadă;
+  - `flush`: corpul își face singur derularea și subsolul.
+- **Aspectul:**
+  - tab-urile: o coloană de 184 px de la 640 px; sub 640 px, un rând care se derulează, fără iconițe, cu tab-ul ales adus în vedere;
+  - înălțimea e fixă (540 px, dar se micșorează), ca tab-urile să nu sară.
+- **Rândurile:**
+  - `Row`: grilă `13rem | restul` de la 640 px; pe telefon flex care se rupe, cu controalele la dreapta sau sub nume;
+  - bifa stă în `flex h-[1lh] items-center`;
+  - un nume fără controale ocupă tot rândul.
+- **Ciorna:**
+  - `onPreview(draft)` la fiecare schimbare;
+  - OK = `saveSettingsPatch({ chartStyle: draft })` (optimist), apoi închiderea; o eroare rămâne afișată în fereastră;
+  - „Valorile implicite” resetează tab-ul curent.
+- **Culorile temei:** o culoare `null` apare în selector ca a temei (`themeColors()`) și rămâne `null` până e schimbată.
+- **Efectele cu acolade:** `scrollIntoView` întoarce acum un `Promise` în Chrome, pe care React l-ar lua drept curățarea efectului.
+
+### Selectorul de culoare
+- **`ColorPicker`:**
+  - paleta TradingView, 8 × 10;
+  - culorile proprii (`localStorage`, cel mult 10);
+  - opacitatea;
+  - opțional, `lineStyle`.
+
+### Teste
+- **`chart-style.test`:** valorile implicite = aspectul de dinainte, completarea parțială, refuzurile, recuperarea pe părți.
+- **`chart-look.test`:**
+  - fusul și precizia;
+  - `barChange`;
+  - `prevDayCloses` în UTC și în București (ziua se schimbă la 22:00 UTC);
+  - `dayChange`, `fmtVolume`, `statusTitle`, `statusLineOn`.
+- **`color.test`:** `mixColor`. **`format.test`:** `countRo`.
+- **`users.test`:** setările pe utilizator, combinarea pe părți, fusul refuzat, o parte stricată la valorile implicite și fusul necunoscut la `null` la citire.
+- **Chrome** (1440 / 390 / 320):
+  - meniul (rânduri, focus, săgeți, Esc, întors la colț, click în afară);
+  - ștergerile cu „Anulează”;
+  - ⌥R;
+  - fereastra, fiecare tab;
+  - previzualizarea (grilă, text 14, degrade, filigran), apoi „Renunță” (scala revine la 74 px);
+  - OK cu linia de stare completă;
+  - butoanele la mouse / niciodată;
+  - titlurile, parametrii și valorile oprite, placa la 30 %;
+  - precizia 4 și New York;
+  - tema luminoasă și comutarea;
+  - etichetele la 2×;
+  - verificarea de aliniere: zero, în pagină, în cele patru tab-uri și în meniu.
+
+## TD-BARCOLORBODY — implementează FD-BARCOLORBODY
+
+### LMA (`CandleChart`, datele seriei)
+- Biblioteca ia per bară `color` pentru corp; `borderColor` și `wickColor` lipsă iau opțiunile seriei după `open <= close`.
+- **Fără „închiderea anterioară”:** bara cu culoare LMA primește doar `color` (transparent cu „Corp” debifat).
+- **Cu „închiderea anterioară”:** `color` = culoarea LMA (sau a setărilor), iar `borderColor` și `wickColor` = ale setărilor, după `c ≥ c[i−1]`, ca la lumânările fără indicator.
+
+### `barcolor` generic (`BarColorPrimitive`)
+- Nu mai redesenează fitilul.
+- Corpul e desenat cu geometria bibliotecii (`PaneRendererCandlesticks._drawCandles`):
+  - lățimea optimă cu paritatea fitilului;
+  - cu `borderVisible`, interiorul (micșorat cu lățimea marginii, calculată ca `_calculateBorderWidth`);
+  - nimic când lumânarea e prea îngustă pentru interior.
+- Corpul gol (culoarea per bară sau a seriei transparentă: „Corp” debifat) nu e colorat.
+- Sub culoarea indicatorului se pune întâi fundalul graficului (`layout.background`: plin sau gradientul pe înălțimea panoului, ca biblioteca). Astfel o culoare cu opacitate se vede peste fundal, nu peste corpul desenat de bibliotecă.
+
+### Teste
+- Unitar: regula culorilor per bară (funcție pură `candleColors`) și geometria interiorului (`bodyRect`).
+- Chrome: LMA cu margini bifate, la 2×: fitilul și marginea în culorile din setări, corpul în culoarea LMA.
+
+## TD-STYLEUNIFY — implementează FD-STYLEUNIFY
+
+### Caseta de linie: `ColorPicker`
+- **Prop-uri noi:**
+  - `lineWidth` / `onLineWidth`: grosimea, butoanele 1–4 px, plus valoarea curentă dacă e peste 4;
+  - `onChange` opțional: fără el, caseta e „culoare fixă”, panoul n-are paleta și opacitatea, iar `value` poate fi un gradient CSS;
+  - `colorNote`: de unde vine culoarea, când nu se alege aici.
+- **Caseta:** cu `lineStyle` sau `lineWidth`, are 72 px: culoarea + linia (grosimea și tipul, `strokeDasharray` scalat cu grosimea).
+- **Panoul:** „Grosime” (butoane `aria-pressed`, fiecare cu linia lui) și „Stilul liniei” (cele trei, cu titlu „Continuă / Întreruptă / Punctată”).
+- **Rândurile din formularele Slingshot / LMA:** numele se rupe pe rânduri, iar controalele stau mereu în dreapta, în aceeași coloană; (i) e pe mijlocul primului rând al numelui.
+
+### Mărimea: `SIZE_NAMES` și `TEXT_PX`
+- `SIGNAL_SIZE_NAMES` (Tiny…Huge) e lista unică.
+- `SIGNAL_SIZES[n].text` dă textul (9 / 11 / 13 / 16 / 20 px), folosit și de etichetele ATR și de Market Structure (`sizeOf` local dispare).
+
+### Slingshot (`shared/indicator/params.ts`)
+- **Cheile noi:**
+  - pentru fiecare parte `s ∈ {long, short}` și stare `X ∈ {Forming, '', Failed, Invalid, Tp, Sl}`: `${s}${X}Color` (cele existente rămân: `longColor`, `longTpColor`, `longSlColor`, `shortColor`…) și `${s}${X}Size`;
+  - ATR: `shortTPColor`, `shortSLColor`, plus `{long,short}{Tp,Sl}LineWidth` (1–4, implicit 2), `…LineStyle` (Dashed), `…LabelSize` (Small);
+  - Cloud: `slowEmaWidth`, `fastEmaWidth` (1–4, implicit 1), `slowEmaStyle`, `fastEmaStyle` (Solid);
+  - Market Structure: `msBullLineWidth`, `msBearLineWidth` (1–5), `msBullLineStyle`, `msBearLineStyle`, `msBullTextSize`, `msBearTextSize` (Tiny…Huge).
+- **Scoase:** `failedColor`, `invalidColor`, `signalSize`, `msLineWidth`, `msLineStyle`, `msTextSize`.
+- **`migrateSlingshotParams(raw)`** (`z.preprocess` înaintea schemei) completează cheile noi lipsă din cele vechi, deci aspectul salvat se păstrează. Cheile vechi sunt apoi ignorate (Zod le scoate). Pure, testată.
+
+### Slingshot (desenarea)
+- **`slingshotShapes`:** pentru fiecare marcaj, starea (în formare, validă, eșuată, invalidată, TP, SL) și partea dau culoarea și `SIGNAL_SIZES[size]`.
+- **`buildSegments`:**
+  - fiecare linie ATR are culoarea, grosimea și tipul părții și nivelului ei;
+  - eticheta are mărimea aleasă, iar fundalul rămâne `fade(culoare, 0,2)`;
+  - Market Structure: grosimea, tipul și mărimea textului pe linie.
+- **EMA-urile:** `applyOptions({ lineWidth, lineStyle })` pe seriile fast / slow, la schimbarea parametrilor.
+- **Caseta TP / SL** (`Charts`): culorile ATR ale fiecărei părți.
+
+### LMA
+- **Cheile noi:**
+  - `longLineColor`, `shortLineColor`, `neutralLineColor` (`hex | null`, implicit `null` = culoarea scriptului);
+  - `longLineWidth` (1), `shortLineWidth` (1), `neutralLineWidth` (2), toate 1–4;
+  - `signalStyle` (Solid).
+- **`lmaHlines`:** culoarea `override ?? a scriptului`, cu grosimea aleasă.
+- **Seria semnalului:** `lineStyle` după `signalStyle`.
+
+### Formularele Slingshot / LMA (`IndicatorForm`)
+- **Un tip de câmp nou, `look`:**
+  - opțional: o bifă (`toggle`);
+  - caseta (`color` sau `swatch` fix, `width`, `style`);
+  - lista de mărime (`size`);
+  - valoarea nivelului (`value`).
+- **Stilurile:** Pine („Solid / Dashed / Dotted”) ↔ casetă („solid / dashed / dotted”).
+- O culoare `null` (LMA) arată culoarea scriptului; „Valorile implicite” o pune la loc.
+- **Erorile** de validare numesc rândul.
+
+### Indicatorii standard (`StudySettings`)
+- `LineStyleField`, `LineWidthField`, `WIDTH_RO` și `widthChoices` dispar.
+- Fiecare linie are o singură casetă: culoarea, plus grosimea (`lineKind` = `line` | `width`) și tipul (`line`).
+- La o paletă, fiecare culoare are casetă proprie, cu aceeași grosime și același tip.
+- Grosimea afișată: `o.width ?? plotWidth(def)`.
+
+### Linia orizontală (`HLineSettings`)
+Culoarea, grosimea și tipul într-o singură casetă; `HLINE_STYLES` rămâne în schemă.
+
+### Setările graficului
+- `canvas.crosshair.width` (1–4, implicit 1) intră în `frameOptions` (`width` pe ambele linii ale cursorului).
+- Caseta cursorului are grosimea și tipul.
+
+### Pine (`sling-shot-system-3.4.pine`)
+- **Intrări:** aceleași chei și aceleași valori implicite.
+- **Etichetele:**
+  - `showValid / showFailed / showInvalid` primesc culoarea și mărimea părții (`label.set_size`);
+  - etichetele în formare se creează cu culoarea și mărimea „Forming”.
+- **Liniile și etichetele ATR, tabelul:** culorile, grosimea, tipul și mărimea fiecărei părți.
+- **Market Structure:** pe linie.
+
+### Teste
+- **`params.test`:**
+  - valorile implicite = aspectul de dinainte;
+  - preluarea setărilor vechi (failed / invalid / size / ATR / MS);
+  - refuzurile (grosime 0 sau 5 pentru ATR, mărime necunoscută).
+- **`slingshot-draw.test`:**
+  - culoarea și mărimea fiecărei stări pe parte;
+  - liniile ATR ale SHORT-ului cu culorile lui;
+  - Market Structure pe linie;
+  - textele cu `TEXT_PX`.
+- **LMA:** `lmaHlines` cu și fără culoarea aleasă.
+- **Chrome:**
+  - formularele (Slingshot, LMA, un indicator standard, linia orizontală, setările graficului) la 1440 / 390 / 320;
+  - panoul cu grosimea;
+  - graficul cu SHORT-ul în alte culori, X-ul mare;
+  - verificarea de aliniere.
+
+## TD-TRADESOUND — implementează FD-TRADESOUND
+
+- **`web/chart/trade-ends.ts`** (pur):
+  - `tradeKeys(portfolio)`: fiecare trade deschis, cu cantitatea lui.
+    - Pozițiile: câte o cheie pe `ref.positionIds` (eToro), altfel `simbol|parte`.
+    - Deținerile: câte o cheie pe `ref.positionIds`, altfel `bal:activ`, doar cu valoarea de cel puțin 1 și fără stablecoin-uri și numerar.
+  - `endedTrades(prev, next)`: cheile dispărute, iar la deținere cantitatea scăzută la cel mult 1 %. O secțiune cu eroare sau date vechi în `next` nu se compară.
+- **`useTradeEndSound(enabled)`** în `ChartView`:
+  - `useQueries` pe toate conturile, aceeași cheie (`['portfolio', id]`) ca liniile de pe grafic, deci o singură citire;
+  - `refetchInterval` de 20 s, `false` pentru un cont cu `asOf` (IBKR Flex);
+  - React Query nu citește în fundal.
+- **Comparația:**
+  - pe `fetchedAt` nou al fiecărui cont, față de citirea lui anterioară;
+  - `visibilitychange` → `hidden` golește citirile ținute minte, deci prima de după revenire e punctul de plecare;
+  - sunetul pornește doar cu `document.visibilityState === 'visible'`.
+- **`web/trade-sound.ts`:**
+  - un singur `HTMLAudioElement` (`/audio/coin-money.mp3`, `preload`);
+  - deblocarea la prima atingere sau tastă (redare mută, apoi pauză);
+  - `playTradeSound()` pornește de la 0 și ignoră două apeluri în 1,5 s;
+  - erorile de redare (autoplay) sunt ignorate.
+- **Setarea:** `chartStyle.alerts.tradeSound` (implicit `true`), în tab-ul Alerte al setărilor graficului.
+- **Teste:** `trade-ends.test` (cheile, închiderea totală sau parțială, eToro cu mai multe poziții, ⇅, erorile și datele vechi, praful, stablecoin-urile).
+
+## TD-MACRORULES — implementează FD-MACRORULES
+
+- **`server/news/macro.ts`:** `macroVerdict(title, summary, companiesInTitle)` → `{ macro, strength, areas }`.
+  - **`AREAS`:** expresiile fiecărei arii din reguli (monetar, inflație, creștere, muncă, fiscal, comerț / valute, teme); fiecare expresie distinctă din titlu sau rezumat (primele 300 de caractere) e un semn.
+  - **Semnele de companie** din titlu: o companie numită, plus fiecare cuvânt de companie distinct. Minus 1 când titlul vorbește de piața în ansamblu.
+  - **Companiile numite:** `detector.detect` pe titlul fără instituțiile care comentează; o companie e un simbol care nu e crypto și nu e indice.
+  - **Macro:** `titlu > companie`, sau un titlu fără temă, cel puțin două teme în rezumat și zero semne de companie.
+  - **Forța** = 2 × titlu + rezumat, folosită în alegerea dintre categorii.
+- **`categorize`:** semnalul Macro e forța regulilor (0 fără ele); cuvintele Macro vechi dispar.
+- **`weighItem` → `NewsCategory`** (`SourceCategory | 'other'`). O știre care ar ajunge Macro fără să respecte regulile:
+  - trece la cea mai puternică dintre Crypto / Acțiuni / Geopolitică (`categorySignals`, la egalitate ordinea fixă);
+  - altfel la `other`, cu relevanța 0 și `lowRelevance`.
+- **`reclassify`:** folosește categoria sursei (`s.category`), nu pe cea salvată a știrii. O știre mutată nu-și schimbă astfel regula.
+- **Upgrade:** `upgradeNewsClassification` (datele jobului `news.classify`, `CLASSIFY_VERSION = 2`) reclasifică, în loturi, toate știrile salvate. Rulează în jobul `sentiment.daily`, înaintea `upgradeHistory`, iar `INDEX_VERSION = 3` recalculează istoricul o dată.
+- **API și pagină:**
+  - `newsQuerySchema.category` primește `other`;
+  - pe pagina de știri, filtrul „Altele” și eticheta;
+  - `TopicIcon` are o iconiță generală.
+- **Teste:**
+  - `macro.test` cu exemplele din FD (macro / companie / piață / instituție / rezumat);
+  - `multicat.test` și `news.test` actualizate;
+  - reclasificarea unei surse Macro (companie → Acțiuni, nimic → Altele) și upgrade-ul o singură dată.
+
+## TD-BOT — implementează FD-BOT
+
+### 1. Date (migrarea 10)
+- **`bots`:**
+  - `id`, `user_id` (FK users, cascade), `name`, `strategy` (`grid` | `dca` | `premium`), `exec` (`paper` | `real`);
+  - `account_id` (fără FK: altfel SQL Server refuză a doua cale de ștergere în cascadă; un cont șters e găsit de motor);
+  - `market` (`spot` | `futures` | `stock`), `area` (`crypto` | `stocks`), `symbols` (JSON), `tf`;
+  - `config` (JSON, al utilizatorului);
+  - `status`, `status_reason`;
+  - `command` (JSON: oprirea cerută, citită de motor);
+  - `state` (JSON, doar al motorului);
+  - `starts_at`, `ends_at` (null = fără sfârșit), `created_at`, `updated_at`, `ran_at`.
+- **`bot_trades`:** `bot_id` (cascade), `symbol`, `side`, `qty`, `entry`, `exit`, `pnl`, `fees`, `opened_at`, `closed_at`, `reason`.
+- **`bot_events`:** `bot_id` (cascade), `at`, `kind`, `symbol`, `message`, `detail` (JSON: scorul defalcat, răspunsul AI, ordinul).
+  - Ultimele 1 000 pe bot; motorul le taie o dată pe oră.
+- **Un singur scriitor pentru fiecare coloană:**
+  - `config`, `name`, `ends_at`, `command` și pauza / reluarea: API-ul;
+  - `state`, `ran_at` și stările lui (Rulează, Problemă, Se încheie, Încheiat): motorul.
+  - Pauza / reluarea / oprirea scriu `status` doar din stări permise (`UPDATE … WHERE status IN (…)`). Motorul scrie `status` cu `WHERE status = @văzut`: o comandă venită între timp nu se pierde.
+
+### 2. Cod comun (`shared/bot.ts`)
+- **Schemele zod:**
+  - `botInputSchema` (crearea): comune + `grid` | `dca` | `premium`, după `strategy`;
+  - `botEditSchema` (câmpurile editabile, FD-BOT §7);
+  - aceleași reguli pe pagină și pe server.
+- **Calculele pure, folosite de formular și de motor:**
+  - `gridLines(lower, upper, n, spacing)`;
+  - `gridPlan(cfg, price, lev, fee)`: cantitatea pe grilă, intervalele pline la pornire, câștigul pe grilă, capitalul;
+  - `dcaPlan(cfg, price)`: tabelul ordinelor de siguranță și capitalul necesar;
+  - `liqDistance(lev)`;
+  - etichetele în română.
+- **Tipurile API:** `BotView` (listă), `BotDetail` (detalii), `BotTradeRow`, `BotEventRow`, `BotCheck` (rezumatul formularului).
+
+### 3. Strategiile (pure, `server/bots/`)
+Fiecare primește configurația, starea și prețul și întoarce starea nouă plus ce are de executat. Nu citește nimic singură, deci se testează fără rețea.
+- **`grid.ts`:**
+  - `initGrid` → intervalele `{ side, entry | null }`, cantitatea `q`, `armed` (cu prețul de pornire);
+  - `stepGrid(state, price)` → cumpărările / vânzările de făcut, cumulate într-un singur ordin net, plus ciclurile încheiate.
+- **`dca.ts`:**
+  - `stepDca(cfg, state, price, now)` → deschide ciclul, ordinele de siguranță atinse (toate odată), TP / SL;
+  - pauza și numărul de cicluri.
+- **`premium.ts`:**
+  - `barEvents(result, side)`: semnalul confirmat pe ultima lumânare închisă; TP Slingshot; invalidarea prin trend a semnalului poziției, căutat după `time`;
+  - `levels(cfg, signal, price)`: SL / TP după opțiuni;
+  - `size(...)`: sumă fixă sau risc %, levierul cel mai mic, regula lichidării;
+  - `exitFor(position, price)`.
+- **`score.ts`:**
+  - `scoreTrade(parts, weights)` → `{ score, parts: [{ key, a, weight, value }] }`;
+  - `gates(...)` → primul motiv de refuz, în ordinea FD-BOT §6.
+
+### 4. Motorul (`server/bots/engine.ts`)
+- **Job-ul `bots`:** la 30 s, primul după 30 s, timeout 4 min. Doar pe instanța cu lease-ul.
+  - Citește boții activi ai utilizatorilor activi.
+  - Fiecare bot are `try / catch`: o eroare neașteptată scrie un eveniment, iar după 3 la rând starea devine Problemă.
+- **Pașii unui bot la o verificare:**
+  1. **Perioada:**
+     - Programat → Rulează la `starts_at`;
+     - după `ends_at`, Rulează / Pauză → Se încheie, cu acțiunea de la sfârșit.
+  2. **Comanda de oprire**, dacă e una: Se încheie, cu acțiunea ei.
+  3. **Prețul fiecărui simbol:**
+     - crypto: `MarketData.candles(sursa, simbol, '1m', 2)`, ultima închidere;
+     - acțiuni: `StockData.quote`, doar cu bursa deschisă.
+     - Fără preț: pasul se sare. După 10 minute fără preț: Problemă.
+  4. **Reconcilierea** (real): `accounts.portfolio(contId)`. O secțiune cu erori sau veche → nimic. 60 s după un ordin al botului pe acel simbol → nimic.
+  5. **Ieșirile:** mereu, și în Pauză sau Problemă; în Problemă, încercate.
+  6. **Intrările:** doar în Rulează, în perioadă, sub pierderea pe zi.
+  7. **Starea, evenimentele și tranzacțiile** se salvează.
+- **Premium:** `runSlingshot` doar când timpul lumânării închise e mai nou decât `state.premium.lastBar[simbol]`. Lumânările ca în scanner:
+  - crypto: `MarketSource.forSymbol` + `MarketData.candles`, istoricul `forUser().candles`, HTF pentru structură;
+  - acțiuni: `StockData.candles` cu cheia utilizatorului.
+- **Execuția (`exec.ts`)**, o singură interfață `order({ symbol, side, qty, reduce, leverage, price }) → { qty, price, fee }`:
+  - **`PaperExec`:** execută la `price`, comisionul din setări.
+  - **`RealExec`:**
+    - rotunjește cantitatea la pasul instrumentului (`TradingService.instrument`, ținut o oră) și verifică minimele;
+    - scrie `state.pending = { key, cantitatea rotunjită, scopul }`;
+    - trimite prin `TradingService.place` (`market`, `amountIn: 'base'`, `reduceOnly` la închiderea pe futures, `leverage` la deschidere);
+    - șterge `pending`.
+  - **Erorile `RealExec`:**
+    - `RATE_LIMIT` / `IN_PROGRESS`: `pending` rămâne, aceeași cheie la verificarea următoare;
+    - `REJECTED` / `INVALID` / `MIN_SIZE` / `INSUFFICIENT` / `MARKET_CLOSED`: o intrare se sare; o ieșire se reîncearcă (cheia e eliberată de jurnal), iar după 10 eșecuri la rând → Problemă;
+    - `UNKNOWN_OUTCOME` / `PERMISSION` / `DISABLED` / `UNSUPPORTED` / `HEDGE_MODE` / `NOT_FOUND`: Problemă;
+    - `NO_ACCOUNT` (sau `tradingAccess` null): Încheiat, motivul „contul a fost șters”.
+  - **Un ordin `pending` găsit la începutul unei verificări** pleacă primul, exact cum a fost (aceeași cheie și cantitate, fără verificări noi: poate a ajuns deja). Reușit, i se aplică scopul.
+  - **O intrare refuzată:** nicio intrare pe simbol 5 minute (`state.entryPause`), spus o dată.
+  - **„Reia” după o Problemă** șterge `pending`. Reconcilierea prinde orice diferență.
+- **Contabilitatea** (în `state`): pe poziție `entry`, `qty`, `margin`, `lev`, `fees`.
+  - Câștigul realizat al unei închideri = latura × (ieșire − intrare) × cantitate − comisioanele.
+  - Ziua (fusul utilizatorului): `dayKey`, `dayRealized`; pierderea pe zi = realizatul de azi + nerealizatul de acum.
+- **Intrările Premium:**
+  - **`inputs.ts`** citește o dată pe decizie:
+    - `daily.today(tz, now, scope)` (scorul zilei, aria din `breakdown`);
+    - `daily.history(7, …)` (sentimentul general);
+    - știrile simbolului din ultimele 24 h (`news_coins`, cu scorul AI al utilizatorului unde există) prin `computeIndex`;
+    - `calendar.query` (impact `High`, USD) pentru filtru și pentru AI.
+  - **AI:** `ai.client(...).generate` cu schema `{ decision, confidence, reason, risks }`, `effort: 'low'`, 60 s. Consumul e scris ca `bot`. Cel mult 30 de întrebări pe zi pe bot (`state.premium.ai`).
+
+### 5. API (`server/http/bot-routes.ts`)
+- `GET /api/bots` → `BotView[]`.
+- `GET /api/bots/:id` → `BotDetail`: tranzacțiile (ultimele 200), evenimentele (ultimele 300), pozițiile, grila / ciclul.
+- `POST /api/bots/check` → `BotCheck`: rezumatul, capitalul, erorile și avertismentele; fără salvare.
+- `POST /api/bots` → creează. Verifică:
+  - limita de 10;
+  - un singur bot real pe cont / piață / simbol;
+  - contul are tranzacționarea pornită pentru piață;
+  - simbolul există pe piață (instrument);
+  - „Real” doar pe crypto.
+- `PUT /api/bots/:id` (editarea), `POST /api/bots/:id/pause | resume | stop { action }`, `DELETE /api/bots/:id` (doar Încheiat).
+- „Duplică” e în pagină: formularul se deschide cu `input`-ul botului (`formOf`), fără sfârșit.
+- **Accesul:** doar proprietarul (al altcuiva = 404); scrierile trec prin CSRF, ca restul.
+
+### 6. Pagina
+- **`Charts.tsx`:** butonul „Bot” după „Tranzacționează” (aceeași clasă `btn`, iconița `Bot`). Lipsește pe un indice. Deschide `BotsDialog` cu simbolul, aria, timeframe-ul, prețul și intervalul ultimelor 100 de lumânări.
+- **`components/bots/`:**
+  - `BotsDialog` (Modal 760): lista / detaliile / bot nou;
+  - `BotForm`: secțiuni, rezumatul din `POST /api/bots/check`, debounced;
+  - `BotDetail`;
+  - `bot-form.ts`: starea formularului → input, testabil.
+- **Alinierea:** tiparele existente: `flex h-[1lh] items-center` pentru bife lângă text și `[&_td]:align-middle` în tabele.
+
+### 7. Teste
+- **`grid.test`:**
+  - liniile aritmetice / geometrice;
+  - cantitatea;
+  - pornirea Long / Short / Neutru;
+  - un salt peste mai multe linii = un ordin;
+  - ciclurile și câștigul;
+  - „Oprește sub / peste”.
+- **`dca.test`:**
+  - tabelul ordinelor (abateri, multiplicatori, capital);
+  - ordinele atinse odată;
+  - TP din prețul mediu;
+  - SL din prețul de bază;
+  - ciclurile, pauza, limita de cicluri.
+- **`premium.test` / `score.test`:**
+  - semnalul proaspăt / vechi / provizoriu;
+  - prețul trecut de SL / TP;
+  - nivelurile Slingshot luate cum sunt, fără R:R (FD-BOTSLRR);
+  - calendarul;
+  - aria împotrivă;
+  - scorul cu părți lipsă;
+  - mărimea (fixă / risc, levierul, lichidarea, plafoanele);
+  - ieșirile (SL, TP, semnal TP, invalidare, opus);
+  - AI care refuză / nu răspunde.
+- **`engine.test`** (bază de test, `TradingService` cu un trader fals):
+  - simularea cap-coadă;
+  - perioada (programat → rulează → se încheie → încheiat);
+  - pauza cu ieșiri;
+  - oprirea cu fiecare acțiune;
+  - pierderea pe zi și cea totală;
+  - realul:
+    - cheia salvată înaintea trimiterii, retrimisă după o eroare de rețea;
+    - `UNKNOWN_OUTCOME` → Problemă;
+    - contul șters → Încheiat;
+    - reconcilierea „din afară”;
+  - o poziție străină → fără intrare;
+  - limitele de 10 boți și de un bot real pe simbol.
+- **`server.test`:** rutele (proprietarul, validarea, editarea, ștergerea doar încheiat).
+- **`bot-form.test`:** formularul → input.
+
+## TD-BOTSTOCKS — implementează FD-BOT §10 (acțiunile în real)
+- **`shared/bot.ts`:**
+  - fără regula „acțiunile doar în simulare”;
+  - short-ul e refuzat doar pe spot. Pe acțiuni, schema îl lasă, iar serviciul îl verifică după broker.
+- **Serviciul (`check`)**, la un bot real pe acțiuni:
+  - contul e de acțiuni, cu `stock` între piețe;
+  - simbolul se găsește la broker (`instrument`);
+  - short doar dacă platforma are `TRADING[x].etoro`;
+  - short la eToro cere un SL: Premium îl are mereu, DCA cere `stopLoss`, iar grila Short / Neutru cere `stopAbove`;
+  - un avertisment despre program și despre moneda contului.
+- **`RealExec`** primește platforma contului (`exchange`) și pozițiile eToro ale botului (`state.refs`).
+  - **Acțiuni:** simbolul rămâne cel al graficului; ordin la piață, `amountIn: 'base'`, fără `reduceOnly` și fără levier.
+  - **eToro, deschidere:**
+    - id-urile pozițiilor instrumentului înainte (`instrument().positions`);
+    - ordinul pleacă, cu `stopLoss` la un short;
+    - id-urile de după: cele noi, de aceeași latură, intră în `refs[simbol][latură]`;
+    - nicio poziție nouă vizibilă: `refsWait[simbol] = { latură, înainte }`, rezolvat la următoarea citire a pozițiilor.
+  - **eToro, închidere:**
+    - pozițiile instrumentului citite din nou (`refsWait` rezolvat, `refs` curățat de cele închise);
+    - `close: { positionIds: refs, units }` (`units` lipsește când se închide tot);
+    - fără nicio poziție a botului, ordinul e refuzat.
+  - **Trading 212 / Alpaca:** vânzarea cantității, cel mult cât e liber (`availableBase`, citit proaspăt).
+- **Motorul:**
+  - `BotOrder.sl`: SL-ul trimis cu un short eToro (Premium: SL-ul tranzacției; DCA: SL-ul ciclului; grila: `stopAbove`).
+  - **`held()` pe acțiuni:** long-ul din soldul simbolului (`balances[asset = simbol]`), short-ul din `positions[symbol = simbol/USD]`.
+  - Reconcilierea e ca la spot.
+- **Pagina:**
+  - „Real” se oferă și pe acțiuni, cu conturile de acțiuni cu tranzacționarea pornită.
+  - Direcția Short / Ambele / Neutru apare pe acțiuni în simulare și la eToro.
+- **Teste:**
+  - un bot real pe un Trading 212 simulat (cumpără, vinde doar cantitatea lui, reconcilierea);
+  - pe un eToro simulat: id-urile notate, închiderea doar a pozițiilor lui, short cu SL, poziția apărută târziu;
+  - schema și formularul: short pe acțiuni.
+
+## TD-SLTPDUP — implementează FIX-SLTPDUP
+- **`ModifyStepResult.cancelled`:** id-ul ordinului pe care pasul l-a scos de pe platformă. Îl pun:
+  - `crypto.ts`: anulat; ordinul vechi anulat (plasat-apoi-anulat, anulat-apoi-plasat); un cancel-replace cu id nou; SL / TP-ul vechi la întoarcere;
+  - `trading212.ts`, `alpaca.ts`: anulat, înlocuit cu id nou.
+- **`TradingService`:** după o modificare, o întoarcere sau o anulare reușită, `accounts.forgetOrders(cont, ids)`.
+- **`AccountsService`:**
+  - `forgetOrders`: id-urile ascunse 2 minute din `portfolio()` (și din cache);
+  - `invalidate` mărește generația contului, uită citirea în curs și pornește 30 s în care portofoliul se citește cel mult o dată la 3 s;
+  - o citire nu intră în cache dacă generația s-a schimbat între timp (`keep`).
+- **Pagina:**
+  - `portfolio-settle.ts`: `settlePortfolio(qc, cont)` după ordin / anulare / modificare / întoarcere; `portfolioInterval(cont, normal)` (3 s cât se așază). Le folosesc graficul și Tranzacții.
+  - `trade-drafts.ts`:
+    - `sentLevels` (liniile trimise: toate la „done”, cele reușite la „partial”);
+    - `withSent` (nivelul nou până apare la bursă, fără ordin, deci fără tras / ×; ordinul vechi ascuns odată ce apare cel nou; cel mult `SENT_MS` = 60 s).
+  - `Charts.tsx`: `onSent` pune nivelurile trimise; liniile afișate trec prin `withSent`, apoi prin `withDrafts`.
+- **Teste:**
+  - `trade-drafts.test` (toate cazurile);
+  - `modify.test` (`cancelled` la plasat-apoi-anulat, nimic la o anulare eșuată);
+  - `server.test` (citirea de dinaintea acțiunii, ordinele ascunse).
+
+## TD-COINSOUND — implementează FIX-COINSOUND
+- **`trade-ends.ts`:** `MAX_GAP_MS` = 50 000. `endedTrades(prev, next)` întoarce `[]` când `next.at − prev.at > MAX_GAP_MS`. Ora citirilor e `dataUpdatedAt` (ceasul paginii).
+- **`trade-sound.ts`:** pregătirea pune `muted` și `volume = 0` și le reface după pauză; `playTradeSound` pune `volume = 1`.
+- **Teste:**
+  - `trade-ends.test`: la 20 și la 50 s se compară; la 50 001 s și la 6 h, nu.
+- **Verificare în Chrome** (KuCoin simulat):
+  - pagina oprită 70 s cu debuggerul (rămâne vizibilă), long-ul închis între timp: niciun sunet la revenire;
+  - short-ul închis cât e urmărită: un sunet;
+  - prima atingere: nimic.
+
+## TD-COINSOUND2 — implementează FIX-COINSOUND2
+- **`trade-sound.ts`:**
+  - `readyTradeSound` pune `muted` și `volume = 0`, apoi `play()`, iar după rezolvare oprește doar dacă elementul e încă mut (un sunet de trade pornit între timp nu e oprit);
+  - nu reface volumul: îl pornește doar `playTradeSound` (`muted = false`, `volume = 1`, `currentTime = 0`).
+- **`trade-ends.ts`:** `tradeKeys(p, at, base?)`. Cu `base`, păstrează doar pozițiile cu `symbol` care începe cu `${base}/` și deținerile cu `asset === base` (regula liniilor, `pnl.ts` `tradesOf`).
+- **`useTradeEndSound(enabled, base, stock)`:**
+  - citește doar conturile de felul graficului (`kind === 'stocks'` pentru acțiuni), ca `useTradeLines`;
+  - la schimbarea simbolului: `watchFrom = acum`, `seen` golit și o citire imediată a conturilor (`refetchQueries`); la montare nu, fiindcă citirea pornește oricum.
+- **`Charts`:** `useTradeEndSound(tradeSound && !index, stock ? symbol : base, stock)`.
+- **Teste:**
+  - `trade-sound.test`: un element care imită WebKit (pauza nu oprește clipul) arată că pregătirea nu se aude, iar sunetul unui trade se aude o dată; un sunet pornit înainte de rezolvarea pregătirii nu e oprit. Pe codul vechi, testul pică.
+  - `trade-ends.test`: filtrul pe monedă (SOL față de BTC și SOLV) și pe acțiune (TSLA, cu id-uri eToro).
+- **Verificare** (fără sunet pe difuzoare: Chrome cu `--mute-audio`; în WebKit, mp3-ul înlocuit cu liniște):
+  - în WebKit, pregătirea rulează clipul până la capăt, pe mut;
+  - un trade de pe graficul afișat sună o dată;
+  - în Chrome, un trade BTC închis cât graficul arată ETH nu sună.
+
+## TD-COLORUNIFY — implementează FD-COLORUNIFY
+
+### `src/web/indicators/color-links.ts` (în pachetul principal, fără runtime)
+- **`INPUT_LINES`:** `{ 'ma-ribbon': { ma1Color: ['plot0'], … } }`, adică input → liniile pe care le colorează întregi (cazul A).
+- **`lineInput(id, plotId)`:** inversul.
+- **`INPUT_COLORED`:** `{ technicals: { plot0: { inputs: ['colStrongSell', 'colNeutral', 'colStrongBuy'], note } } }` (cazul C).
+- **`PLOT_PALETTES`:** culorile fiecărei linii din cazul B, exact cum le scrie codul, în ordinea lui.
+- **`colorKey(c)`:** comparația culorilor (litere mici, fără spații).
+- **`linkStyle(study)`:** pură, idempotentă; aplică FD §„Setări salvate înainte”, cazul A:
+  - pentru fiecare linie legată cu `plots[p].color`: dacă inputul nu e în `study.inputs` (adică e implicit), `inputs[input] = color`;
+  - apoi `color` se scoate (și obiectul `plots[p]`, dacă rămâne gol).
+
+### Catalogul
+`STUDY_MODULES` primește `palette` pe liniile din `PLOT_PALETTES`, ca toate locurile (Stil, desenul, legenda) să le vadă din `plotConfig`.
+
+### Desenul
+- **`style.ts` → `styledEntry`:** paleta finală pe chei normalizate.
+  - Culoarea de bază aleasă intră doar dacă paleta nu are deja o alegere pentru ea: `palette[def.color] = o.palette?.[def.color] ?? o.color`.
+  - Un helper comun, **`pointColor(def, o, c)`**, e folosit și de legendă.
+- **`renderer.ts`:** potrivirea paletei pe `colorKey`.
+- **Liniile orizontale (cazul D):** `hlineConfig[i]` ia culoarea din `result.hlines` de pe aceeași poziție, cu același preț, când nu are una aleasă.
+  - Helper: **`hlineDefault(mod, h, result)`**, folosit și de caseta din Stil (`o.color ?? hlineDefault(...)`).
+  - Verificat pe toți indicatorii: la valorile implicite, culorile din rezultat și din configurare sunt aceleași, deci aspectul implicit nu se schimbă.
+
+### Formularul (`StudySettings`)
+- `initial()` pornește din `linkStyle(study)`.
+- **Inputurile de culoare legate:** `ColorPicker` cu `lineWidth` / `lineStyle` ale primei linii.
+  - Grosimea și tipul se scriu pe toate liniile inputului.
+- **Liniile legate, în Stil:** valoarea e `draft.inputs[input]`, iar `onChange` scrie inputul.
+- **Cazul C:** `ColorPicker` fără `onChange`, cu `value` = `linear-gradient` al inputurilor și `colorNote`.
+- **Liniile orizontale:** valoarea e `o.color ?? hlineDefault(...)`.
+
+### `Charts`
+- Lista `studies` trece prin `linkStyle`, deci desenul, legenda și setările văd forma nouă.
+- Salvările scriu forma nouă la prima „Salvează” din setări.
+
+### Teste
+**`color-links.test.ts`**, pe toți indicatorii, cu valorile implicite și cu fiecare bool / listă schimbată pe rând:
+1. Fiecare culoare desenată de o linie din Stil (fără cele transparente) e culoarea ei sau din paleta ei. Excepțiile sunt doar liniile din `INPUT_LINES` (toate punctele în culoarea inputului) și din `INPUT_COLORED`.
+2. Fiecare input de culoare, rulat cu o culoare-santinelă:
+   - liniile vopsite întregi în santinelă sunt exact `INPUT_LINES[id][input]`;
+   - cele vopsite parțial sau derivat sunt în `INPUT_COLORED`.
+3. Fiecare culoare din `PLOT_PALETTES` e desenată măcar într-o rulare.
+
+**`style.test.ts`:**
+- `linkStyle`: cele două cazuri, idempotentă;
+- paleta cu majuscule diferite;
+- precedența `palette` față de `color`;
+- `hlineDefault`.
+
+## TD-PANES — implementează FIX-PANES
+- **Lightweight Charts 5:**
+  - `IPriceScaleApi.applyOptions` (și `setAutoScale`) cheamă `applyPriceScaleOptions`, care face `merge` în `options().rightPriceScale` al graficului, pentru orice panou;
+  - `new Pane()` își creează scala din `model.options().rightPriceScale`.
+- **`CandleChart`:**
+  - imediat după `createChart`, `paneScale` reține `{ mode, autoScale, invertScale, scaleMargins }` din `chart.options().rightPriceScale`, înainte ca marginile sau logaritmul prețului să fie puse;
+  - în efectul care reface panourile, fiecare `addPane` e urmat de `chart.priceScale('right', pane.paneIndex()).applyOptions(paneScale)`;
+  - `merge`-ul scrie în opțiunile generale doar valorile implicite, iar panoul 0 nu e atins.
+- **Verificare** (Chrome 1440 / 390 / 320 și WebKit, cu preț logaritmic):
+  - Stoch RSI adăugat sub LMA din lista „Indicatori”, în pagină;
+  - scala prețului trasă (autoscală oprită), apoi Stoch RSI și MACD adăugate, apoi Stoch RSI scos;
+  - LMA ±0,5, Stoch RSI 0–120, MACD normal; nimic mai lat decât ecranul.
+- **Fără test unitar:** biblioteca are nevoie de canvas, iar mediul de test (node, fără jsdom) nu-l are. Comportamentul e acoperit de verificarea în browser.
+
+
+## TD-BOTTF — implementează FD-BOTTF
+- **`shared/bot.ts` → `botEditSchema`:** `tf: common.tf.optional()` (Premium).
+- **`BotService.edit`**, când `e.tf` diferă de `input.tf`:
+  - strategia nu e `premium` → `ValidationError('Timeframe-ul contează doar la un bot Slingshot.')`;
+  - pe acțiuni, fiecare simbol cu `stocks.timeframesFor` (aceeași regulă și același mesaj ca `check`);
+  - `next.tf = e.tf`; `UPDATE` scrie și coloana `tf` (lista o citește de acolo).
+  - Un `tf` egal cu cel de acum trece fără efect, la orice strategie.
+- **Starea (`state.ts`):** `PremiumState.tf?: Timeframe`, timeframe-ul pe care sunt `lastBar`, `nextRead` și `signalTime`-ul pozițiilor.
+  - `premiumState()` îl pune la creare (`this.input.tf`).
+  - Lipsește doar în stările de dinainte de FD-BOTTF: prima verificare îl adoptă pe al botului, fără resetare (până acum timeframe-ul nu se putea schimba).
+- **Motorul (`engine.ts`):**
+  - `Purpose.p_open.signalTime` devine opțional.
+  - **`retf(input)`**, chemat în `go()` imediat după comanda API-ului, înainte de reîncercarea unui ordin în așteptare, deci și pe pauză, cu o problemă sau cu bursa închisă. Doar Premium cu stare:
+    - `ps.tf` lipsă → `ps.tf = input.tf`;
+    - `ps.tf === input.tf` → nimic;
+    - altfel: `lastBar = {}`, `nextRead = {}` (prima citire notează lumânarea închisă, ca la pornire);
+    - `signalTime` se șterge din pozițiile deschise și din scopul unui `p_open` în așteptare (o poziție care trece după schimbare nu urmărește semnalul vechi);
+    - notițele `history` și `read:…` ale simbolurilor se șterg, ca jurnalul să le spună din nou pentru timeframe-ul nou;
+    - o notă `info` în jurnal (FD).
+  - **De ce în motor, nu în API:**
+    - numai motorul scrie `state`; API-ul scrie doar `config`;
+    - o verificare care rulează în timpul salvării își scrie starea, iar următoarea vede diferența dintre `config.tf` și `ps.tf`;
+    - nicio scriere nu se pierde, iar o schimbare dus-întors între două verificări nu resetează nimic.
+- **Formularul (`BotFormView`):**
+  - la editarea unui bot Premium, un `Field` „Timeframe-ul semnalelor” cu `TfSelect` (același `select` ca la crearea botului) și textul fix din FD (nu apare și nu dispare la schimbare, deci nu mișcă pagina);
+  - `patch.tf = input.tf` pentru Premium;
+  - rândul de sus nu mai arată timeframe-ul.
+- **Teste (`engine.test.ts`):**
+  - schimbarea fără poziții: lumânarea de 4h deja închisă, cu un semnal, nu deschide; următoarea deschide; nota din jurnal;
+  - cu o poziție deschisă: invalidarea semnalului cu aceeași oră pe 4h nu o închide (pe codul vechi da); semnalul de TP de pe 4h o închide;
+  - o intrare reală în reîncercare la schimbare: poziția nu are `signalTime`;
+  - dus-întors înainte de o verificare: nicio notă, `lastBar` neatins; starea veche fără `tf` o adoptă;
+  - API-ul: refuzul la Grid și DCA (același timeframe trece), refuzul pe acțiuni fără cheie (1w trece), lista cu timeframe-ul nou.
+## TD-BOTSLRR — implementează FD-BOTSLRR
+- **Înlocuit parțial de TD-BOTPCT** (aceeași zi): `sl` / `tp` / `rrRisk` / `rrReward` au devenit `levels` / `slPct` / `tpPct`. Restul (fără R:R la Slingshot, scorul, AI-ul) rămâne.
+- **`shared/bot.ts`:**
+  - `premiumSchema` = `z.preprocess(dropLegacyPremium, z.object({…}).strict())`:
+    - `minRr` iese din obiect;
+    - `dropLegacyPremium` scoate cheia `minRr` din setările salvate înainte, ca ele să se citească în continuare (strict), iar prima salvare să o șteargă.
+  - **Raportul:** `rr` → `rrRisk` + `rrReward` (fiecare 0,01–1000; etichetele „Partea de risc / câștig a raportului”). `dropLegacyPremium` face dintr-un `rr` numeric `rrRisk: 1, rrReward: rr`. `rrText(p)` îl scrie „1:2” (virgulă zecimală).
+  - **`checkBot`, la Premium:**
+    - `tp === 'slingshot'` cu `sl !== 'slingshot'` → issue pe `['premium', 'sl']`, cu mesajul din FD;
+    - la `tp === 'rr'`, câștig ÷ risc în afara [0,5; 10] → issue pe `['premium', 'rrReward']`, cu mesajul din FD.
+    - Rulează și la `edit`, pentru că `BotService.edit` validează tot cu `botInputSchema`.
+  - `BotEventDetail.rr` dispare (rândurile vechi îl au în JSON, dar nu-l citește nimeni).
+  - Comentariul lui `ScorePart.value`: la Slingshot e structura (+1 / −1 / 0).
+- **`premium.ts` → `levelsFor`:**
+  - întoarce `{ sl, tp }`, fără `rr`;
+  - `tp === 'slingshot'` → SL-ul și TP-ul semnalului, ambele;
+  - altfel SL după `cfg.sl`, TP = preț ± `rrReward / rrRisk` × risc;
+  - erorile „Prețul a trecut deja de stop loss.” / „Prețul a atins deja take profit-ul.” / TP sub zero rămân.
+- **`score.ts`:**
+  - `ScoreInputs.slingshot = { structure }`;
+  - `a = 0,4 × ms`, `value = ms` (+1 / −1 / 0);
+  - nota: „structura în direcție” / „structura împotrivă” / „fără rupere de structură”.
+- **`engine.ts` (`decide` / `confirm`):**
+  - verificarea `minRr` dispare;
+  - `detail` primește `sl`, `tp`;
+  - scorul primește doar structura;
+  - AI-ul primește `levels: cfg.tp` în loc de `rr`.
+- **`inputs.ts` (AI):**
+  - `AiAsk.rr` → `AiAsk.levels: 'slingshot' | 'rr'`;
+  - rândul prețului: „Stop loss: … Take profit: … (ale semnalului Slingshot)” sau „(TP-ul la raportul risc : câștig al utilizatorului)”;
+  - `SYSTEM`: fără „nivelurile nu au sens” ca motiv de refuz. Regulă nouă: „Nu judeca stop loss-ul, take profit-ul sau raportul risc / câștig: le stabilește strategia.”
+- **`service.ts` (`check`):** rândul de mărime spune „SL și TP: ale semnalului Slingshot.” sau „SL: al semnalului / x%; TP la raportul risc : câștig 1:2.” (`rrText`).
+- **Formularul:**
+  - **`bot-form.ts`:**
+    - `DEFAULT_PREMIUM` și `NUMBER_FIELDS` fără `minRr`, cu `rrRisk: 1`, `rrReward: 2`;
+    - `shownExit` înainte de `numbers`: câmpurile ascunse de alegerea ieșirii (raportul la Slingshot, `slPct` la SL-ul Slingshot) rămân cum sunt dacă sunt valide; altfel primesc valoarea implicită, ca să nu oprească salvarea;
+  - **`BotFormView`:**
+    - un `Seg` „Stop loss și take profit” (`tp`); „Slingshot” pune și `sl: 'slingshot'`;
+    - lângă el, la „Risc / câștig”, „Raportul risc : câștig”: două `Num` (`min-w-0 flex-1`, ca să încapă în coloană) cu „:” între ele (`aria-hidden`; numele câmpurilor: „Riscul”, „Câștigul”); altfel o celulă goală;
+    - textul fix din FD pe toată lățimea (`sm:col-span-2`);
+    - la „Risc / câștig”, „Stop loss” (Slingshot / Procent) și procentul;
+    - textul de la „Filtrul Sentiq” spune „structura pieței” în loc de „R:R-ul semnalului”.
+- **Teste:**
+  - **`strategies.test`:**
+    - `levelsFor`: cu Slingshot, nivelurile semnalului la orice preț dintre ele; preț trecut de SL / TP refuzat;
+    - scorul fără R:R (structura ±0,4);
+    - schema: `minRr` vechi citit și scos; SL procentual cu TP Slingshot refuzat.
+  - **`engine.test`:**
+    - un semnal cu R:R de acum 0,2 intră cu SL-ul și TP-ul semnalului;
+    - un bot salvat cu `minRr` rulează;
+    - AI-ul nu primește R:R (promptul fără „R:R”);
+    - API-ul refuză SL procentual + TP Slingshot.
+  - **`bot-form.test`:** formularul implicit fără `minRr`, cu 1:2; 2:3 scris și citit înapoi la fel; un câmp gol; Slingshot cu SL procentual refuzat; câmpurile ascunse goale / greșite nu opresc salvarea.
+  - **`strategies.test`:** și `rr` vechi → 1:R (`rrText` „1:2,5”), limitele 2:1 și 1:10.
+
+## TD-INFOTIP — implementează FIX-INFOTIP
+- **`components/InfoTip.tsx`:**
+  - **Butonul:** `type="button"`, `aria-label="Explicația setării"`, `aria-expanded`, iar cât e deschis `aria-describedby` = id-ul bulei.
+  - **Bula:** `role="tooltip"`, randată cu `createPortal` în `document.body`, `position: fixed`, `z-[70]` (peste `Modal`, care are `z-50`).
+  - **Starea:** `hover` (doar `pointerType === 'mouse'`, din `pointerenter` / `pointerleave`) și `pinned` (click / tap / Enter / Space); deschisă = oricare dintre ele.
+    - Click-ul face `preventDefault`: în eticheta unui checkbox nu-l comută.
+  - **Închiderea:**
+    - `pointerdown` în afara butonului și a bulei (pe `document`, în faza de captură) → `pinned = false`;
+    - `Esc` → listener pe `window`, în captură, cu `preventDefault()` + `stopPropagation()`, deci `Modal` nu se închide;
+    - o singură bulă deschisă: un eveniment `infotip-open` cu id-ul ei le închide pe celelalte.
+  - **Poziția (`useLayoutEffect`):**
+    - din `getBoundingClientRect()` al butonului și mărimea bulei;
+    - sub iconiță la 6 px, sau deasupra când nu încape jos;
+    - centrată pe iconiță, limitată la [8, lățimea ferestrei − 8 − lățimea bulei];
+    - recalculată la `scroll` (captură) și `resize`; iconița ieșită din fereastră închide bula (ca `ColorPicker`);
+    - lățimea `max-w-[min(280px,calc(100vw-16px))]`.
+- **`StudySettings.tsx` (`tip`) și `Charts.tsx` (`tipIcon`):** iconița devine `<InfoTip text={…} />`, cu aceeași aliniere: `flex h-[1lh] items-center` la Charts, `inline-flex` la StudySettings. `title`-ul de pe controale rămâne (descrierea lor).
+- **Verificare:**
+  - Chrome la 1440 / 390 / 320 și WebKit (Safari): hover, click, tap, Esc, bula la marginea dreaptă și jos;
+  - într-un checkbox, click pe (i) nu comută căsuța;
+  - Esc închide întâi bula, apoi fereastra.
+## TD-BOTPCT — implementează FD-BOTPCT
+- **`shared/bot.ts` → `premiumSchema`:**
+  - câmpuri noi: `levels: 'slingshot' | 'percent'`, `slPct` (0,1–50), `tpPct` (0,1–500);
+  - dispar `sl`, `tp`, `rrRisk`, `rrReward` (și `rr`, `minRr` de dinainte).
+  - **`upgradePremium`** (preprocesarea, în locul lui `dropLegacyPremium`), pentru setările salvate înainte:
+    - `levels` = `tp === 'rr'` ? `'percent'` : `'slingshot'`;
+    - `tpPct` = `slPct` × R, unde R = `rrReward / rrRisk`, altfel `rr`, altfel 2;
+    - șterge `sl`, `tp`, `rr`, `rrRisk`, `rrReward`, `minRr`.
+  - **`checkBot`:** la `levels === 'percent'`, `tpPct / slPct` în afara [0,5; 10] → issue pe `['premium', 'tpPct']`. Verificarea „SL procentual cu TP Slingshot” dispare (combinația nu mai există).
+  - **`rrText(slPct, tpPct)`** = „1:” + raportul cu cel mult 2 zecimale, virgulă zecimală.
+- **`premium.ts` → `levelsFor`:**
+  - `slingshot`: nivelurile semnalului;
+  - `percent`: SL = preț × (1 − dir × slPct / 100), TP = preț × (1 + dir × tpPct / 100);
+  - aceleași erori (SL / TP depășit, TP sub zero).
+- **`engine.ts`:**
+  - ieșirile „Slingshot a marcat SL / TP-ul atins” doar la `levels === 'slingshot'`;
+  - AI-ul primește `levels: cfg.levels`.
+- **`inputs.ts`:** `AiAsk.levels: 'slingshot' | 'percent'`; textul „(procentele utilizatorului de la intrare)”.
+- **`service.ts` (`check`):** „SL și TP: ale semnalului Slingshot.” sau „SL x% și TP y% de la intrare (risc : câștig 1:z).”
+- **Formularul:**
+  - **`bot-form.ts`:**
+    - `DEFAULT_PREMIUM` cu `levels: 'slingshot'`, `slPct: 1`, `tpPct: 2`;
+    - `NUMBER_FIELDS`: „Stop loss-ul”, „Take profit-ul”;
+    - `shownExit`: la `slingshot`, `slPct` / `tpPct` ascunse rămân dacă sunt valide, altfel cele implicite;
+    - `ratioOf(text, text)`: raportul afișat, sau „—”.
+  - **`BotFormView`:**
+    - `Seg` pe `levels`, lângă el o celulă goală;
+    - explicația fixă din FD;
+    - la `percent`, două `Field`: „Stop loss (% de la intrare)” și „Take profit (% de la intrare)”, apoi `<p>` pe toată lățimea cu raportul.
+  - **`BotsDialog`:** „SL-ul și TP-ul semnalului, sau ale tale, în procente de la intrare (de exemplu 1% și 2%, adică 1:2)”.
+- **Teste:**
+  - **`strategies.test`:** `levelsFor` cu procente (long / short); `upgradePremium` (Slingshot vechi, „Risc / câștig” vechi cu SL %, raportul de azi); limitele; `rrText`.
+  - **`engine.test`:** o intrare cu 1% / 2%; „Verifică”; setările vechi rulează; AI-ul primește sursa.
+  - **`bot-form.test`:** implicit 1% / 2%, raportul afișat, câmpurile ascunse.
+## TD-BROTLI — implementează FIX-BROTLI
+- **`net/plain-fetch.ts` → `plainFetch(input, init)`:** subsetul de `fetch` folosit de `fetchText` (`method`, `headers`, `body`, `signal`, `redirect: 'follow'`), construit pe `node:http` / `node:https`, care nu decomprimă singure.
+  - **Cererea:**
+    - `accept-encoding: gzip, deflate` (dacă apelantul nu-l dă);
+    - agentul global, deci și proxy-ul `NODE_USE_ENV_PROXY`;
+    - `signal` distruge cererea, iar eroarea e `signal.reason` (deci `TimeoutError`).
+  - **Răspunsul:**
+    - `Content-Encoding` împărțit pe virgule, fără `identity`;
+    - `br` / `zstd` oriunde în listă → `res.destroy()` și eroarea `BrotliRefused`, înainte de orice decodor;
+    - `gzip` / `x-gzip` → `createGunzip`; `deflate` → `createInflate` sau `createInflateRaw`, după primul octet (`(b & 0x0f) === 8`), ambele cu `Z_SYNC_FLUSH`;
+    - un token necunoscut → fără decodare, ca `undici`.
+  - **Redirecționările** (301 / 302 / 303 / 307 / 308 cu `Location`):
+    - urmate până la 20;
+    - URL relativ rezolvat;
+    - 303 (și 301 / 302 după POST) → GET fără corp;
+    - `authorization` scos la schimbarea originii;
+    - corpul răspunsului 3xx e aruncat, nedecodat.
+  - **Rezultatul:** `new Response(Readable.toWeb(stream), { status, statusText, headers })`.
+    - 204 / 205 / 304 au corp `null`.
+    - Antetele multiple se adaugă pe rând.
+    - `cancel()` pe corp distruge `pipeline`-ul, deci și socket-ul.
+- **`net/http.ts`:**
+  - `setFetchImpl` pune un cârlig (`hook`);
+  - `fetchText` (și deci `fetchJson`) folosește `hook ?? plainFetch`;
+  - `httpRequest` folosește `hook ?? fetch` (neschimbat).
+  - `fetchText` traduce `BrotliRefused` în `HttpError('BROTLI', …)`, cu mesajul din FD.
+- **Teste (`net/plain-fetch.test.ts`, server HTTP local):**
+  - antetul cerut;
+  - identity / gzip / deflate cu și fără zlib;
+  - br și „gzip, br” refuzate, inclusiv cu un corp br invalid (eroarea e a noastră, nu a decodorului);
+  - un token necunoscut trece brut;
+  - redirecționări: relativă, 303 după POST, limita de 20, `authorization` scos la alt origin;
+  - limita de timp la antete și la corp;
+  - 304;
+  - `fetchText` cap-coadă, cu bomba gzip peste limită.
+
+## TD-BOTDIR — implementează FD-BOTDIR
+- **`shared/bot.ts`:**
+  - **`premiumSchema`:** `longMin` („Scorul minim pentru long”) și `shortMax` („Scorul maxim pentru short”), întregi 0–100, în locul lui `minScore`.
+  - **`upgradePremium`** face două treceri independente:
+    - FD-BOTPCT, ca înainte, doar fără `levels`;
+    - FD-BOTDIR: cu `minScore` și fără `longMin` → `longMin = minScore`, `shortMax = 100 − minScore` (un `minScore` care nu e număr pică drept „Scorul minim pentru long: lipsește”). Cu `longMin` deja prezent, `minScore` se șterge.
+  - **`ScorePart.a`:** înclinarea pieței (+1 în sus … −1 în jos). La evenimentele vechi, acordul cu tranzacția.
+  - **`BotScore`:**
+    - `min?` doar la evenimentele vechi;
+    - `limit?: { side, value }` la cele noi, care marchează și scara pieței.
+- **`server/bots/score.ts`:**
+  - **`marketScore(x, weights)`** → `{ score, parts }`: `lean = (index − 50) / 50`, structura `'up' | 'down' | 'none'` → ±0,4. Notele: „ultima rupere în sus / în jos”, „fără rupere de structură”.
+  - **`limitOf(side, cfg)`:** pragul laturii (`longMin` / `shortMax`), pus în `BotScore.limit`.
+  - **`passes(side, score, cfg)`:** long `score ≥ longMin`, short `score ≤ shortMax`, pe scorul rotunjit (cel afișat).
+  - **`favoured(side, score)`:** long → score, short → 100 − score. Ordonează două semnale de pe aceeași lumânare.
+  - **`scoreReach(weights)`:** scorul cel mai mare posibil, rotunjit (`scoreTrade` dispare).
+- **`server/bots/engine.ts`:**
+  - **`decide`:**
+    - structura → `'up'` / `'down'` / `'none'` din `msBullish` / `msBearish`;
+    - `detail.score = { ...marketScore(…), limit }`;
+    - refuzul cu textele din FD.
+  - **`onBar`:** sortarea după `favoured`.
+- **`server/bots/inputs.ts` (`aiPrompt`):** linia scorului pieței cu pragul laturii.
+- **`server/bots/service.ts` (`check`):**
+  - propoziția pragurilor după direcție;
+  - avertismentele de prag de neatins (`scoreReach`), doar pentru direcțiile botului.
+- **Formularul:**
+  - **`bot-form.ts`:**
+    - `DEFAULT_PREMIUM`: `longMin: 50`, `shortMax: 50`;
+    - `NUMBER_FIELDS`: etichetele din schemă;
+    - `keepHidden` primește `int`;
+    - `shownExit` → `shownPremium`, care păstrează și pragul direcției ascunse;
+    - `zoneText(premium)`: propoziția de sub praguri.
+  - **`BotFormView`:**
+    - „Filtrul Sentiq” cu explicația fixă;
+    - `direction` = direcția afișată (doar long când formularul arată „doar long”: spot, acțiuni reale fără eToro);
+    - un rând de două celule: pragurile direcției afișate, sau pragul și o celulă goală;
+    - `<p>` cu `zoneText`, tot pe direcția afișată;
+    - un rând cu „Ferește știrile” și „Pauză după o pierdere”.
+  - **`BotDetailView` (`Journal`):**
+    - `score.limit` → „Scorul pieței … (long de la X / short până la Y)” și „spre long / spre short” (ce se rotunjește la 0,00: „neutru”);
+    - altfel textul vechi, cu „Scorul tranzacției”.
+  - **`BotsDialog`:** textul Premium spune pragurile pe direcții.
+- **Teste:**
+  - **`strategies.test`:** `marketScore` (aceeași valoare pentru orice latură, structura în sus / în jos), `passes` la limite, `scoreReach`, `upgradePremium` (`minScore` 39 → 39 / 61; ambele forme).
+  - **`engine.test`:** un short intră pe scor mic, un long e refuzat pe același scor, un short refuzat pe scor mare, un long intră pe el; două semnale pe aceeași lumânare; „Verifică” cu propoziția și avertismentul; editarea pragurilor.
+  - **`bot-form.test`:** implicit 50 / 50, pragul ascuns (gol, zecimal, valid), erorile pragurilor arătate, `formOf` înapoi, `zoneText` în toate cazurile.
+  - **`shared/bot.test`:** setările vechi (cu `minScore`) trec.
+
+## TD-NEWSWIN — implementează FD-NEWSWIN
+- **`BotFormView` („Filtrul Sentiq”):**
+  - `Field` cu numele nou, `className="sm:col-span-2"` și hint-ul din FD;
+  - `Num` cu `sm:w-[calc(50%-6px)]`, adică lățimea unei coloane din grila cu `gap-3`;
+  - „Pauză după o pierdere (min)” rămâne în aceeași grilă, pe rândul următor.
+- **Eticheta erorilor:** „Minutele dinaintea știrilor economice importante”, în `shared/bot.ts` (`whole(…)`) și `bot-form.ts` (`NUMBER_FIELDS`).
+- **Ghidul:** numele nou și ce face setarea.
+- **Teste:** `bot-form.test` cu mesajul unui câmp gol.
+
+## TD-PINESYNC — implementează FIX-PINESYNC
+- **`Sling Shot System/sling-shot-system-3.4.pine`** (repo separat, fișier necomis):
+  - `indicator("[DE] Slingshot System 3.4", shorttitle="[DE] Slingshot 3.4", …)`;
+  - cele 8 `str.tostring(…, "#.##")` (4 etichete de nivel, 4 celule din tabel) → `str.tostring(…, format.mintick)`;
+  - o linie nouă în antet care spune schimbarea.
+- **`docs/slingshot-port.md`:** dispare rândul despre precizia prețurilor din „Diferențe intenționate”; numele sunt aceleași.
+- **FD-DENAMES §2:** nota că 3.4 primește numele „[DE]” (FIX-PINESYNC).

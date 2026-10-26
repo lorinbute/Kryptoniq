@@ -2,9 +2,9 @@
 // immediate limit; by USD amount or units; buy or short; leverage, SL / TP), closing positions (all or some units),
 // cancelling a pending order. A 200 means "accepted for processing": the outcome is read back from the order lookup.
 import { randomUUID } from 'node:crypto';
-import type { ClosablePosition, InstrumentInfo, OrderPreview, OrderResult, OrderTicket, TradeMarket, TradeSymbol } from '../../../shared/trading.ts';
+import { etoroProtectionOf, type ClosablePosition, type HeldPosition, type InstrumentInfo, type ModifyPreview, type ModifyResult, type ModifyStepPlan, type ModifyTicket, type OrderPreview, type OrderResult, type OrderTicket, type TradeMarket, type TradeSymbol } from '../../../shared/trading.ts';
 import { brokerCall } from './http.ts';
-import { commonChecks, fmtPlain, TradingError, type CancelInput, type Trader } from './types.ts';
+import { commonChecks, fmtPlain, modifyStatus, protectionChecks, TradingError, type CancelInput, type ModifyPlan, type Trader } from './types.ts';
 
 const BASE = 'https://public-api.etoro.com';
 const FORBIDDEN = 'cheia nu are permisiunea „Write” pentru acest mediu (fă o cheie nouă cu ea) sau IP-ul nu e permis';
@@ -63,7 +63,7 @@ export class EtoroTrader implements Trader {
     this.sleep = sleep;
   }
 
-  private call(method: 'GET' | 'POST' | 'DELETE', path: string, requestId: string, body?: unknown): Promise<unknown> {
+  private call(method: 'GET' | 'POST' | 'DELETE' | 'PATCH', path: string, requestId: string, body?: unknown): Promise<unknown> {
     return brokerCall('eToro', `${BASE}${path}`, { method, headers: { ...this.headers, 'x-request-id': requestId }, body, write: method !== 'GET', forbidden: FORBIDDEN });
   }
 
@@ -128,7 +128,11 @@ export class EtoroTrader implements Trader {
     const [{ cash, held }, rate] = await Promise.all([this.portfolio(ins.instrumentId), this.rate(ins.instrumentId)]);
     const longs = held.positions.filter((p) => p.isBuy);
     const shorts = held.positions.filter((p) => !p.isBuy);
-    const pos = longs.length ? { side: 'long' as const, list: longs } : shorts.length ? { side: 'short' as const, list: shorts } : null;
+    // One side: the position, as before. Both (FD-HEDGEALL: eToro keeps every position apart, a short beside the
+    // buys): each side summed, as hedge mode on the exchanges.
+    const sideOf = (side: 'long' | 'short', list: Held['positions']): HeldPosition | null =>
+      list.length ? { side, amount: list.reduce((s, p) => s + p.units, 0), entryPrice: list[0]?.openRate ?? null } : null;
+    const both = longs.length > 0 && shorts.length > 0;
     return {
       market: 'stock',
       symbol: ins.symbol,
@@ -145,7 +149,8 @@ export class EtoroTrader implements Trader {
       maxLeverage: null,
       availableQuote: cash,
       availableBase: longs.reduce((s, p) => s + p.units, 0),
-      position: pos ? { side: pos.side, amount: pos.list.reduce((s, p) => s + p.units, 0), entryPrice: pos.list[0]?.openRate ?? null } : null,
+      position: both ? null : (sideOf('long', longs) ?? sideOf('short', shorts)),
+      ...(both ? { positionMode: 'hedge' as const, hedgePositions: { long: sideOf('long', longs), short: sideOf('short', shorts) } } : {}),
       // FD-ETOROPICK: each position, so the form can close the ones picked.
       positions: held.positions,
     };
@@ -296,5 +301,96 @@ export class EtoroTrader implements Trader {
     if (!/^\d+$/.test(input.orderId)) throw new TradingError('INVALID', 'Acesta e un SL / TP al unei poziții eToro: se schimbă din eToro.');
     await this.call('DELETE', `/api/v2/trading/execution/${this.seg()}orders/${input.orderId}`, randomUUID());
     return { status: 'cancelled', orderId: input.orderId, message: 'Anularea a fost cerută (dacă ordinul nu s-a executat deja).', followUps: [] };
+  }
+
+  // ---------------- FD-ORDEREDIT: a position's stop loss / take profit ----------------
+
+  /** One open position as eToro gives it (with its stop loss / take profit), or null when it is no longer open. */
+  private async positionById(positionId: string): Promise<Record<string, unknown> | null> {
+    const root = obj(await this.call('GET', `/api/v1/trading/info/${this.demo ? 'demo' : 'real'}/pnl`, randomUUID()));
+    const pf = Object.keys(obj(root.clientPortfolio)).length ? obj(root.clientPortfolio) : root;
+    return arr(pf.positions).find((p) => str(p.positionID ?? p.positionId) === positionId) ?? null;
+  }
+
+  async normalizeModify(t: ModifyTicket): Promise<ModifyPlan> {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const steps: ModifyStepPlan[] = [];
+    const ids: (string | null)[] = [];
+    const cache = new Map<string, Record<string, unknown> | null>();
+    let last: number | null = null;
+    for (const [i, c] of t.changes.entries()) {
+      if (c.what === 'order') {
+        errors.push('Un ordin eToro în așteptare nu se poate modifica: anulează-l și pune altul.');
+        continue;
+      }
+      const positionId = c.orderId ? etoroProtectionOf({ id: c.orderId, cancellable: false })?.positionId : t.position?.ref;
+      if (!positionId) {
+        errors.push('Poziția eToro lipsește.');
+        continue;
+      }
+      if (!cache.has(positionId)) cache.set(positionId, await this.positionById(positionId));
+      const p = cache.get(positionId);
+      if (!p) {
+        errors.push('Poziția nu mai e deschisă.');
+        continue;
+      }
+      const isBuy = p.isBuy !== false;
+      const rate = num(obj(p.unrealizedPnL).closeRate) ?? num(p.currentRate);
+      last = rate ?? last;
+      const sl = p.isNoStopLoss === true ? null : num(p.stopLossRate);
+      const tp = p.isNoTakeProfit === true ? null : num(p.takeProfitRate);
+      const now = c.what === 'sl' ? (sl !== null && sl > 0 ? sl : null) : tp !== null && tp > 0 ? tp : null;
+      if (c.level !== null) protectionChecks(c.what, isBuy, c.level, rate, { errors }, fmtPlain);
+      if (c.level === null && c.what === 'sl') {
+        warnings.push('Fără stop loss, pierderea poziției nu mai e limitată de un ordin.');
+        if ((num(p.leverage) ?? 1) > 1 || !isBuy) warnings.push('eToro poate refuza ștergerea stop loss-ului la o poziție cu levier sau short.');
+      }
+      if (c.level === now) continue;
+      const key = c.what === 'sl' ? 'stopLoss' : 'takeProfit';
+      steps.push({
+        change: i,
+        how: 'position',
+        orderId: c.orderId,
+        side: isBuy ? 'sell' : 'buy',
+        kind: c.what,
+        before: { price: null, triggerPrice: null, amount: num(p.units), takeProfit: null, stopLoss: null, [key]: now },
+        after: { price: null, triggerPrice: null, amount: num(p.units), takeProfit: null, stopLoss: null, [key]: c.level },
+        removes: c.level === null,
+      });
+      ids.push(positionId);
+    }
+    if (!steps.length && !errors.length) errors.push('Nimic nu se schimbă: valorile sunt cele de acum.');
+    const preview: ModifyPreview = { ticket: t, displaySymbol: t.symbol, last, currency: 'USD', env: '', steps, warnings: [...new Set(warnings)], errors };
+    return { preview, internal: { ids } };
+  }
+
+  async modify(plan: ModifyPlan): Promise<ModifyResult> {
+    const { ids } = plan.internal as { ids: string[] };
+    // A position's stop loss and take profit go out together, in one request (PATCH .../positions/{id}).
+    const byPosition = new Map<string, { body: Record<string, unknown>; changes: number[] }>();
+    plan.preview.steps.forEach((s, i) => {
+      const id = ids[i] as string;
+      const e = byPosition.get(id) ?? { body: {}, changes: [] };
+      const level = s.kind === 'sl' ? s.after.stopLoss : s.after.takeProfit;
+      if (s.kind === 'sl') Object.assign(e.body, level === null ? { clearStopLoss: true } : { stopLossRate: level });
+      else Object.assign(e.body, level === null ? { clearTakeProfit: true } : { takeProfitRate: level });
+      e.changes.push(s.change);
+      byPosition.set(id, e);
+    });
+    const results: (ModifyResult['steps'][number] & { unknown?: boolean })[] = [];
+    let n = 0;
+    for (const [id, e] of byPosition) {
+      try {
+        // eToro answers 202: accepted, carried out a moment later.
+        await this.call('PATCH', `/api/v2/trading/${this.seg()}positions/${encodeURIComponent(id)}`, nthRequestId(plan.preview.ticket.idemKey, n++), e.body);
+        for (const c of e.changes) results.push({ change: c, what: 'cerere primită de eToro', ok: true, orderId: id, message: null });
+      } catch (err) {
+        const unknown = err instanceof TradingError && err.code === 'UNKNOWN_OUTCOME';
+        for (const c of e.changes) results.push({ change: c, what: 'eroare', ok: false, orderId: id, message: (err as Error).message, ...(unknown ? { unknown } : {}) });
+        if (unknown) break;
+      }
+    }
+    return { status: modifyStatus(results), steps: results.map(({ unknown: _u, ...r }) => r) };
   }
 }

@@ -171,7 +171,7 @@ export function CancelOrderButton({ account, order }: { account: AccountView; or
 }
 
 const STATUS_RO: Record<TradeLogRow['status'], string> = { pending: 'în curs', sent: 'trimis', rejected: 'refuzat', error: 'eroare', unknown: 'necunoscut' };
-const ACTION_RO: Record<TradeLogRow['action'], string> = { order: 'Ordin', cancel: 'Anulare', enable: 'Tranzacționare pornită', disable: 'Tranzacționare oprită' };
+const ACTION_RO: Record<TradeLogRow['action'], string> = { order: 'Ordin', cancel: 'Anulare', modify: 'Modificare', reverse: 'Întoarcere poziție', enable: 'Tranzacționare pornită', disable: 'Tranzacționare oprită' };
 
 /** "Ordinele trimise din Sentiq" for one account (the last 50 of the user, this account's). */
 export function TradeJournal({ account }: { account: AccountView }) {
@@ -221,7 +221,9 @@ export function TradeJournal({ account }: { account: AccountView }) {
 export function FundsRiskNote({ account }: { account: AccountView }) {
   return (
     <div className="flex items-start gap-2 rounded-xl border border-bear/40 bg-bear/[0.06] px-4 py-3 text-[13.5px]">
-      <ShieldAlert size={16} className="mt-0.5 shrink-0 text-bear" aria-hidden />
+      <span className="flex h-[1lh] shrink-0 items-center">
+        <ShieldAlert size={16} className="text-bear" aria-hidden />
+      </span>
       <span>
         Cheia „{account.label}” poate retrage sau transfera fonduri ({account.permissions}). Recomandat: înlocuiește-o cu o cheie fără retrageri și transferuri. Sentiq nu pornește
         tranzacționarea cu ea.

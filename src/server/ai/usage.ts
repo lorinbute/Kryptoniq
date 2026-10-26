@@ -1,5 +1,7 @@
 // What each user's own AI key spends through Sentiq (FD-AICLARITY, FD-AIKEYS §3): per user and UTC day, the news
-// scores and the day summaries, in calls, headlines and tokens, with the model last used. Kept in the database, so the
+// scores, the day summaries, the descriptions translated (FD-WATCHLISTS §3) and the bots' questions (FD-BOT), in calls,
+// headlines and tokens, with
+// the model last used. Kept in the database, so the
 // Mac and Azure add to the same day.
 import type { Db } from '../db/database.ts';
 
@@ -18,6 +20,10 @@ export interface AiUsageDay {
   day: string;
   sentiment: UsageCounts;
   summary: UsageCounts;
+  /** The descriptions translated into Romanian (FD-WATCHLISTS §3; zero in the days counted before it). */
+  translate: UsageCounts;
+  /** The trading bots' questions (FD-BOT §6; zero in the days counted before it). */
+  bot: UsageCounts;
 }
 
 const keyOf = (userId: number) => `ai:usage:${userId}`;
@@ -44,11 +50,11 @@ export class AiUsage {
   private parse(raw: string | undefined, day: string): AiUsageDay {
     try {
       const v = JSON.parse(raw ?? '') as Record<string, unknown>;
-      if (v.day === day) return { day, sentiment: counts(v.sentiment), summary: counts(v.summary) };
+      if (v.day === day) return { day, sentiment: counts(v.sentiment), summary: counts(v.summary), translate: counts(v.translate), bot: counts(v.bot) };
     } catch {
       // nothing usable: a new day
     }
-    return { day, sentiment: zero(), summary: zero() };
+    return { day, sentiment: zero(), summary: zero(), translate: zero(), bot: zero() };
   }
 
   /** The user's use today (zeros on a new day). */
@@ -58,7 +64,7 @@ export class AiUsage {
   }
 
   /** Adds one answered call. Never throws: counting must not stop the scoring or the summary. */
-  async record(userId: number, kind: 'sentiment' | 'summary', use: { items?: number; input?: number; output?: number; model?: string }): Promise<void> {
+  async record(userId: number, kind: 'sentiment' | 'summary' | 'translate' | 'bot', use: { items?: number; input?: number; output?: number; model?: string }): Promise<void> {
     try {
       await this.db.tx(async () => {
         const key = keyOf(userId);

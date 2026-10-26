@@ -1,5 +1,5 @@
 // Runs the Slingshot port on every watchlist coin (FD §5.4).
-import { htfCandleCount, runSlingshot, type SlingshotResult } from '../../shared/indicator/slingshot.ts';
+import { htfCandleCount, runSlingshot, type SignalSide, type SlingshotResult } from '../../shared/indicator/slingshot.ts';
 import { tfSeconds, type Timeframe } from '../../shared/time.ts';
 import type { Db } from '../db/database.ts';
 import type { Logger } from '../log.ts';
@@ -24,10 +24,17 @@ export interface ScanRow {
   change24h?: number | null;
   pricePrecision?: number;
   uptrend?: boolean;
+  /** A LONG setup forming (V2 searched). */
   liveSignal?: boolean;
   waitingLongTP?: boolean;
-  lastSignal?: { time: number; entryLow: number; sl: number; tp: number; outcome: string; provisional: boolean } | null;
-  atr?: { tp: number; sl: number } | null;
+  /** A SHORT setup forming, and a SHORT waiting for its TP/SL (FD-SLINGSHOT34; only with Short Signals on). */
+  liveShortSignal?: boolean;
+  waitingShortTP?: boolean;
+  /** `entry`: the V2 low of a LONG, the V2 high of a SHORT. */
+  lastSignal?: { side: SignalSide; time: number; entry: number; sl: number; tp: number; outcome: string; provisional: boolean } | null;
+  /** The levels of the LONG's tracked (or forming) trade, and of the SHORT's: the two sides are independent. */
+  atr?: { side: SignalSide; tp: number; sl: number } | null;
+  atrShort?: { side: SignalSide; tp: number; sl: number } | null;
   ms?: { upper: number | null; lower: number | null; lastBreak: { type: 'msBullish' | 'msBearish'; time: number } | null } | null;
   warnings?: string[];
 }
@@ -56,10 +63,13 @@ export function summarize(coin: string, symbol: string, tf: Timeframe, r: Slings
     uptrend: r.last?.uptrend ?? false,
     liveSignal: r.last?.liveSignal ?? false,
     waitingLongTP: r.last?.waitingLongTP ?? false,
+    liveShortSignal: r.last?.liveShortSignal ?? false,
+    waitingShortTP: r.last?.waitingShortTP ?? false,
     lastSignal: lastSignal
-      ? { time: lastSignal.time, entryLow: lastSignal.entryLow, sl: lastSignal.sl, tp: lastSignal.tp, outcome: lastSignal.outcome, provisional: lastSignal.provisional }
+      ? { side: lastSignal.side, time: lastSignal.time, entry: lastSignal.entry, sl: lastSignal.sl, tp: lastSignal.tp, outcome: lastSignal.outcome, provisional: lastSignal.provisional }
       : null,
-    atr: r.atr ? { tp: r.atr.tp, sl: r.atr.sl } : null,
+    atr: r.atr ? { side: r.atr.side, tp: r.atr.tp, sl: r.atr.sl } : null,
+    atrShort: r.atrShort ? { side: r.atrShort.side, tp: r.atrShort.tp, sl: r.atrShort.sl } : null,
     ms: r.ms
       ? {
           upper: r.ms.upper?.price ?? null,

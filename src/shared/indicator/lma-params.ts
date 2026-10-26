@@ -10,7 +10,8 @@ export const LMA_MA_TYPES = ['EMA', 'SMA', 'WMA', 'RMA', 'VWMA'] as const;
 export type LmaPreset = (typeof LMA_PRESETS)[number];
 export type LmaMaType = (typeof LMA_MA_TYPES)[number];
 
-const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+/** #RRGGBB, or #RRGGBBAA with its opacity (FD-OPACITY). */
+const hex = z.string().regex(/^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/);
 export const LINE_STYLES = ['Solid', 'Dashed', 'Dotted'] as const;
 export type LineStyleName = (typeof LINE_STYLES)[number];
 
@@ -32,15 +33,23 @@ export const lmaParamsSchema = z.object({
   neutralColor: hex.default('#FFFF00'),
   colorBars: z.boolean().default(true),
   // Style (TradingView's Style tab: plots, fill, bar colours and hlines of the script)
+  // FD-STYLEUNIFY: each line its colour (null: the script's), width and style, as TradingView's Style tab edits them
   showSignal: z.boolean().default(true),
   signalWidth: z.number().int().min(1).max(4).default(3),
+  signalStyle: z.enum(LINE_STYLES).default('Solid'),
   showFill: z.boolean().default(true),
   showBarColors: z.boolean().default(true),
   showLongLine: z.boolean().default(true),
+  longLineColor: hex.nullable().default(null),
+  longLineWidth: z.number().int().min(1).max(4).default(1),
   longLineStyle: z.enum(LINE_STYLES).default('Dashed'),
   showShortLine: z.boolean().default(true),
+  shortLineColor: hex.nullable().default(null),
+  shortLineWidth: z.number().int().min(1).max(4).default(1),
   shortLineStyle: z.enum(LINE_STYLES).default('Dashed'),
   showNeutralLine: z.boolean().default(true),
+  neutralLineColor: hex.nullable().default(null),
+  neutralLineWidth: z.number().int().min(1).max(4).default(2),
   neutralLineStyle: z.enum(LINE_STYLES).default('Solid'),
 });
 

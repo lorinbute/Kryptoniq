@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { AlertTriangle, Loader2, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, Loader2, X, type LucideIcon } from 'lucide-react';
 import { errorMessage } from '../api.ts';
 
 /**
@@ -61,7 +61,10 @@ export function Loading({ label = 'Se încarcă…' }: { label?: string }) {
 export function ErrorNote({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   return (
     <div className="flex flex-wrap items-start gap-3 rounded-xl border border-bear/40 bg-bear/[0.06] px-4 py-3 text-[13.5px] text-text" role="alert">
-      <AlertTriangle size={18} className="mt-px shrink-0 text-bear" aria-hidden />
+      {/* As tall as a line of the text: the icon on the first line's middle, however many lines follow. */}
+      <span className="flex h-[1lh] shrink-0 items-center">
+        <AlertTriangle size={18} className="text-bear" aria-hidden />
+      </span>
       <div className="min-w-0 flex-1">{errorMessage(error)}</div>
       {onRetry && (
         <button className="btn" onClick={onRetry}>
@@ -84,7 +87,9 @@ export function Empty({ children, action }: { children: ReactNode; action?: Reac
 export function Warning({ children }: { children: ReactNode }) {
   return (
     <div className="flex items-start gap-3 rounded-xl border border-warn/40 bg-warn/[0.06] px-4 py-3 text-[13.5px]" role="status">
-      <AlertTriangle size={18} className="mt-px shrink-0 text-warn" aria-hidden />
+      <span className="flex h-[1lh] shrink-0 items-center">
+        <AlertTriangle size={18} className="text-warn" aria-hidden />
+      </span>
       <div className="min-w-0">{children}</div>
     </div>
   );
@@ -147,5 +152,57 @@ export function ImpactMark({ impact, label }: { impact: string; label?: string }
         <span>{impact === 'High' ? 'Mare' : impact === 'Medium' ? 'Mediu' : impact === 'Low' ? 'Mic' : 'Liber'}</span>
       )}
     </span>
+  );
+}
+
+/** A toast's message; `action`: a button in it (FD-CHARTSETTINGS: "Anulează" after a removal). */
+export interface ToastMessage {
+  text: string;
+  bad?: boolean;
+  at: number;
+  action?: { label: string; run: () => void };
+}
+
+/**
+ * The last action's word (FD-WATCHLISTS §2, FD-ORDEREDIT): at the bottom, over the page (nothing moves), gone after a
+ * few seconds; with `autoHide` off (FD-CHARTSETTINGS, the chart's Alerts) it stays until its ×.
+ */
+export function Toast({ message, onDone, autoHide = true }: { message: ToastMessage | null; onDone: () => void; autoHide?: boolean }) {
+  useEffect(() => {
+    if (!message || !autoHide) return;
+    const t = setTimeout(onDone, message.bad ? 8000 : 4500);
+    return () => clearTimeout(t);
+  }, [message, onDone, autoHide]);
+  return (
+    <div role="status" aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-5 z-40 flex justify-center px-4">
+      {message && (
+        <p
+          key={message.at}
+          className={clsx(
+            'pointer-events-auto flex max-w-[min(560px,100%)] items-start gap-3 rounded-xl border bg-panel-2 px-4 py-2.5 text-[13px] leading-5 shadow-pop',
+            message.bad ? 'border-bear text-bear' : 'border-line-strong text-text',
+          )}
+        >
+          <span className="min-w-0 flex-1">{message.text}</span>
+          {message.action && (
+            // A link-like word as tall as a line of the text, on the first line's middle (as the ×).
+            <button
+              type="button"
+              className="flex h-5 shrink-0 items-center font-semibold text-accent hover:underline"
+              onClick={() => {
+                message.action?.run();
+                onDone();
+              }}
+            >
+              {message.action.label}
+            </button>
+          )}
+          {/* As tall as a line of the text: the × sits on the first line's middle, however many lines follow. */}
+          <button type="button" className="flex h-5 shrink-0 items-center text-faint hover:text-text" onClick={onDone} aria-label="Închide mesajul">
+            <X size={14} aria-hidden />
+          </button>
+        </p>
+      )}
+    </div>
   );
 }

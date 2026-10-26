@@ -12,6 +12,7 @@ import { HostAllowlist, registerSecurity } from './security.ts';
 import { registerRoutes } from './routes.ts';
 import { registerAuth } from './auth.ts';
 import { registerAuthRoutes } from './auth-routes.ts';
+import { registerBotRoutes } from './bot-routes.ts';
 import { ConflictError, NotFoundError } from './errors.ts';
 import { UserError, UserMissingError } from '../auth/users.ts';
 import { PasskeyError } from '../auth/passkeys.ts';
@@ -78,6 +79,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
 
   await registerAuthRoutes(app, ctx);
   await registerRoutes(app, ctx);
+  await registerBotRoutes(app, ctx);
 
   const webDist = ctx.config.webDist;
   const hasWeb = existsSync(path.join(webDist, 'index.html'));

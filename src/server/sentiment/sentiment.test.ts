@@ -220,7 +220,7 @@ describe('a user\'s own AI scoring the news (FD-AIKEYS)', () => {
     expect(scorer.status().lastError).toMatchObject({ permanent: true, message: 'cheia API OpenAI nu este validă' });
   });
 
-  it('pauses a while on a passing error and half an hour on an empty account', async () => {
+  it('pauses a minute on a passing error (growing with each in a row, FD-AISLOW §2) and half an hour on an empty account', async () => {
     const { AiScorer } = await import('./ai-scorer.ts');
     const { AiError } = await import('../ai/types.ts');
     const { silentLogger } = await import('../log.ts');
@@ -228,8 +228,8 @@ describe('a user\'s own AI scoring the news (FD-AIKEYS)', () => {
     let kind: 'overloaded' | 'quota' = 'overloaded';
     const scorer = new AiScorer({ client: fakeClient(async () => Promise.reject(new AiError('gemini', kind, 503, ''))), log: silentLogger, now: () => now });
     await scorer.score(items);
-    expect(scorer.status()).toMatchObject({ pausedUntil: now + 5 * 60_000, lastError: { permanent: false } });
-    now += 5 * 60_000;
+    expect(scorer.status()).toMatchObject({ pausedUntil: now + 60_000, lastError: { permanent: false, passing: true } });
+    now += 60_000;
     kind = 'quota';
     await scorer.score(items);
     expect(scorer.status().pausedUntil).toBe(now + 30 * 60_000);
@@ -252,8 +252,9 @@ describe('a user\'s own AI scoring the news (FD-AIKEYS)', () => {
     expect(seen).toEqual([{ items: 2, input: 640, output: 120 }]);
     expect(asked[0]).toMatchObject({ effort: 'low', prompt: 'Headlines:\n1. Fed cuts rates\n2. Exchange hacked' });
     expect(out).toEqual([
-      { id: 'a', score: 0.9, label: 'positive', impact: 3, engine: 'openai:gpt-6.1-sol' },
-      { id: 'b', score: null, label: null, impact: null, engine: 'openai:gpt-6.1-sol' },
+      // No reason in this answer (FD-WHYPLAIN §3): none kept.
+      { id: 'a', score: 0.9, label: 'positive', impact: 3, engine: 'openai:gpt-6.1-sol', reason: null },
+      { id: 'b', score: null, label: null, impact: null, engine: 'openai:gpt-6.1-sol', reason: null },
     ]);
   });
 
@@ -279,6 +280,29 @@ describe('scanner summary', () => {
     const r = runSlingshot({ candles, chartTfSec: 3600, msTfSec: 3600, params: DEFAULT_SLINGSHOT_PARAMS, nowMs: 100 * H });
     expect(summarize('X', 'X/USDT', '1h', r, candles, 2).change24h).toBeCloseTo(((129 - 105) / 105) * 100, 9);
     expect(summarize('X', 'X/USDT', '1w', r, candles, 2).change24h).toBeNull();
+  });
+
+  it('carries the side of the last signal and the SHORT state (FD-SLINGSHOT34)', async () => {
+    const { summarize } = await import('../scanner/scanner.ts');
+    const candles = [{ t: 0, c: 100 }];
+    const signal = { side: 'short' as const, bar: 3, time: 3 * H, confirmBar: 4, confirmTime: 4 * H, entry: 104, sl: 106, tp: 78, breakout: 80, outcome: 'active' as const, provisional: false };
+    const r = {
+      emaFast: [],
+      emaSlow: [],
+      uptrend: [],
+      markers: [],
+      signals: [{ ...signal, side: 'long' as const, bar: 1 }, signal],
+      alerts: [],
+      atr: { side: 'long' as const, tp: 130, sl: 95, fromBar: 1, toBarTp: 50, toBarSl: 50, labelBar: 5, showLines: true, showLabels: true },
+      atrShort: { side: 'short' as const, tp: 78, sl: 106, fromBar: 3, toBarTp: 50, toBarSl: 50, labelBar: 5, showLines: true, showLabels: true },
+      ms: null,
+      last: { bar: 5, uptrend: false, waitingLongTP: true, tpHit: false, liveSignal: false, waitingShortTP: true, shortTpHit: false, liveShortSignal: false, msUpper: NaN, msLower: NaN, kLine: 50 },
+      warnings: [],
+    };
+    const row = summarize('X', 'X/USDT', '1h', r, candles, 2);
+    expect(row.lastSignal).toEqual({ side: 'short', time: 3 * H, entry: 104, sl: 106, tp: 78, outcome: 'active', provisional: false });
+    // The two sides are tracked independently: a LONG and a SHORT can both show their levels.
+    expect(row).toMatchObject({ waitingLongTP: true, waitingShortTP: true, liveShortSignal: false, atr: { side: 'long', tp: 130, sl: 95 }, atrShort: { side: 'short', tp: 78, sl: 106 } });
   });
 });
 

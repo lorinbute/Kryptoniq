@@ -22,7 +22,9 @@ export type NewsTopic =
   | 'coin'
   | 'crypto'
   | 'macro'
-  | 'geopolitics';
+  | 'geopolitics'
+  /** FD-MACRORULES: a news item about none of the categories. */
+  | 'other';
 
 /** Topics specific enough to beat a coin logo (a hack or an ETF story is about that, not about the coin). */
 const STRONG: [NewsTopic, RegExp][] = [
@@ -56,7 +58,7 @@ const WEAK: [NewsTopic, RegExp][] = [
   ['defi', /\b(defi|protocol|blockchain|layer[- ]?2|staking|validators?|mainnet|testnet|on-?chain|dex|tvl|tokeni[sz](?:ed|ation))\b/i],
 ];
 
-const CATEGORY_TOPIC: Record<string, NewsTopic> = { crypto: 'crypto', macro: 'macro', geopolitics: 'geopolitics', stocks: 'earnings' };
+const CATEGORY_TOPIC: Record<string, NewsTopic> = { crypto: 'crypto', macro: 'macro', geopolitics: 'geopolitics', stocks: 'earnings', other: 'other' };
 
 /** The icon topic of a news item. A coin logo is used when the story is about a coin (see STRONG / WEAK). */
 export function newsTopic(title: string, summary: string | null | undefined, category: string, coins: readonly string[]): NewsTopic {

@@ -22,7 +22,7 @@ Deschide **http://localhost:4317**. Din rețeaua de acasă (telefon, alt calcula
 La prima pornire:
 - se creează tabelele în baza Azure SQL și `data/` (cheia de criptare `master.key`, log-uri, modelul AI);
 - se descarcă modelul de sentiment (~170 MB, o singură dată). Până e gata, știrile apar „în analiză”;
-- favoritele pornesc cu BTC, ETH, SOL.
+- lista de urmărire „Favorite” pornește cu BTC, ETH, SOL.
 
 Oprire: `Ctrl+C` în terminal. Datele rămân în baza Azure SQL; în `data/` stau conexiunea, cheia master, modelul de sentiment și log-urile (`data/logs/`, câte unul pe zi, păstrate 30 de zile).
 
@@ -114,7 +114,9 @@ Tema luminoasă („Navy”): bara de sus și banda cu prețuri rămân bleumari
 - **butoanele, filtrele, segmentele și meniul** își schimbă clar chenarul, fundalul și textul sub cursor; filtrele apăsate sunt pline (bleumarin pe tema luminoasă).
 
 ## Pagini
-Meniul e sus. Sub el, **banda de prețuri** arată, pe orice pagină:
+Meniul e sus, pe un singur rând, la orice lățime. Paginile care nu încap stau sub butonul **»**: un click (sau ↓ de la tastatură) arată lista cu ele, iar Esc sau un click în afară o închide. Dacă pagina deschisă e sub „»”, butonul e colorat. Toate paginile folosesc toată lățimea ferestrei.
+
+Sub meniu, **banda de prețuri** arată, pe orice pagină:
 - monedele favorite (preț, variația pe 24 h, grafic pe 48 h), acțiunile și indicii favoriți (preț, variația zilei, grafic pe 60 de zile, „închis” când bursa e închisă);
 - evenimentul major următor, cu numărătoare;
 - Fear & Greed crypto, capitalizarea pieței și dominanța BTC;
@@ -127,44 +129,133 @@ Meniul e sus. Sub el, **banda de prețuri** arată, pe orice pagină:
 - **Azi**: un cockpit; plăcile de sus încap pe un ecran la 1440 × 900. Cuprinde, în ordine:
   - în stânga, sentimentul zilei (0–100) cu spectrul, variația față de acum o oră, ziua pe ore și sub-indicii crypto / acțiuni / macro / geopolitică;
   - în dreapta, unul sub altul, pe toată înălțimea sentimentului: evenimentul major următor (inclusiv rezultatele companiilor favorite), cu numărătoare și cu evenimentele de azi, și știrile live;
-  - ce mișcă piața („Arată toate” pentru toate știrile-motor) și ultimele 30 de zile, alăturate;
+  - ce mișcă piața: știrile care au împins indicele cel mai mult în sus și cele care l-au tras cel mai mult în jos („Arată toate” pentru toate). La fiecare: cât a mutat indicele („Fără ea, indicele ar fi 47.8 (acum 47.9): +0,10 puncte.”) și „De ce acest scor?”, cu motivul dat de AI-ul tău (pentru știrile notate de la 20 oct 2026 încoace), motorul și de ce cântărește cât cântărește (față de o știre obișnuită de azi: importanța, sursa, vechimea, plafonul). Alături, ultimele 30 de zile;
+  - un clic pe titlul **Sentimentul zilei** (subliniat punctat) deschide „Cum s-a calculat?”: o fereastră care începe cu „Pe scurt”, în cuvinte (câte știri, câte neutre și cât trag spre 50, ce sursă domină, ce știre a mutat cel mai mult indicele), apoi pașii calculului de acum (câte știri intră, cum se cântărește fiecare, media ponderată, apropierea de neutru când sunt puține, scala 0–100, încrederea), cu cifrele de azi; apoi categoriile, sursele (cu greutatea lor și plafonul de 25 %), știrile de la cea care a cântărit cel mai mult (fiecare cu indicele fără ea; 20 o dată, până la 100, restul într-un rând) și toți parametrii. „Recalculează” o reface cu știrile de acum;
   - dedesubt, pe toată lățimea, favoritele tale (preț, variație, grafic, trend, ultimul semnal Slingshot, TP/SL active, structura). Deasupra lor, „Semnale Slingshot pe” 15m · 1h · 4h · 1d alege timeframe-ul semnalelor. Săgeata de lângă simbol arată trendul Slingshot: în sus, verde (uptrend), sau în jos, roșie (downtrend).
 
   Pe telefon (sub 768 px), plăcile se așază una sub alta, în aceeași ordine.
 
   **Rezumat** (butonul din stânga căutării, doar pe Azi): o fereastră mare în care AI-ul tău (Claude, ChatGPT sau Gemini, cu cheia ta) rezumă ziua **de până acum** și spune dacă e o **zi bună de trading**, **mixtă** sau **slabă** (cu cât de sigur e). Dedesubt: câteva secțiuni scurte (sentiment, macro și indicatori, crypto, acțiuni), **Oportunități**, **Riscuri**, **Ce urmează** în următoarele 24 de ore (cu ora) și până la 4 grafice alese după situație: sentimentul pe ore sau pe ultimele zile, sentimentul pe categorii, istoricul indicatorilor economici publicați azi (cu prognoza ca cerc gol și punctul final verde / roșu, ca pe pagina Economie) și variația favoritelor pe 24 h. Cifrele graficelor sunt ale aplicației, nu ale AI-ului. La prima deschidere din zi rezumatul se face singur (20–60 de secunde); după aceea vezi ultimul rezumat de azi, iar **Actualizează** face unul nou cu datele de acum (cel mult o dată la 2 minute). Se închide cu ×, Esc sau click în afara ei. AI-ul primește doar datele aplicației despre azi (sentimentul, titlurile știrilor, calendarul, indicatorii, contextul pieței, favoritele tale), niciodată chei, conturi sau portofolii. Folosește cheia și modelul tău din Setări → Ale mele → Inteligență artificială; fără cheie, fereastra te trimite acolo. Tokenii fiecărui rezumat se adună tot acolo, la „Ce a consumat cheia ta azi”, iar prețul îl arată consola furnizorului. Nu este un sfat de investiții.
-- **Știri**: toate știrile, cu sentiment per știre („De ce acest scor?” arată motorul, scorul modelului, regulile aplicate și importanța cu care știrea intră în sentimentul zilei, cu sursa în paranteză: „importanță 2 (Claude)” când AI-ul tău a notat-o, „importanță 3 (cuvinte-cheie)” după cuvintele din titlu; când AI-ul și cuvintele-cheie dau valori diferite le vezi pe amândouă, iar prima e cea care contează). Filtrele sunt într-o bară deasupra listei: interval, categorie (Crypto, Acțiuni, Macro, Geopolitică), sentiment, sursă, favoritele tale, căutare. Filtrele schimbă doar lista, nu și sentimentul zilei.
-- **Calendar**: săptămâna pe coloane, câte o zi pe coloană (pe ecrane mici, o zi sub alta). Click pe o fișă arată explicația evenimentului și abaterea față de așteptări. Are filtre de impact și valută, cipul **„Rezultate companii”** (rezultatele trimestriale ale acțiunilor favorite, cu EPS estimat și EPS-ul de anul trecut) și evenimente personale (se șterg din fișa lor).
+- **Știri**: toate știrile, cu sentiment per știre („De ce acest scor?” arată motorul, scorul modelului, regulile aplicate și importanța cu care știrea intră în sentimentul zilei, cu sursa în paranteză: „importanță 2 (Claude)” când AI-ul tău a notat-o, „importanță 3 (cuvinte-cheie)” după cuvintele din titlu; când AI-ul și cuvintele-cheie dau valori diferite le vezi pe amândouă, iar prima e cea care contează). Filtrele sunt într-o bară deasupra listei: interval, categorie (Crypto, Acțiuni, Macro, Geopolitică, Altele), sentiment, sursă, favoritele tale, căutare. Filtrele schimbă doar lista, nu și sentimentul zilei.
+  - **Macro** are doar știri despre economie la nivel de țară sau de sistem financiar, niciodată despre o companie anume:
+    - băncile centrale și dobânzile, randamentele titlurilor de stat;
+    - inflația (CPI, PCE, PPI, energia, produsele agricole);
+    - creșterea economică (PIB, PMI, vânzările retail, încrederea consumatorilor);
+    - piața muncii (locurile de muncă, șomajul, salariile);
+    - bugetele și datoria statelor;
+    - comerțul și valutele (tarifele, balanța comercială, dolarul, euro, yenul…);
+    - temele mari: randamentele reale, creșterea diferită în SUA / Europa / China, investițiile în AI și cererea de credit, petrolul, transportul maritim, aurul.
+  - **O știre dintr-o sursă Macro care nu e despre acestea** merge la subiectul ei: o companie la Acțiuni (și în scorul Acțiuni), o monedă la Crypto, un conflict la Geopolitică. Ce nu e despre nimic din acestea ajunge la **Altele**, care nu intră în niciun scor.
+- **Calendar**: săptămâna pe coloane, câte o zi pe coloană (pe ecrane mici, o zi sub alta). Click pe o fișă arată explicația evenimentului și abaterea față de așteptări. Are filtre de impact și valută, cipul **„Rezultate companii”** (rezultatele trimestriale ale acțiunilor favorite, cu EPS estimat și EPS-ul de anul trecut; datele vin de la Nasdaq, iar când compania și-a confirmat ziua, Sentiq o ia pe aceea de la TradingView, care o are mai repede: nota evenimentului spune „Data e confirmată (TradingView)”) și evenimente personale (se șterg din fișa lor).
 - **Știrile despre acțiuni pe indici** (Setări → „Știrile despre acțiuni”): „Toate acțiunile” (implicit) sau „Doar companiile din indicii aleși”: S&P 500 (SPY, VOO), Nasdaq-100 (QQQ), Dow Jones (DIA), unul sau mai mulți. Cu indici aleși, pagina Știri, Azi și Rezumatul zilei arată doar știrile despre companiile din ei, iar partea de acțiuni a scorului tău se calculează doar din ele. Rămân știrile generale de bursă, acțiunile din favoritele tale și știrile crypto, macro și de geopolitică. Listele de companii se actualizează săptămânal (Nasdaq, Wikipedia); o companie se recunoaște după nume, după „$TICKER”, după „(NYSE: TICKER)” sau după ticker; numele care sunt cuvinte obișnuite („Target”, „Visa”) doar după ticker sau numele complet. După o schimbare, scorul tău se recalculează în câteva minute pentru zilele de care Sentiq mai are știrile.
 - **Economie**: nivelul curent al indicatorilor economici, pe țări: SUA, zona euro (UE), Marea Britanie, Japonia, China, Canada, Elveția, Australia, Noua Zeelandă. Pentru fiecare: ultima valoare și perioada ei, valoarea anterioară (revizuită) și schimbarea, istoricul pe ~13 luni, **data și ora următoarei publicări** (cu prognoza, când există) și sursa oficială. Sus sunt „Esențialele” fiecărei țări (inflație, șomaj, PIB, dobândă, cereri de șomaj, NFP…), dedesubt toți indicatorii pe grupe (prețuri, muncă, PIB, industrie, consum, locuințe, bani și dobânzi, comerț, buget, energie, obligațiuni). Un click pe rând arată explicația și ce s-a publicat față de prognoză. **Culorile:** verde = schimbare bună pentru economie, roșu = rea (inflația sau șomajul în creștere sunt roșii, PIB-ul sau locurile de muncă în creștere sunt verzi, dobânzile și randamentele în creștere sunt roșii); fără culoare = indicator neutru (salarii, stocuri, prețul locuințelor) sau fără schimbare; săgeata ▲ / ▼ arată direcția, iar punctul de la capătul istoricului are culoarea ultimei schimbări. Pentru zona euro apar și indicatorii Germaniei, Franței, Italiei și Spaniei care nu există la nivelul zonei euro (ex. Ifo). Sus, cipurile țărilor sunt **filtre**: un click pe o țară arată doar indicatorii ei, alt click pe ea (sau „Toate”) le arată din nou pe toate; numărul de pe cip spune câți indicatori are țara, iar filtrul rămâne în adresa paginii. Căutare și „Doar importante”. Datele vin din același calendar economic ca pagina Calendar; valorile noi apar la câteva minute după publicare, iar la prima pornire istoricul se încarcă în câteva minute.
-- **Grafice**: lumânări cu **[DE] Slingshot System 3.3** (pe grafic, „[DE] Slingshot 3.3”: nor EMA, LONG, TAKE PROFIT, TP/SL, Market Structure) și, în panoul de jos, **[DE] Logarithmic Moving Average** („[DE] LMA”: linia de semnal, pragurile, starea BULLISH / BEARISH / NEUTRAL). DE vine de la Dusty Enterprise. Mai sunt istoricul semnalelor și al alertelor. Opțional, pozițiile și ordinele tale apar ca linii pe grafic, cu PnL la SL, TP și la prețul curent.
+- **Grafice**: lumânări cu **[DE] Slingshot System 3.4** (pe grafic, „[DE] Slingshot 3.4”: nor EMA, LONG, SHORT, TAKE PROFIT, TP/SL, Market Structure) și, în panoul de jos, **[DE] Logarithmic Moving Average** („[DE] LMA”: linia de semnal, pragurile, starea BULLISH / BEARISH / NEUTRAL). DE vine de la Dusty Enterprise. Mai sunt istoricul semnalelor și al alertelor. Opțional, pozițiile și ordinele tale apar ca linii pe grafic, cu PnL la SL, TP și la prețul curent.
   - Merge pentru perechi crypto (`/charts/BTC/USDT`), acțiuni americane (`/charts/s/AAPL`) și indici americani (`/charts/i/SPX`). Câmpul de căutare de lângă favorite le găsește pe toate.
+  - **Slingshot LONG și SHORT** (rotița din legendă → grupul „Signals”):
+    - **Long Signals** (bifat implicit) și **Short Signals** (nebifat). Cel puțin una rămâne bifată: ultima casetă bifată nu se poate debifa.
+    - **SHORT** are exact regulile LONG-ului, inversate: nor roșu, V1 la supracumpărare, deal la supravânzare, un maxim V2 mai jos decât V1, confirmarea la ieșirea din supracumpărare. Se activează exact unde s-ar activa LONG-ul pe graficul întors cu susul în jos.
+    - **Pe grafic:** eticheta SHORT stă deasupra lumânării V2, în albastru (roșie dacă semnalul eșuează), iar TAKE PROFIT-ul ei sub lumânarea care trece sub breakout. La un SHORT, ținta e sub preț și stop loss-ul deasupra; caseta TP/SL arată „(SHORT)”.
+    - **Părțile sunt independente:** LONG-ul și SHORT-ul își urmăresc fiecare TP/SL-ul și alertele. Pot fi deschise amândouă deodată; atunci apar ambele seturi de linii, iar caseta TP/SL are rândurile amândurora.
+    - **Cum arată un semnal:**
+      - **valid** (activ sau terminat cu take profit): triunghi, în culoarea lui;
+      - **eșuat** (stop loss): triunghi, în culoarea de eșec. Pe bara unde și-a atins stop loss-ul apare o etichetă **STOP LOSS**, ca TAKE PROFIT pentru un succes: sub lumânare la LONG, deasupra la SHORT;
+      - **invalidat** (înlocuit de un semnal nou confirmat sau oprit de întoarcerea trendului): un **X**.
+    - **Invalidarea e live.** Cât timp un semnal nou de aceeași parte e în formare, cel vechi apare cu X. Dacă cel nou dispare neconfirmat, cel vechi revine valid. Așa nu mai apar două semnale valide la rând fără un take profit între ele. Tabelul de semnale arată atunci „invalidat (semnal nou în formare)”.
+    - **Liniile și caseta TP/SL** arată nivelurile semnalului în formare, cât timp există unul; altfel, ale semnalului urmărit. Alertele de TP/SL rămân ale celui urmărit până la confirmarea celui nou.
+    - **Personalizare** (grupul „Signals”): fiecare stare a fiecărei părți are rândul ei, cu **culoarea** (și opacitatea) și **mărimea** (Tiny … Huge; „Small”, implicit, are mărimea din TradingView):
+      - Forming Signal (în formare), Signal (valid), Failed Signal (eșuat), Invalidated Signal (X), Take Profit, Stop Loss;
+      - o dată pentru LONG, o dată pentru SHORT. O etichetă care își schimbă starea își ia culoarea și mărimea noii stări.
+    - **Grupul „ATR Settings”:** pentru fiecare nivel (Long / Short ATR Take Profit și Stop Loss), linia (culoare, opacitate, grosime, tip) și mărimea etichetei. Caseta TP / SL folosește culorile fiecărei părți.
+    - **Grupul „Cloud”:** culorile norului pe trend ascendent și descendent. EMA-urile le au întregi, iar norul la jumătate din opacitate. Slow EMA și Fast EMA au grosimea și tipul liniei.
+    - **Market Structure:** fiecare linie (Bullish, Bearish) cu culoarea, grosimea, tipul și mărimea textului ei.
+    - Setările salvate înainte își păstrează aspectul.
+    - Tabelul de semnale, alertele (Short Signal, Short Take Profit Signal, Short ATR Take Profit Hit, Short ATR Stop Loss Hit) și cardurile din Azi arată partea. Short-ul apare și în Azi doar dacă e bifat.
+    - **În TradingView:** fișierul `sling-shot-system-3.4.pine`; 3.3 rămâne cum era.
   - **Prețurile crypto vin de la exchange-ul tău** conectat (KuCoin, Binance, Bybit, OKX sau Bitget; numele lui apare lângă preț), ca liniile pozițiilor tale să fie pe prețurile de acolo. Fără unul dintre ele (sau cu Kraken / Coinbase, care nu au perechile și istoricul necesare), prețurile vin de la exchange-ul ales de admin; la fel, o monedă pe care exchange-ul tău n-o are. Un timeframe pe care exchange-ul nu-l are (8h pe Bybit / OKX / Bitget) apare dezactivat.
   - **„Indicatori”** deschide lista: cei 117 indicatori standard din TradingView (RSI, MACD, Bollinger, Ichimoku, Supertrend, VWAP, Pivot Points…) plus Volume, cu căutare și pe categorii (Medii mobile, Oscilatori, Momentum, Trend, Volatilitate, Canale și benzi, Volum). Sus, la **Premium**, sunt Slingshot și LMA, cu eticheta PREMIUM (deocamdată gratuite). Un click adaugă indicatorul; poți adăuga același indicator de mai multe ori (ex. EMA 20 și EMA 50), cel mult 20. Un indicator scos și adăugat din nou vine cu **ultimele tale setări** (intrări, stil, înălțimea panoului); „Valorile implicite” + „Salvează” îl readuce la valorile TradingView. **Steaua** din dreapta unui rând îl pune la **Favorite**, prima categorie; cu cel puțin un favorit, lista se deschide direct acolo. Toate listele ferestrei (Favorite, Premium, Toți, fiecare categorie și căutarea) sunt în ordine alfabetică. Pentru mai multe medii mobile într-un singur indicator: **Moving Average Ribbon** (4 linii, fiecare cu tipul ei — SMA, EMA, SMMA, WMA, VWMA —, perioada, sursa și culoarea).
   - Cei „pe grafic” (medii, benzi, Ichimoku…) se desenează peste lumânări; ceilalți au fiecare panoul lor dedesubt, iar graficul crește cu 120 px pentru fiecare panou. Separatorul dintre panouri se trage, iar înălțimea se ține minte.
-  - Fiecare indicator are o **legendă** sus-stânga: numele și parametrii, apoi **ochi** (ascunde / arată), **rotiță** (setări) și **×** (scoate), apoi valorile la lumânarea de sub cursor. Butoanele stau lângă nume, așa că nu se mută când valorile se schimbă cu cursorul. Ochiul există și la Slingshot și LMA: ascunși, nu se mai desenează (nici culorile lumânărilor de la LMA), dar rămân pe grafic, cu legenda estompată. Setările au tab-urile **Intrări** (aceleași câmpuri, valori implicite și limite ca în TradingView) și **Stil**: pentru fiecare linie, vizibilitatea, culoarea, **tipul** (continuă, liniuțe, puncte) și **grosimea** (implicită, groasă, foarte groasă); la fel pentru liniile orizontale (ex. 70 / 30 la RSI), care au în plus **nivelul** lor (ex. 80 / 50 / 20 la Stochastic RSI), cu umplerea dintre ele. Setările Slingshot și LMA se deschid tot din rotița legendei.
+  - Fiecare indicator are o **legendă** sus-stânga: numele și parametrii, apoi **ochi** (ascunde / arată), **rotiță** (setări) și **×** (scoate), apoi valorile la lumânarea de sub cursor. Butoanele stau lângă nume, așa că nu se mută când valorile se schimbă cu cursorul. Ochiul există și la Slingshot și LMA: ascunși, nu se mai desenează (nici culorile lumânărilor de la LMA), dar rămân pe grafic, cu legenda estompată. Setările au tab-urile **Intrări** (aceleași câmpuri, valori implicite și limite ca în TradingView) și **Stil**: pentru fiecare linie, vizibilitatea și **caseta liniei** (vezi mai jos); la fel pentru liniile orizontale (ex. 70 / 30 la RSI), care au în plus **nivelul** lor (ex. 80 / 50 / 20 la Stochastic RSI), cu umplerea dintre ele. Setările Slingshot și LMA se deschid tot din rotița legendei. **Iconița (i)** de lângă o setare arată explicația ei: cu mouse-ul pe ea, sau cu un click / tap, care o ține deschisă până la un click în altă parte sau Esc.
+  - **Umplerile** (tab-ul Stil, secțiunea „Umpleri”): fiecare umplere a indicatorului se poate ascunde. Exemple: fundalul benzilor Bollinger, banda 70 / 30 la RSI, norul Ichimoku.
+    - Cele cu o singură culoare primesc și caseta de culoare, cu opacitatea de acum: fundalul Bollinger arată 5 %.
+    - Cele colorate pe bare sau în gradient au doar bifa, ca în TradingView.
+  - **Orice culoare are opacitate.** Asta e valabil la Slingshot, LMA, indicatorii standard (Intrări și Stil) și linia orizontală desenată.
+    - Caseta de culoare arată culoarea peste carouri.
+    - Un click deschide un panou mic, cu selectorul de culoare, codul hex și glisorul **Opacitate** (0–100 %).
+    - Esc sau un click în afara panoului îl închide. Esc nu închide și fereastra de setări.
+    - Ca orice setare, se aplică la „Salvează”.
+  - **O culoare, o casetă.** Orice casetă de culoare din setări schimbă exact ce se desenează.
+    - O culoare din Intrări care este culoarea unei linii (de exemplu MA #1–#4 la MA Ribbon) are aceeași casetă și în Intrări, și în Stil: culoare, opacitate, grosime și tipul liniei. Cele două sunt legate: ce schimbi într-un tab apare și în celălalt.
+    - O linie desenată în mai multe culori (histograma MACD, AO, Chop Zone…) are câte o casetă pentru fiecare culoare, în tab-ul Stil.
+    - Coloanele Technical Ratings se colorează din culorile din Intrări (Table Settings). Caseta lor din Stil spune asta, în loc să ofere o culoare fără efect.
+    - Liniile orizontale care, în scriptul TradingView, iau o culoare din Intrări o urmează, până alegi alta în Stil. Exemple: benzile TSI, nivelurile Technical Ratings.
   - Câțiva indicatori citesc alte date: Pivot Points Standard sau Technical Ratings cer același simbol pe un timeframe mai mare, pe care Sentiq îl descarcă (altfel le calculează din lumânările graficului, cu nota „aproximat”). Performance și Correlation Coefficient cer alte simboluri: merg perechi crypto și acțiuni americane, nu forex sau futures (legenda spune ce lipsește; schimbi simbolurile din setări). Indicatorii de volum nu au valori pe indici (fără volum).
-  - „Color Price Bars” (implicit activ, ca în TradingView) colorează lumânările după LMA; îl poți opri din setările LMA.
+  - „Color Price Bars” (implicit activ, ca în TradingView) colorează corpul lumânărilor după LMA; marginea și fitilul rămân în culorile din Setări → Simbol (cu „Corp” debifat, corpul rămâne gol). Îl poți opri din setările LMA.
+  - **Stilul LMA:** LMA Signal (grosimea și tipul; culoarea după stare), iar Long Threshold, Short Threshold și Neutral Line au fiecare bifa, caseta liniei și nivelul. Culoarea unui prag e a scriptului (după Bullish / Bearish Color) până alegi una; „Valorile implicite” o pune la loc.
   - Graficul nu are grilă și nici linii sub cursor; prețul și ora apar pe axe.
   - Când derulezi în istoric și ultima lumânare iese din ecran, în colțul din dreapta jos al panoului cu lumânări (deasupra panourilor LMA și ale indicatorilor) apare butonul **»** („Mergi la ultima lumânare”): un click te readuce la prezent, cu același zoom.
   - Slingshot și LMA se adaugă din lista Indicatori și se scot cu × din legenda lor; fără ei, graficul are doar lumânările (și ce indicatori ai adăugat). Panourile „Semnale” și „Alerte” de sub grafic rămân.
-  - **Favoritele de deasupra graficului se pot reordona:** le tragi cu mouse-ul (pe ecran tactil: ții apăsat, apoi tragi) sau, cu tastatura, Alt + ← / → pe un favorit. Ordinea e aceeași peste tot (bandă, Azi, Setări). Un click simplu deschide graficul, ca înainte.
+  - **Ordinea** schimbată în lista din dreapta graficului (vezi mai jos) e ordinea acelei liste de urmărire, aceeași și în pagina Liste de urmărire.
   - Aplicația ține minte perechea sau acțiunea, timeframe-ul, „Pozițiile mele”, indicatorii de pe grafic (aceiași pe toate graficele), înălțimea fiecărui panou și setările indicatorilor. „Grafice” din meniu redeschide ultimul grafic. Zoom-ul fiecărui grafic și al fiecărui timeframe e ținut minte în browser.
   - **Ecran complet**: butonul din bara graficului. Ieși cu „Ieși din ecran complet” sau cu **Esc**; dacă sertarul de setări e deschis, primul Esc îl închide.
   - Când treci de la un simbol la altul, prețul și variația rămân pe loc, gri cu „—”, până sosesc datele noului simbol: bara cu intervalele și butoanele nu mai sare de pe un rând pe altul.
-  - **Cursorul** are linii punctate, verticală și orizontală, cu prețul și ora pe axe.
+  - **Cursorul** e o cruce pe grafic, cu linii punctate, verticală și orizontală. Prețul și ora de sub el apar pe axe, pe gri închis.
+  - **Prețul curent:** o etichetă galben-pal pe scala prețului, cu timpul rămas până se închide lumânarea (la acțiuni și indici, doar cu bursa deschisă), și o linie galbenă punctată.
+  - **Tragerea graficului:** în orice direcție, de oriunde. Când tragi și pe verticală, scala prețului trece singură pe manual.
+  - **Pe telefon și tabletă:** două degete (pinch) măresc sau micșorează graficul, de fiecare dată, iar pagina nu se mărește dintr-un gest pe grafic. Tragerea cu un deget pornește după câțiva pixeli, ca să nu încurce un pinch.
+  - **Butoanele A și L**, la baza scalei prețului (colțul din dreapta jos al panoului cu lumânări):
+    - **A (Automat):** încadrează lumânările vizibile pe înălțime; se stinge când tragi graficul pe verticală sau tragi de scală, iar un click îl aprinde la loc;
+    - **L:** scala logaritmică, ținută minte în cont;
+    - la schimbarea simbolului sau a intervalului, A se aprinde singur.
+  - **Linia de stare**, primul rând sus-stânga (ca în TradingView): logo-ul, simbolul cu intervalul și sursa („BTC/USDT · 1h · KuCoin”) și volumul lumânării de sub cursor. Din Setări poți adăuga starea pieței, valorile lumânării (D, Max, Min, Î), variația ei și variația față de ziua precedentă.
+  - **Click dreapta pe grafic** deschide meniul graficului:
+    - **Resetează vizualizarea** (sau **⌥R** pe Mac, **Alt+R** în rest): ultimele 180 de lumânări, cu loc liber la dreapta, și scala prețului din nou automată;
+    - **Șterge N desene:** liniile orizontale ale simbolului;
+    - **Șterge N indicatori:** toți indicatorii, Slingshot și LMA incluși. După ambele ștergeri, mesajul de jos are **Anulează**, care le pune la loc;
+    - **Setări…**
+  - **Setările graficului** (din meniu sau din ⚙, colțul din dreapta-jos, sub scala prețului; pe telefon doar de acolo). Sunt ale contului tău, deci aceleași pe toate graficele. Orice schimbare se vede pe loc, **OK** o salvează, iar **Renunță**, ×, Esc sau un click în afară pun graficul înapoi. **Valorile implicite** pune la loc tab-ul deschis. Tab-urile:
+    - **Simbol:**
+      - culorile lumânărilor (corp, margini, fitil, fiecare de creștere și de scădere);
+      - colorarea după închiderea anterioară;
+      - precizia (câte zecimale se văd; ordinele și liniile își păstrează prețul exact);
+      - un fus orar doar pentru grafic;
+    - **Linia de stare:**
+      - ce arată rândul simbolului;
+      - pentru indicatori: titlurile (cu parametrii), valorile și fundalul legendelor, cu opacitatea lui;
+    - **Canvas:**
+      - fundalul, plin sau în degrade;
+      - grila verticală și orizontală (culoare și tip de linie);
+      - separatoarele panourilor;
+      - cursorul;
+      - filigranul (simbolul și intervalul în mijlocul graficului);
+      - textul și liniile scalelor (mărimea textului mărește și etichetele, toate la fel de late);
+      - butoanele (navigarea și cele din legende: la mouse, mereu sau ascunse);
+      - marginile de sus, de jos și din dreapta;
+    - **Alerte:** dacă mesajele de jos dispar singure; **sunetul la închiderea unui trade** (implicit pornit).
+  - **Sunetul de monede:** când un trade pe **simbolul din grafic** se termină (stop loss, take profit sau închis de tine), în oricare cont, cât timp graficul se vede, se aude o dată un sunet de monede. Exemplu: pe graficul SOL/USDT, pozițiile SOL și deținerea de SOL. Trade-urile pe alte simboluri nu sună, nici ce s-a închis cât erai pe altă pagină, pe alt simbol sau cu fila ascunsă. Pe iPhone / iPad, sunetul e gata după prima atingere pe pagină, care nu scoate niciun sunet.
+
+    Culorile lăsate neschimbate urmează tema luminoasă / întunecată.
+  - **Caseta liniei** (la fel peste tot: Slingshot, LMA, indicatorii standard, linia orizontală, setările graficului), ca în TradingView: în stânga culoarea, în dreapta linia cu grosimea și tipul ei. Un click deschide panoul cu paleta, culorile tale (+, ținute minte în browser), **opacitatea**, **grosimea** (1, 2, 3, 4 px) și **tipul** (continuă, întreruptă, punctată). Un element fără tip de linie (o histogramă) are doar grosimea; o umplere doar culoarea. Unde culoarea vine din altă parte (linia de semnal LMA, EMA-urile Slingshot), panoul spune de unde și are doar grosimea și tipul. O grosime veche de 5–6 px rămâne afișată până alegi alta. **Mărimea** formelor și a textelor e aceeași listă peste tot: Tiny, Small, Normal, Large, Huge.
+  - **Lista de simboluri**, în dreapta graficului (ca în TradingView):
+    - în capul ei alegi **lista de urmărire** (ca în TradingView); rândurile sunt simbolurile ei, cu Ultimul, Var și Var% (verde în creștere, roșu în scădere). Lista aleasă se ține minte în cont. Simbolul deschis e încadrat, iar un click pe un rând îi deschide graficul; „Liste” deschide pagina listelor;
+    - ordinea se schimbă trăgând de un rând (pe ecran tactil, după o apăsare scurtă) sau cu Alt + ↑ / ↓;
+    - căutarea e în capul listei: ↓ / ↑ aleg un rezultat, Enter îl deschide (fără alegere, pe primul), Esc golește căutarea;
+    - lățimea se schimbă trăgând de marginea ei din stânga (dublu-click: 300 px), iar butonul din dreapta barei graficului, deasupra listei, o ascunde și o readuce;
+    - când lista ajunge la capăt, rotița derulează mai departe pagina (în ecranul complet, nu: acolo nu e pagină de derulat);
+    - lățimea și ascunderea se țin minte în browser;
+    - pe telefon (sub 768 px), lista e un panou care glisează din dreapta: îl deschizi cu butonul listei din bara graficului și îl închizi atingând zona umbrită, trăgându-l spre dreapta, sau alegând un simbol. La fiecare intrare pe pagină e închis.
+  - **În ecranul complet:** „Ieși din ecran complet” e iconița în culoarea de accent de lângă „Indicatori” (sau Esc). Pe iPhone și iPad, graficul acoperă fereastra browserului (barele Safari rămân vizibile): ecranul complet al sistemului de acolo se închide la orice tragere în jos, iar o pagină nu poate împiedica asta.
   - **Linii orizontale:**
-    - **adăugare:** cu cursorul pe panoul lumânărilor, la capătul liniei lui orizontale apare **+**; un click pe el și „Linie orizontală la …” adaugă linia la acel preț. Mai repede: **Alt+H** (pe Mac ⌥H);
+    - **adăugare:** cu cursorul pe panoul lumânărilor, la capătul liniei lui orizontale apare **+**; un click pe el și „Linie orizontală la …” adaugă linia la acel preț. Cât ești pe **+** (sau în meniul lui), crucea rămâne, cu prețul ei pe scală. Pe ecran tactil (iPhone, iPad): apasă lung pe grafic și trage, iar **+** urmează crucea (prețurile stau pe loc cât alegi); o atingere în afara meniului (sau adăugarea liniei) le ascunde pe amândouă, iar următoarea glisare derulează graficul. Mai repede: **Alt+H** (pe Mac ⌥H; pe telefon indicația nu apare);
     - **mutare:** trage linia în sus sau în jos (cursorul devine o săgeată sus-jos);
     - **setări:** un click pe linie deschide panoul ei, cu tot ce are TradingView, într-un singur loc:
-      - linia: culoarea, grosimea, tipul, eticheta prețului;
+      - linia: caseta liniei (culoarea, opacitatea, grosimea, tipul), eticheta prețului;
       - textul: culoarea, mărimea, îngroșat, cursiv, rândurile lui, alinierea sus / mijloc / jos și stânga / centru / dreapta;
       - prețul;
       - vizibilitatea pe minute, ore, zile și săptămâni;
       - șablonul: stilul cu care încep liniile noi;
     - **previzualizare:** ce schimbi se vede pe loc; „Salvează” păstrează, „Anulează” (sau Esc) pune la loc, „Șterge linia” o scoate;
     - **unde apar:** liniile sunt ale simbolului pe care le-ai desenat, pe toate intervalele, cel mult 50 pe simbol, și se văd pe orice dispozitiv;
-    - **pe telefon:** atingerea unei linii deschide panoul; o muți din câmpul de preț.
+    - **pe telefon:** atingerea unei linii deschide panoul (o glisare pornită de pe linie doar derulează graficul); o muți din câmpul de preț.
 - **Tranzacții**: pentru fiecare cont, cu logo-ul lui: poziții, dețineri cu preț mediu și PnL, numerar (la brokeri), ordine deschise și tranzacțiile recente. „Reîmprospătează” e sus, lângă „Adaugă un cont”.
   - La un exchange crypto, sus sunt 7 carduri. **Disponibil în futures**: suma liberă din contul futures (USDT). **Valoare în contul spot**: tot ce ai în conturile spot (la KuCoin: Trading și Funding), monedele la prețul de acum plus stablecoins, fără contul futures. **PnL nerealizat**: pozițiile futures încă deschise.
   - Apoi **Tranzacții profitabile**, **Tranzacții cu pierdere**, **Rata de succes** (profitabile din profitabile + cu pierdere) și **Câștig net**, toate pentru pozițiile futures închise în perioada aleasă sus, lângă butoane: Azi · 7z · 30z · 90z. Rezultatul fiecărei poziții e cel net, după comisioane și funding, cum îl dă exchange-ul. Merge la KuCoin, Bybit, OKX și Bitget; Binance nu dă istoricul pozițiilor închise prin API.
@@ -173,13 +264,30 @@ Meniul e sus. Sub el, **banda de prețuri** arată, pe orice pagină:
     - **Trading 212:** o vânzare executată, cu profitul realizat dat de Trading 212;
     - **Interactive Brokers:** un ordin care închide o poziție, cu Realized P/L din raportul Flex (cu comisioane). Raportul are doar zilele încheiate, deci „Azi” arată „—”; la Flex Query, secțiunea Trades trebuie să aibă nivelul „Execution” și toate câmpurile;
     - **Alpaca:** un ordin care închide o poziție. Alpaca nu dă rezultatul, așa că Sentiq îl calculează din execuții (primele cumpărate, primele vândute). O vânzare fără cumpărarea ei în istoric (acțiuni transferate, split) nu se numără, iar cardul spune câte sunt.
-- **Setări → Ale mele**: favorite (monede, acțiuni și indici; ordinea se schimbă trăgând de mânerul ⋮⋮, cu săgețile sau cu Alt + ↑ / ↓), conturi (exchange-uri și brokeri; cu două sau mai multe exchange-uri, alegi de la care vin prețurile crypto), datele pentru acțiuni (cheia Twelve Data, planul și consumul ei; vezi „Acțiuni”), inteligența artificială (cheia, modelul, scorul știrilor; vezi „AI în Sentiq”), fus orar. Fiecare le are pe ale lui. Timeframe-ul graficului se alege pe Grafice, iar cel al semnalelor pe Azi.
+- **Liste de urmărire** (în meniu, după Tranzacții): vezi „Liste de urmărire” mai jos.
+- **Setări → Ale mele**: conturi (exchange-uri și brokeri; cu două sau mai multe exchange-uri, alegi de la care vin prețurile crypto), datele pentru acțiuni (cheia Twelve Data, planul și consumul ei; vezi „Acțiuni”), inteligența artificială (cheia, modelul, scorul știrilor; vezi „AI în Sentiq”), fus orar. Fiecare le are pe ale lui. Timeframe-ul graficului se alege pe Grafice, iar cel al semnalelor pe Azi.
 - **Setări → Admin** (fila apare doar pentru admin; ⌘K „Setări admin”): ce se aplică tuturor: sursele de știri, sentimentul comun (modelul local: rescorare, recalcularea istoricului), datele de piață (exchange-ul implicit pentru prețurile crypto, istoricul încărcat pe grafice), păstrarea știrilor și emailul (Resend).
+  - **O sursă nouă** are una sau mai multe **Categorii** (Crypto, Acțiuni, Macro, Geopolitică), iar „Toate (general)” le alege pe toate patru, pentru feed-uri ca Benzinga. Cu o categorie, toate știrile sursei intră acolo. Cu mai multe, fiecare știre intră la categoria pe care o tratează, după monedele și companiile numite și după cuvintele subiectului; una care nu tratează niciuna dintre ele apare cu „relevanță scăzută” și nu intră în sentiment. **Macro** e la fel peste tot: doar știrile după regulile macro (vezi Știri); celelalte merg la subiectul lor sau la Altele. La sursele adăugate de tine, „Schimbă” din coloana „Categorie” le schimbă, iar știrile păstrate se reclasează.
+  - **Site-uri fără RSS:** în loc de adresa unui feed poți pune adresa paginii de știri a site-ului (de ex. `https://www.coindesk.com/markets`). „Testează” spune cum o citește Sentiq, în ordinea asta: feed RSS; feed găsit în pagină; datele structurate ale paginii; titlurile din pagină; sitemap-ul de știri al site-ului (de ex. Benzinga, a cărui pagină blochează cititorii automați). Spune și câte știri au dată. Sentiq respectă `robots.txt` (Reuters, de exemplu, interzice orice cititor automat, deci nu se adaugă) și nu ocolește protecțiile anti-bot (AP News). Paginile se citesc o dată la 10 minute. La prima citire, titlurile fără nicio dată sunt doar notate (nu se știe cât de vechi sunt); cele apărute după aceea intră cu ora la care au fost văzute. În tabel, la „Stare”, apare cum se citește sursa (de ex. „titlurile din pagină”).
 - **Stare sistem** (doar admin): sănătatea surselor, a job-urilor și a modelului, câți utilizatori au scorul pe AI-ul propriu și câți au cheie Twelve Data.
 
+## Liste de urmărire
+Pagina din meniu, după Tranzacții, ține listele tale de simboluri (monede, acțiuni, indici), fiecare cu numele ei. **Toate listele împreună** sunt simbolurile pe care le urmărești în restul aplicației: banda de sus, Azi, scanner-ul, filtrul „doar urmărite” din Știri, rezultatele din Calendar, Rezumatul și căutarea ⌘K. În ele sunt cel mult 50 de simboluri diferite; același simbol în mai multe liste se numără o dată. Poți avea cel mult 20 de liste. Favoritele de dinainte sunt lista „Favorite”.
+- **Listele** sunt în stânga (pe telefon, într-un câmp de sus): **+** din antet face o listă nouă, iar pe fiecare, creionul o redenumește și coșul o șterge. Ultima listă nu se șterge, doar se golește. Ordinea listelor se schimbă trăgând de mâner sau cu Alt + ↑ / ↓.
+- **Adaugi** un simbol cu comutatorul Crypto / Acțiuni / Indici și căutarea. Perechea unei monede, aliasurile și numele sunt ale simbolului, deci aceleași în toate listele lui.
+- **Selectezi** simboluri cu căsuța de pe rând. Shift + clic bifează tot intervalul, iar căsuța din capul tabelului le bifează pe toate. Bara de deasupra tabelului e mereu acolo; după bifare alegi:
+  - **Copiază în…:** le pune la sfârșitul altei liste;
+  - **Mută în…:** le pune acolo și le scoate de aici;
+  - **Șterge:** le scoate din listă. Un simbol care nu mai e în nicio altă listă dispare și din restul aplicației, iar confirmarea îți spune care sunt acestea.
+- **Ordinea** se schimbă trăgând de mânerul ⋮⋮, cu săgețile sau cu Alt + ↑ / ↓.
+- **Butonul ⓘ** de pe rând deschide **Date financiare**:
+  - **Descrierea:** în română, tradusă o singură dată cu AI-ul tău dacă ai cheie (apare la consum, pe rândul „Traduceri”); fără cheie, în engleză.
+  - **Acțiunile:** rezultatele pe ultimele 4 trimestre (venituri, profit brut, EBITDA, profit net, EPS diluat, flux de numerar liber, cu marjele și comparația cu anul trecut) și data următoarelor rezultate.
+  - **Monedele și indicii:** doar descrierea. Fondurile (ETF) nu au rezultate.
+
 ## Acțiuni
-1. **Favorite**: Setări → Favorite → **Acțiuni**, apoi caută după simbol sau nume („Apple”, „MSFT”). Numele companiei devine alias pentru știri (îl poți edita).
-2. **Ce primești** pentru fiecare acțiune favorită: prețul în bandă și în Azi, graficul cu Slingshot și LMA, știrile ei (Nasdaq adaugă automat un feed pentru ea, marcat „automată” în Setări → Admin → Surse; feed-ul se șterge, cu știrile lui, când acțiunea nu mai e în favoritele nimănui), rezultatele trimestriale în calendar și rândul ei în scanner.
+1. **În urmărire**: Liste de urmărire → o listă → **Acțiuni**, apoi caută după simbol sau nume („Apple”, „MSFT”). Numele companiei devine alias pentru știri (îl poți edita).
+2. **Ce primești** pentru fiecare acțiune favorită: prețul în bandă și în Azi, graficul cu Slingshot și LMA, știrile ei (Nasdaq adaugă automat un feed pentru ea, marcat „automată” în Setări → Admin → Surse; feed-ul se șterge, cu știrile lui, când acțiunea nu mai e în listele nimănui), rezultatele trimestriale în calendar și rândul ei în scanner.
 3. **Graficele fără cheie** au lumânări zilnice și săptămânale (Nasdaq, gratuit). Pentru 1m – 4h, fiecare își pune **propria cheie Twelve Data** (gratuită):
    - înregistrare pe https://twelvedata.com/register, apoi pagina **API Keys**;
    - Setări → Ale mele → Date pentru acțiuni → „Cheia Twelve Data” → „Verifică și salvează” (verificarea costă o cerere a cheii).
@@ -188,7 +296,7 @@ Meniul e sus. Sub el, **banda de prețuri** arată, pe orice pagină:
 4. Datele sunt pentru bursele americane (NASDAQ, NYSE), cu câteva minute întârziere la preț.
 
 ## Indici
-1. **Favorite**: Setări → Favorite → **Indici**. Lista apare direct sub câmp; un click adaugă indicele. Câmpul o filtrează („spx”, „dow”, „nasdaq”).
+1. **În urmărire**: Liste de urmărire → o listă → **Indici**. Lista apare direct sub câmp; un click adaugă indicele. Câmpul o filtrează („spx”, „dow”, „nasdaq”).
 2. Indicii disponibili: **SPX** (S&P 500), **NDX** (Nasdaq-100), **COMP** (Nasdaq Composite), **DJI** (Dow Jones), **RUT** (Russell 2000), **VIX** (volatilitatea S&P 500), **SOX** (semiconductori).
 3. **Ce primești**: ca la acțiuni, prețul în bandă și în Azi, graficul cu Slingshot și LMA, filtrul de știri (după aliasuri: „S&P 500”, „Dow Jones”…, editabile) și rândul în scanner. Fără feed de știri propriu și fără rezultate în calendar.
 4. **Timeframe-uri**: 1m – 4h și 1d / 1w, cu prețul în timp real. Nu există 6h, 8h și 12h, fiindcă ședința are 6 ore și jumătate.
@@ -281,12 +389,37 @@ Pe orice cont, în afară de Interactive Brokers, poți trimite ordine direct di
 - **Fereastra de confirmare** arată exact ce pleacă: cantitatea rotunjită (și în contracte la futures), prețurile, valoarea, marja, plus avertismentele.
 - Ordinul pleacă doar la **„Confirmă și trimite”**. Un dublu click sau o reîncercare a aceluiași formular nu face două ordine.
 - **„Anulează”** pe un ordin deschis.
-- **Jurnalul „Ordinele trimise din Sentiq”** apare în josul paginii contului: ordinele, anulările, pornirile și opririle, cu rezultatul fiecăruia.
+- **Modificarea ordinelor și a SL / TP:**
+  - **„SL / TP”** pe o poziție (și pe o deținere eToro dintr-o singură poziție, sau o deținere crypto care are deja ordine SL / TP): mută un stop loss / take profit, adaugă unul care lipsește (futures și eToro) sau șterge-l. Sub fiecare câmp vezi PnL-ul la noul nivel, cel de dinainte și diferența.
+  - **„Modifică”** pe un ordin deschis: doar ce permite platforma pe acel ordin (prețul, declanșarea, cantitatea, TP / SL atașate). La eToro, rândurile SL / TP ale unei poziții deschid formularul poziției; ordinele eToro în așteptare nu se modifică (anulează-l și pune altul).
+  - **„Verifică”** arată, pentru fiecare schimbare, vechi → nou, cum pleacă („modificare directă”, „direct pe poziție”, „ordin nou, apoi anularea celui vechi” sau „anularea celui vechi, apoi ordin nou”) și impactul pe PnL. Pleacă doar la **„Confirmă și trimite”**.
+  - Unde platforma nu modifică un ordin (KuCoin, Bitget, stop-urile futures Binance, Trading 212), Sentiq îl înlocuiește. Un SL / TP de poziție: întâi cel nou, apoi se anulează cel vechi, deci poziția nu rămâne descoperită. Un ordin de intrare: întâi se anulează, apoi se pune cel nou (confirmarea te avertizează).
+  - Un nivel care s-ar executa imediat (un SL peste preț la un long, o declanșare mutată de cealaltă parte a prețului) e refuzat la verificare, cu explicația.
+- **Pe grafic** (cu „Pozițiile mele” bifat), fiecare linie a unui trade are o casetă ca în TradingView, departe de scala prețului: **cantitate | PnL | ×**. Intrarea arată PnL-ul de acum, SL-ul și TP-ul PnL-ul la nivelul lor, un ordin felul lui („Limită cumpărare”). Culorile sunt ca acolo: long albastru, short roșu, TP verde, SL portocaliu.
+  - **×** închide trade-ul: pe intrare deschide formularul „Închide” (sau „Vinde”); pe un SL / TP îl șterge; pe un ordin îl anulează. Toate cer confirmare.
+  - **⇅** (la stânga casetei intrării, pe futures crypto) întoarce poziția: o închide și o deschide în sens opus, cu aceeași mărime, levier și marjă; ordinele SL / TP vechi se anulează. Același lucru din Tranzacții, cu „Întoarce” pe rândul poziției. Cere confirmare.
+  - Cât tragi un SL sau un TP, spațiul dintre intrare și linie se colorează (TP verde, SL portocaliu).
+- SL-ul și TP-ul pozițiilor, liniile ordinelor deschise și TP / SL-ul atașat lor se trag ca în TradingView, de linie sau de casetă:
+  - cu mouse-ul: cursorul devine ↕ deasupra liniei; o tragi, iar eticheta arată PnL-ul la noul nivel;
+  - pe telefon: atinge linia (se îngroașă), apoi trage-o cu degetul; fără atingerea dinainte, degetul mută graficul;
+  - după ce o lași, pe linia de intrare (sau pe linia ordinului), imediat la stânga casetei, apar **Confirmă** și **Renunță** (pe telefon ✓ și ✕). Poți trage și SL-ul, și TP-ul înainte să confirmi;
+  - Confirmă verifică schimbarea: o eroare apare lângă butoane (liniile rămân trase, ca să le corectezi), avertismentele cer o confirmare, altfel schimbarea pleacă și un mesaj spune rezultatul. Renunță pune liniile la loc.
+- **Jurnalul „Ordinele trimise din Sentiq”** apare în josul paginii contului: ordinele, anulările, modificările, pornirile și opririle, cu rezultatul fiecăruia.
 
 **De știut:**
 - Cel mult 20 de acțiuni de tranzacționare pe minut.
 - Dacă nu vine niciun răspuns după trimitere, Sentiq spune că nu știe sigur dacă ordinul a ajuns și nu-l retrimite singur: verifică ordinele deschise.
-- Futures doar în modul **one-way**: un cont în modul hedge e refuzat, cu explicația.
+- Futures în modul **one-way** sau **hedge** (long și short separate pe aceeași pereche), pe toate exchange-urile cu futures (KuCoin, Binance, Bybit, OKX, Bitget). Sentiq citește modul din cont (pe Bybit, al perechii) și trimite fiecare ordin în el:
+  - „Long” deschide sau mărește long-ul, „Short” deschide sau mărește short-ul, iar cealaltă poziție rămâne;
+  - cu reduce-only bifat, butoanele devin „Închide long” și „Închide short”; „Închide” din Poziții închide exact poziția de pe rând;
+  - formularul arată „Mod hedge” și pozițiile deschise pe pereche, iar un Short dat cu un long deschis (sau invers) e semnalat;
+  - în Tranzacții → Ordine, un ordin hedge arată poziția lui („long” / „short”); pe grafic, liniile celor două poziții spun LONG / SHORT;
+  - pe contul unificat KuCoin (UTA), API-ul KuCoin primește doar one-way, deci hedge-ul e refuzat, cu explicația;
+  - dacă schimbi modul pe exchange după ce Sentiq l-a citit, primul ordin e refuzat („Modul pozițiilor s-a schimbat”), iar retrimis merge.
+- Brokeri:
+  - **eToro** ține fiecare poziție separat: „Short” deschide un short lângă acțiunile deținute, iar formularul arată ambele părți („Poziții separate · long … · short …”); un short se închide cu „Închide”;
+  - **Alpaca** ține o singură poziție pe simbol (netă): vânzarea peste long deschide un short abia după ce îl închide, iar cumpărarea cu un short deschis îl acoperă întâi (formularul o spune);
+  - **Trading 212** (conturi Invest / ISA) nu are short, deci nici hedge.
 - Pe Bybit, marja (cross / isolated) e a contului: Sentiq nu o schimbă.
 - Pe Binance, TP / SL se trimit ca ordine separate, după o intrare la piață.
 - Pe KuCoin, futures se tranzacționează în loturi întregi (un lot BTC = 0,001 BTC); pe un cont unificat (UTA), doar cu marjă cross.
@@ -296,6 +429,58 @@ Pe orice cont, în afară de Interactive Brokers, poți trimite ordine direct di
 - La eToro, „Vinde” pe o deținere îi închide pozițiile, iar „Short” deschide o poziție short (levierul peste 1× și short-ul cer stop loss).
 - Soldul „main” al unui cont KuCoin clasic nu se vinde din Sentiq: mută-l întâi în contul de trading, pe KuCoin.
 - **Integrările au fost verificate pe cererile documentate de fiecare platformă, nu cu conturi reale.** Începe pe Demo / Paper, unde există (Trading 212 Practice, eToro Demo, Alpaca Paper), sau cu sume mici.
+
+## Boți de tranzacționare
+Pe grafic, butonul **Bot** (lângă „Tranzacționează”) deschide fereastra boților. Un bot nou pornește cu simbolul, timeframe-ul și prețul graficului.
+
+**Trei tipuri, în două familii care nu se amestecă:**
+- **Clasic:**
+  - **Grid:** între o limită de jos și una de sus, N grile, aritmetice sau geometrice. Cumpără pe liniile de sub preț și vinde pe cele de deasupra. Pe futures: Long, Short sau Neutru. Opțional: un preț de pornire și „Oprește sub / peste”.
+  - **DCA:** un ordin de bază și ordine de siguranță la scăderi (abaterea, multiplicatorii de volum și de pas). Take profit din prețul mediu, stop loss din prețul de bază, ciclurile cu pauză între ele.
+- **Premium, Slingshot + sentimentul Sentiq:** intră pe semnalele LONG / SHORT confirmate ale Slingshot (cu setările tale de pe grafic), doar când contextul nu e împotrivă.
+  - **Scorul pieței (0–100, 50 neutru)** adună cinci părți: scorul zilei, aria (Crypto sau Acțiuni), sentimentul pe 7 zile, știrile simbolului din 24 h și structura pieței (ultima rupere de structură). Un scor mare favorizează long-urile, unul mic short-urile.
+  - **Fiecare direcție are pragul ei:**
+    - un long intră doar de la **„Scorul minim pentru long”** în sus;
+    - un short intră doar de la **„Scorul maxim pentru short”** în jos.
+    - Implicit 50 amândouă. Exemplu: cu 55 și 45, long-urile intră de la 55, short-urile până la 45, iar între ele botul nu intră.
+  - Opțional, botul nu intră împotriva ariei.
+  - **„Evită deschiderea de tranzacții în perioada știrilor economice importante”:** cu N minute înainte de o știre economică din calendar cu impact mare pentru dolar (decizia Fed, inflația, locurile de muncă din SUA) și încă 15 minute după ea, botul nu deschide tranzacții.
+    - Implicit 60; 0 = oprit.
+    - Pozițiile deschise merg normal.
+    - Un semnal refuzat din cauza știrii nu se reia după ea.
+  - Cu **„AI confirmă”**, modelul tău din Setări → AI se mai uită o dată și poate opri intrarea, niciodată porni una refuzată.
+  - **Ieșirea**, două variante care se exclud:
+    - **„Slingshot”:** SL-ul și TP-ul semnalului, exact ca pe grafic, fără niciun R:R pus peste ele;
+    - **„Risc / câștig”:** stop loss-ul și take profit-ul tău, în procente de la intrare (de exemplu 1% și 2%); raportul risc : câștig se calculează și se arată sub ele (1:2).
+    - Opțional, botul iese și la semnalul de take profit Slingshot, la întoarcerea trendului sau la un semnal opus (fiecare se poate opri).
+
+**Limitele tale:**
+- direcția (doar long, doar short pe futures, sau ambele);
+- suma maximă și levierul maxim;
+- perioada (de la, până la) și ce face la sfârșit: închide pozițiile, termină tranzacțiile deschise sau le lasă deschise;
+- pierderea maximă pe zi (după ea, nicio intrare până mâine) și pierderea la care se oprește (închide tot);
+- comisionul.
+
+**Simulare sau real:**
+- **Simularea** (implicit) nu trimite nimic: botul face tot, la prețul de atunci, cu comisionul ales. Merge pe crypto și pe acțiuni.
+- **Real** merge pe un cont cu tranzacționarea pornită (din Tranzacții), cu o bifă de confirmare: un exchange crypto (spot sau futures) sau un broker de acțiuni (Trading 212, eToro, Alpaca).
+  - Ordinele sunt la piață, prin același drum ca formularul de ordin, și apar în jurnalul din Tranzacții.
+  - Botul închide pozițiile el însuși, la fiecare 30 de secunde, pe server: cu serverul oprit nu poate închide nimic.
+  - Nu deschide de mână poziții pe simbolul unui bot real pe futures.
+- **Pe acțiuni** botul lucrează doar cât bursa e deschisă, fără levier. Fiecare broker închide cum știe:
+  - **Trading 212 și Alpaca:** botul vinde doar cantitatea lui; acțiunile tale din același simbol rămân. Doar long: Trading 212 nu are short, iar la Alpaca un short ar vinde acțiunile tale.
+  - **eToro:** botul își notează pozițiile deschise de el și le închide doar pe ele, după id. Merge și short, cu stop loss de la început, cum cere eToro: la DCA stop loss-ul ciclului, la grilă „Oprește peste”.
+  - Sumele botului sunt în USD; un cont în altă monedă plătește în moneda lui.
+
+**În fereastră:**
+- lista boților, cu starea și câștigul;
+- pagina unui bot: pozițiile, grila sau ciclul DCA, tranzacțiile încheiate și jurnalul (fiecare semnal refuzat spune de ce, cu scorul pe părți și răspunsul AI-ului);
+- **Pauză** oprește intrările (ieșirile continuă);
+- **Oprește** întreabă ce face cu pozițiile;
+- **Editează** schimbă limitele, perioada și, la Premium, filtrul, ieșirea și timeframe-ul semnalelor, pentru tranzacțiile care urmează. Un timeframe nou e preluat la următoarea verificare (≤ 30 s): botul ia semnalele de pe lumânările care se închid după ea, iar pozițiile deschise își păstrează SL / TP-ul;
+- **Duplică** deschide formularul cu aceleași setări.
+- O **Problemă** (de exemplu, un ordin al cărui rezultat nu se știe) oprește orice ordin până la **Reia**, după ce te uiți în Tranzacții.
+- Cel mult 10 boți activi, și un singur bot real pe același cont și simbol.
 
 ## AI în Sentiq: cheia fiecăruia
 Fiecare utilizator își pune **propria cheie API** în Setări → Ale mele → Inteligență artificială, la unul dintre furnizori:
@@ -311,7 +496,21 @@ Cu cheia, alegi:
 
 **Rezumatul** de pe Azi folosește mereu AI-ul și cheia ta, cu modelul ales; fără cheie nu e disponibil. Știrile geopolitice legate de piețe cântăresc 0,8 față de cele crypto (1), oricare ar fi motorul.
 
-Dacă furnizorul refuză cheia sau modelul, scorul revine la cel local până schimbi cheia sau modelul; la alte erori (furnizor supraîncărcat, limită de cereri) se reîncearcă după 5 minute, iar la un cont fără credit după 30. Mesajul apare în panou. Sub el, „Ce a consumat cheia ta azi” arată (ziua UTC) titlurile trimise, apelurile, tokenii și modelul, separat pentru scor și pentru Rezumat; prețul în dolari îl arată consola furnizorului.
+Sub alegerea scorului, un rând arată cât a scorat AI-ul tău din știrile ultimelor 48 h și când a dat ultimul scor („Ultimele 48 h: Gemini a scorat 1.869 din 3.508 titluri; ultimul scor acum 2 min.”).
+
+Fiecare lot de 25 de titluri are **3 minute** să primească răspuns, cu reîncercările lui cu tot. Când AI-ul nu răspunde:
+- **furnizorul refuză cheia sau modelul:** scorul revine la cel local până schimbi cheia sau modelul;
+- **cont fără credit sau limită atinsă:** se reîncearcă după 30 de minute;
+- **eroare trecătoare** (furnizor lent sau supraîncărcat, limită pe minut, conexiune): se reîncearcă după un minut, apoi după 2, 4, 8, cel mult 15 minute dacă se repetă. O singură eroare trecătoare nu apare în panou, pentru că de obicei trece la reîncercare. De la a doua la rând apare, cu ora următoarei încercări. Dacă se repetă des, alege alt model din listă: unele răspund mult mai repede decât altele;
+- **cererea refuzată din alt motiv:** se reîncearcă după 5 minute.
+
+Pauza și numărul de erori la rând rămân valabile și după o repornire a aplicației. Mesajul apare în panou și spune exact ce s-a întâmplat, când furnizorul o spune. La Google, de exemplu:
+- soldul Prepay al proiectului e 0: adaugă credit în AI Studio, la Billing; creditele primite cu abonamentul se folosesc doar cât soldul Prepay e peste 0;
+- cheia e pe nivelul gratuit și a atins limita zilnică (de exemplu 20 de cereri pe zi), cu ora la care Google o resetează (miezul nopții ora Pacificului);
+- limita zilnică a unui nivel plătit;
+- modelul nu e disponibil pe nivelul proiectului (limita 0).
+
+Limitele Google sunt ale proiectului, nu ale cheii: o cheie nouă din același proiect nu le resetează. Sub mesaj apare și textul exact primit de la furnizor. Ca să reîncerci imediat (după ce ai rezolvat facturarea, de exemplu), salvează din nou cheia sau schimbă alegerea AI. Sub el, „Ce a consumat cheia ta azi” arată (ziua UTC) titlurile trimise, apelurile, tokenii și modelul, separat pentru scor și pentru Rezumat; prețul în dolari îl arată consola furnizorului.
 
 **De la cheia comună la cheile fiecăruia (16 oct 2026).** Cheia Claude a adminului, folosită până atunci de toți, a devenit cheia personală a adminului, cu modelul și motorul alese până atunci (dacă motorul era Claude, scorul știrilor rămâne pe Claude, doar pentru admin). Scorurile Claude de până atunci sunt ale adminului; știrile din ultimele 4 zile au fost scorate din nou de modelul local, pentru ceilalți. Ceilalți utilizatori își pun cheia lor pentru Rezumat. Connectorul MCP a fost scos pe 14 oct 2026.
 
@@ -326,7 +525,8 @@ Baza de date o salvează Azure, automat (pe nivelurile Basic / Standard poți re
 | „Prea multe încercări” la login | așteaptă 15 minute sau intră cu un passkey |
 | „Parola nu e corectă” / „Codul 2FA nu e corect” la pornirea tranzacționării | e parola cu care intri în Sentiq și codul Sentiq din aplicația de autentificare, nu cele ale exchange-ului; un cod folosit deja (ex. la login) nu merge a doua oară: așteaptă codul următor; sau confirmă cu passkey-ul |
 | Codul din aplicație e „greșit” | pune ora telefonului pe automat; sau folosește un cod de recuperare |
-| „Contul e în modul hedge” la un ordin futures | Sentiq trimite ordine futures doar în modul one-way: schimbă modul din setările exchange-ului (fără poziții deschise) |
+| „Contul e în modul hedge” la un ordin futures | doar pe contul unificat KuCoin (UTA), al cărui API primește doar one-way: schimbă modul pozițiilor în KuCoin (fără poziții deschise) |
+| „Modul pozițiilor (one-way / hedge) s-a schimbat pe …” | ai schimbat modul pe exchange după ce Sentiq l-a citit; ordinul n-a fost primit: trimite-l din nou |
 | „Cheia nu are permisiunea de tranzacționare” | adaugă permisiunea pe platformă (vezi tabelul de la „Tranzacționare din Sentiq”); la Trading 212 și eToro, fă o cheie nouă și adaug-o ca un cont nou |
 | Ai pierdut telefonul, dar ai codurile de recuperare | intră cu un cod de recuperare, apoi *Securitate → Schimbă aplicația de autentificare* (cu parola și alt cod de recuperare) |
 | Ai pierdut telefonul și codurile de recuperare | adminul îți resetează 2FA din *Utilizatori*; la login îl configurezi din nou; adminul însuși: `scripts/sentiq.sh admin-reset` |

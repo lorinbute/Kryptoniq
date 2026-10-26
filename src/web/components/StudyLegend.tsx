@@ -7,14 +7,15 @@ import { Eye, EyeOff, Settings2, X } from 'lucide-react';
 import type { Study } from '../../shared/studies.ts';
 import type { StudyModule } from '../indicators/catalog.ts';
 import { fmtStudyValue, plotShown } from '../indicators/compute.ts';
-import { plotHasData, plotValueAt } from '../indicators/style.ts';
+import { plotHasData, plotValueAt, pointColor } from '../indicators/style.ts';
 import type { StudyState } from '../indicators/useStudies.ts';
 
 const iconBtn = 'rounded-md p-1 text-faint transition-colors hover:bg-hover hover:text-accent';
 
 export function LegendButtons({ name, hidden, onToggle, onSettings, onRemove }: { name: string; hidden?: boolean; onToggle?: () => void; onSettings: () => void; onRemove: () => void }) {
   return (
-    <span className="pointer-events-auto inline-flex gap-0.5">
+    // FD-CHARTSETTINGS: "Butoane → Panou" (the chart says whether they show now).
+    <span className="pointer-events-auto inline-flex gap-0.5 in-data-[pane-buttons=hidden]:hidden">
       {onToggle && (
         <button type="button" className={iconBtn} onClick={onToggle} aria-label={hidden ? `Arată ${name}` : `Ascunde ${name}`} title={hidden ? 'Arată' : 'Ascunde'}>
           {hidden ? <EyeOff size={13} aria-hidden /> : <Eye size={13} aria-hidden />}
@@ -30,10 +31,18 @@ export function LegendButtons({ name, hidden, onToggle, onSettings, onRemove }: 
   );
 }
 
-/** One legend row: a translucent plate so the text stays readable over the candles. */
+/**
+ * One legend row: a translucent plate so the text stays readable over the candles (FD-CHARTSETTINGS: as opaque as the
+ * status line's "Fundal" says, none without it).
+ */
 export function LegendRow({ children, dim }: { children: ReactNode; dim?: boolean }) {
-  return <div className={clsx('flex max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded-md bg-chart/75 px-1.5 text-[12px] leading-5', dim && 'opacity-60')}>{children}</div>;
+  return <div className={clsx('flex max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded-md bg-[color-mix(in_srgb,var(--color-chart)_var(--legend-bg,75%),transparent)] px-1.5 text-[12px] leading-5', dim && 'opacity-60')}>{children}</div>;
 }
+
+/** FD-CHARTSETTINGS: an indicator's title, its inputs and its values, each shown as the status line's settings say. */
+export const LEGEND_TITLE = 'in-data-[legend-titles=off]:hidden';
+export const LEGEND_INPUTS = 'in-data-[legend-titles=off]:hidden in-data-[legend-inputs=off]:hidden';
+export const LEGEND_VALUES = 'in-data-[legend-values=off]:hidden';
 
 export function StudyLegendRow({
   shortName,
@@ -86,7 +95,7 @@ export function StudyLegendRow({
         .map((def) => {
           const p = plotValueAt(state.result as NonNullable<StudyState['result']>, def.id, time);
           const o = study.plots?.[def.id];
-          const color = (p?.color && (o?.palette?.[p.color] ?? (p.color === def.color ? o?.color : undefined) ?? p.color)) || o?.color || def.color;
+          const color = pointColor(def, o, p?.color);
           return (
             <span key={def.id} className="num font-semibold" style={{ color }} title={def.title}>
               {p && p.value !== null && p.value !== undefined ? fmtStudyValue(p.value, mod.overlay, precision) : '—'}
@@ -103,10 +112,15 @@ export function StudyLegendRow({
   }
   return (
     <LegendRow dim={hidden}>
-      <span className="font-medium text-muted">{label}</span>
-      {params && <span className="num hidden text-faint sm:inline">{params}</span>}
+      <span className={clsx('font-medium text-muted', LEGEND_TITLE)}>{label}</span>
+      {/* A wrapper of its own: "hidden sm:inline" and the settings' hiding never meet on one element. */}
+      {params && (
+        <span className={clsx('contents', LEGEND_INPUTS)}>
+          <span className="num hidden text-faint sm:inline">{params}</span>
+        </span>
+      )}
       <LegendButtons name={label} hidden={hidden} onToggle={onToggle} onSettings={onSettings} onRemove={onRemove} />
-      {body}
+      {body && <span className={clsx('contents', LEGEND_VALUES)}>{body}</span>}
     </LegendRow>
   );
 }

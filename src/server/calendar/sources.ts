@@ -1,7 +1,7 @@
 // Calendar fetchers: ForexFactory (list + impact) and TradingView (actual values, fallback). TD §7.1-7.2.
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { fetchText, HttpError } from '../net/http.ts';
+import { fetchText, HttpError, httpRequest } from '../net/http.ts';
 
 export const FF_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
 export const TV_URL = 'https://economic-calendar.tradingview.com/events';
@@ -194,4 +194,109 @@ export async function fetchTradingView(from: number, to: number, countries: read
   const url = `${TV_URL}?from=${encodeURIComponent(new Date(from).toISOString())}&to=${encodeURIComponent(new Date(to).toISOString())}&countries=${countries.join(',')}`;
   const res = await fetchText(url, { headers: { Accept: 'application/json', Origin: 'https://www.tradingview.com', Referer: 'https://www.tradingview.com/' } });
   return parseTradingView(res.body);
+}
+
+// ── FD-EARNTV: the next earnings date of the watchlist stocks, from TradingView's screener ─────────────────────────
+
+export const TV_SCAN_URL = 'https://scanner.tradingview.com/america/scan';
+/** The columns asked, in this order (their meaning was read from the data: TradingView does not document them). */
+export const TV_EARN_COLUMNS = [
+  'name',
+  'is_primary',
+  'earnings_release_next_trading_date_fq',
+  'earnings_publication_type_next_fq',
+  'earnings_release_next_time',
+  'earnings_release_next_calendar_date',
+  'earnings_per_share_forecast_next_fq',
+  'earnings_release_trading_date_fq',
+  'type',
+] as const;
+/** What TradingView can be asked about: stock symbols, a class after a dot (BRK.B); not indices (^SPX). */
+const TV_SYMBOL_RE = /^[A-Z][A-Z0-9]*(?:\.[A-Z0-9]+)?$/;
+/** Publication types of a confirmed date: before the open, after the close, no time given (10 is an estimate). */
+const TV_CONFIRMED = new Set([11, 12, 13]);
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+export interface TvEarnings {
+  /** The next publication: its trading day (YYYY-MM-DD), when, whether the company confirmed it, the quarter, the EPS expected. */
+  next: { day: string; time: 'pre' | 'after' | 'unknown'; confirmed: boolean; quarter: string | null; eps: number | null } | null;
+  /** The day of the last publication (results already out); null when TradingView knows none. */
+  lastDay: string | null;
+}
+
+const tvRowSchema = z.object({ s: z.string(), d: z.array(z.unknown()) });
+const tvScanSchema = z.object({ data: z.array(z.unknown()).nullish() }).loose();
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+/** A date TradingView gives as seconds (at midnight UTC); null when it is none or out of range. */
+const dateOf = (v: unknown): Date | null => {
+  const n = num(v);
+  const d = n === null ? null : new Date(n * 1000);
+  return d && Number.isFinite(d.getTime()) ? d : null;
+};
+const utcDay = (v: unknown): string | null => dateOf(v)?.toISOString().slice(0, 10) ?? null;
+
+/** TradingView's screener answer → each stock's next and last earnings dates (FD-EARNTV). */
+export function parseTvEarnings(body: string): Map<string, TvEarnings> {
+  let json: unknown;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    throw new Error('TradingView: răspunsul nu e JSON');
+  }
+  const parsed = tvScanSchema.safeParse(json);
+  if (!parsed.success) throw new Error('TradingView: răspuns neașteptat');
+  const out = new Map<string, TvEarnings & { rank: number }>();
+  let stocks = 0;
+  let dated = 0;
+  for (const raw of parsed.data.data ?? []) {
+    const row = tvRowSchema.safeParse(raw);
+    if (!row.success) continue;
+    const [name, primary, nextDay, pubType, nextTime, period, eps, lastDay, kind] = row.data.d;
+    if (typeof name !== 'string' || !name) continue;
+    const day = utcDay(nextDay);
+    const type = num(pubType);
+    const end = dateOf(period);
+    const info: TvEarnings = {
+      next: day
+        ? {
+            day,
+            time: nextTime === -1 ? 'pre' : nextTime === 1 ? 'after' : 'unknown',
+            confirmed: type !== null && TV_CONFIRMED.has(type),
+            quarter: end ? `${MONTH_ABBR[end.getUTCMonth()]}/${end.getUTCFullYear()}` : null,
+            eps: num(eps),
+          }
+        : null,
+      lastDay: utcDay(lastDay),
+    };
+    if (kind === 'stock' || kind === 'dr') stocks++;
+    if (info.next || info.lastDay) dated++;
+    // The same name on several exchanges: the one with earnings data, then the primary listing.
+    const rank = (type !== null ? 2 : 0) + (primary === true ? 1 : 0);
+    const kept = out.get(name);
+    if (!kept || rank > kept.rank) out.set(name, { ...info, rank });
+  }
+  // Unknown columns come back as null, not as an error: stocks without a single date mean TradingView changed them.
+  if (stocks > 0 && dated === 0) throw new Error(`TradingView: nicio dată de rezultate pentru ${stocks} acțiuni (s-au schimbat coloanele?)`);
+  return new Map([...out].map(([k, { rank: _, ...v }]) => [k, v]));
+}
+
+/** Whether TradingView can be asked about a symbol (a stock's, not an index's). */
+export const isTvSymbol = (s: string): boolean => TV_SYMBOL_RE.test(s);
+
+/** One screener request for these names and columns (FD-EARNTV, FD-WATCHLISTS): the answer's body. */
+export async function tvScan(names: string[], columns: readonly string[]): Promise<string> {
+  const res = await httpRequest(TV_SCAN_URL, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', Origin: 'https://www.tradingview.com', Referer: 'https://www.tradingview.com/' },
+    body: JSON.stringify({ filter: [{ left: 'name', operation: 'in_range', right: names }], columns, range: [0, names.length * 3] }),
+  });
+  if (res.status !== 200) throw new HttpError('HTTP_STATUS', `TradingView a răspuns cu eroarea HTTP ${res.status}`, res.status);
+  return res.body;
+}
+
+/** One request for all the stocks; none without any (FD-EARNTV). Throws when TradingView does not answer as expected. */
+export async function fetchTvEarnings(symbols: string[]): Promise<Map<string, TvEarnings>> {
+  const names = [...new Set(symbols)].filter(isTvSymbol);
+  if (names.length === 0) return new Map();
+  return parseTvEarnings(await tvScan(names, TV_EARN_COLUMNS));
 }

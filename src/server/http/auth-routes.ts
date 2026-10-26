@@ -14,7 +14,6 @@ import { cleanName, normalizeEmail, UserError, type UserRow } from '../auth/user
 import { tdPlanKey, tdUsageKey } from '../market/stocks.ts';
 import { scorerStateKey } from '../sentiment/service.ts';
 import { syncStockSources } from '../news/sources.ts';
-import { retagRecent } from '../news/ingest.ts';
 import { formatIssues, isDevMail, ValidationError } from '../settings.ts';
 import { isActive, me, sessionToken } from './auth.ts';
 import { readCookie, setCookie } from './cookies.ts';
@@ -555,7 +554,7 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
     // Their favourites no longer tag the news, and their stocks' feeds may go.
     ctx.coins.invalidate();
     for (const sym of await syncStockSources(ctx.db)) ctx.log.info(`news: removed the automatic feed of ${sym} (in nobody's favourites)`);
-    await retagRecent(ctx.db, await ctx.coins.get(), Date.now() - 7 * 86_400_000, await ctx.coins.classifier());
+    ctx.retag.request();
     ctx.log.info(`users: the admin deleted ${target.email ?? `#${id}`}`);
     return users.list();
   });

@@ -264,7 +264,7 @@ export default function CalendarPage() {
           type="button"
           className="chip gap-1.5"
           aria-pressed={earnings}
-          title="Rezultatele trimestriale ale acțiunilor favorite (Nasdaq)"
+          title="Rezultatele trimestriale ale acțiunilor din listele tale de urmărire (Nasdaq; data confirmată de la TradingView)"
           onClick={() => saveFilters.mutate({ impacts, currencies, earnings: !earnings })}
         >
           <Building2 size={14} aria-hidden /> Rezultate companii

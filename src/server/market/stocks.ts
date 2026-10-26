@@ -471,6 +471,17 @@ export class NasdaqClient {
     return { state, label, opensAt: parseNasdaqEt(d.marketOpeningTime), closesAt: parseNasdaqEt(d.marketClosingTime), fetchedAt: now };
   }
 
+  /** FD-WATCHLISTS §3: the company's description, sector and industry; null when Nasdaq has none (a fund, "Unsupported Asset Class"). */
+  async companyProfile(symbol: string): Promise<{ name: string | null; description: string | null; sector: string | null; industry: string | null } | null> {
+    const d = await this.get(`/api/company/${encodeURIComponent(symbol)}/company-profile`);
+    if (!d) return null;
+    const v = (k: string) => {
+      const x = (d[k] as { value?: unknown } | undefined)?.value;
+      return typeof x === 'string' && x.trim() ? x.replace(/\s+/g, ' ').trim() : null;
+    };
+    return { name: v('CompanyName'), description: v('CompanyDescription'), sector: v('Sector'), industry: v('Industry') };
+  }
+
   async earnings(day: string): Promise<EarningsRow[]> {
     const d = await this.get(`/api/calendar/earnings?date=${day}`);
     const rows = (d?.rows as Record<string, unknown>[] | undefined) ?? [];

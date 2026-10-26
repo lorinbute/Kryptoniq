@@ -31,9 +31,10 @@ export const PINE_GRAY = '#787B86';
 export const PINE_BLACK = '#363A45';
 export const PINE_WHITE = '#FFFFFF';
 
+/** #RRGGBB, or #RRGGBBAA with the opacity the user chose (FD-OPACITY): Pine's input.color carries it too. */
 export function hexToRgba(hex: string): Rgba {
   const h = hex.replace('#', '');
-  return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16), a: 255 };
+  return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16), a: h.length >= 8 ? parseInt(h.slice(6, 8), 16) : 255 };
 }
 
 export function rgbaCss(c: Rgba): string {

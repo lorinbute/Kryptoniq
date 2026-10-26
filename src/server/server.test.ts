@@ -16,7 +16,7 @@ import { Scheduler } from './jobs/scheduler.ts';
 import type { NliScorer } from './sentiment/local.ts';
 import { costBasis } from './exchange/cost-basis.ts';
 import { BrokerError } from './exchange/brokers.ts';
-import { hasRiskyPermissions, keyPermissions, mapExchangeError, stopDirection, type ClientFactory } from './exchange/accounts.ts';
+import { hasRiskyPermissions, keyPermissions, mapExchangeError, orderPositionSide, positionSideOf, stopDirection, type ClientFactory } from './exchange/accounts.ts';
 import { isRateLimitError, isTransientError, withRetry } from './exchange/retry.ts';
 import { MarketData } from './market/market.ts';
 import { deepMerge } from './settings.ts';
@@ -41,7 +41,7 @@ const fakeNli: NliScorer = {
 };
 
 /** Calls to the fake closed-position history, and switches for its failures (FD-TRADESTATS). */
-const history = { calls: 0, fail: false, futuresFail: false };
+const history = { calls: 0, fail: false, futuresFail: false, orderReads: 0 };
 
 /** Minimal fake of the ccxt calls used by the portfolio. */
 function fakeClients(): ClientFactory {
@@ -77,7 +77,7 @@ function fakeClients(): ClientFactory {
       { symbol: 'XRP/USDT:USDT', side: 'long', contracts: 0 },
     ],
     fetchOpenOrders: async (_s?: string, _since?: number, _l?: number, params?: { trigger?: boolean }) =>
-      params?.trigger ? [{ id: 'o1', symbol: 'BTC/USDT', type: 'limit', side: 'sell', price: 90000, triggerPrice: 89000, amount: 0.1, filled: 0, status: 'open', timestamp: 1 }] : [{ id: 'o1', symbol: 'BTC/USDT', type: 'limit', side: 'sell', price: 90000, amount: 0.1, filled: 0, status: 'open', timestamp: 1 }],
+      (history.orderReads++, params?.trigger) ? [{ id: 'o1', symbol: 'BTC/USDT', type: 'limit', side: 'sell', price: 90000, triggerPrice: 89000, amount: 0.1, filled: 0, status: 'open', timestamp: 1 }] : [{ id: 'o1', symbol: 'BTC/USDT', type: 'limit', side: 'sell', price: 90000, amount: 0.1, filled: 0, status: 'open', timestamp: 1 }],
     fetchMyTrades: async () => [
       { id: 't1', symbol: 'BTC/USDT', side: 'buy', price: 60000, amount: 0.3, cost: 18000, fee: { cost: 18, currency: 'USDT' }, timestamp: Date.now() - 86_400_000 },
       { id: 't2', symbol: 'BTC/USDT', side: 'buy', price: 80000, amount: 0.2, cost: 16000, fee: { cost: 16, currency: 'USDT' }, timestamp: Date.now() - 3_600_000 },
@@ -186,7 +186,7 @@ describe('security', () => {
     expect(page.statusCode).toBe(404); // no web build in tests
     expect(page.body).toMatch(/web build missing/);
   });
-  it('nothing moves funds; orders, leverage and margin only in exchange/trading/ (FD-TRADING, TD §2.7)', () => {
+  it('nothing moves funds; orders (and their changes), leverage and margin only in exchange/trading/ (FD-TRADING, FD-ORDEREDIT, TD §2.7)', () => {
     const root = fileURLToPath(new URL('./', import.meta.url));
     const files: string[] = [];
     const walk = (dir: string) => {
@@ -203,11 +203,11 @@ describe('security', () => {
       const text = readFileSync(p, 'utf8');
       const rel = path.relative(root, p);
       // Withdrawals, transfers and the blanket calls exist nowhere.
-      expect(text, rel).not.toMatch(/\b(withdraw|transfer|cancelAllOrders|editOrder|closeAllPositions)\s*\(/);
+      expect(text, rel).not.toMatch(/\b(withdraw|transfer|cancelAllOrders|closeAllPositions)\s*\(/);
       if (p.startsWith(tradingDir)) continue;
-      expect(text, rel).not.toMatch(/\b(createOrder|cancelOrder|setLeverage|setMarginMode)\s*\(/);
+      expect(text, rel).not.toMatch(/\b(createOrder|cancelOrder|editOrder|setLeverage|setMarginMode)\s*\(/);
       // The other exchange / broker modules only read.
-      if (rel.startsWith(`exchange${path.sep}`)) expect(text, rel).not.toMatch(/'(POST|DELETE|PUT)'/);
+      if (rel.startsWith(`exchange${path.sep}`)) expect(text, rel).not.toMatch(/'(POST|DELETE|PUT|PATCH)'/);
     }
   });
 });
@@ -292,10 +292,12 @@ describe('settings API', () => {
     expect(offline.json().aiKeyWarning).toMatch(/^Cheia s-a salvat, dar nu a putut fi verificată acum \(nu se poate conecta la Anthropic \(ECONNREFUSED\)\)\.$/);
     // The user's AI: the provider chosen (Anthropic by default), its key; the scores stay local until they choose.
     const status = async () => (await app.inject({ url: '/api/ai/status', headers: H })).json();
-    expect(await status()).toMatchObject({ provider: 'anthropic', model: 'claude-opus-5-5', keySet: true, scoring: false, scorer: null, usage: { summary: { calls: 0 } } });
+    expect(await status()).toMatchObject({ provider: 'anthropic', model: 'claude-opus-5-5', keySet: true, scoring: false, scorer: null, usage: { summary: { calls: 0 } }, progress: null });
     expect((await app.inject({ method: 'POST', url: '/api/ai/rescore', headers: M, payload: {} })).statusCode).toBe(400);
     await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { ai: { provider: 'openai', model: 'gpt-6-luna', scoring: true } } });
     expect(await status()).toMatchObject({ provider: 'openai', model: 'gpt-6-luna', keySet: true, scoring: true, scorer: { provider: 'openai', model: 'gpt-6-luna', lastError: null } });
+    // FD-AISLOW §4: how far it got with the last 48 hours, while it scores.
+    expect((await status()).progress).toEqual({ total: expect.any(Number), scored: 0, lastAt: null });
     expect((await app.inject({ method: 'POST', url: '/api/ai/rescore', headers: M, payload: {} })).json()).toEqual({ reset: 0 });
     // A model of another provider is not used: the provider's default is.
     await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { ai: { model: 'claude-haiku-5-5' } } });
@@ -303,23 +305,49 @@ describe('settings API', () => {
     expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { ai: { model: 'Bad Model!' } } })).statusCode).toBe(400);
     // Removed: the scores go back to the local model, the summary waits for a key.
     expect((await put('openai', null)).json().aiKeys.openai).toEqual({ set: false, hint: null });
-    expect(await status()).toMatchObject({ keySet: false, scorer: null });
+    expect(await status()).toMatchObject({ keySet: false, scorer: null, progress: null });
     // The old admin-only route is gone.
     expect((await app.inject({ method: 'PUT', url: '/api/settings/claude-key', headers: M, payload: { key: null } })).statusCode).toBe(404);
   });
+  it('a key or AI choice saved again lifts the pause of the AI scoring, on any instance (FD-AIQUOTA §2)', async () => {
+    const state = JSON.stringify({ sig: 'anthropic|claude-opus-5-5|x', lastError: { at: 1, message: 'm', permanent: false }, pausedUntil: Date.now() + 1_800_000 });
+    const paused = async () => {
+      await ctx.db.run("DELETE FROM market_cache WHERE [key] = N'ai:scorer:1'");
+      await ctx.db.run("INSERT INTO market_cache([key], value, fetched_at) VALUES (N'ai:scorer:1', ?, 1)", [state]);
+    };
+    const stored = async () => (await ctx.db.get("SELECT 1 AS x FROM market_cache WHERE [key] = N'ai:scorer:1'")) !== undefined;
+    const put = (provider: string, key: string | null) => app.inject({ method: 'PUT', url: '/api/ai/key', headers: M, payload: { provider, key } });
+    await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { ai: { provider: 'anthropic', scoring: false } } });
+    await paused();
+    // The key of another provider than the one in use: the pause stays.
+    expect((await put('openai', 'sk-proj-abcdefghijklmnopqrstuvwxyz')).statusCode).toBe(200);
+    expect(await stored()).toBe(true);
+    // The key of the AI in use, even one that could not be checked: tried again at once.
+    expect((await put('anthropic', 'sk-ant-api03-offline-abcdefghijklmnop')).statusCode).toBe(200);
+    expect(await stored()).toBe(false);
+    // Another AI choice: the same; a setting that is not the AI's: not.
+    await paused();
+    await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { indicator: { lenFastEma: 22 } } });
+    expect(await stored()).toBe(true);
+    await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { ai: { scoring: true } } });
+    expect(await stored()).toBe(false);
+    await app.inject({ method: 'PUT', url: '/api/settings', headers: M, payload: { ai: { scoring: false } } });
+    await put('openai', null);
+    await put('anthropic', null);
+  });
   it('remembers the chart settings and the LMA inputs (FD-CHARTUX)', async () => {
     const s = (await app.inject({ method: 'GET', url: '/api/settings', headers: H })).json();
-    expect(s.charts).toEqual({ symbol: '', showPositions: true, showLma: true, showSlingshot: true, slingshotHidden: false, lmaHidden: false, lmaPane: 0.25 });
+    expect(s.charts).toEqual({ symbol: '', showPositions: true, showLma: true, showSlingshot: true, slingshotHidden: false, lmaHidden: false, lmaPane: 0.25, logScale: false, listId: null });
     expect(s.lma).toMatchObject({ preset: 'Default', period: 100, steepness: 2.5, maType: 'EMA', smooth: 10, colorBars: true });
     const r = await app.inject({
       method: 'PUT',
       url: '/api/settings',
       headers: M,
-      payload: { charts: { symbol: 'SOL/USDT', showLma: false, showSlingshot: false }, market: { defaultTf: '4h' }, lma: { preset: 'Scalping', maType: 'VWMA' } },
+      payload: { charts: { symbol: 'SOL/USDT', showLma: false, showSlingshot: false, logScale: true }, market: { defaultTf: '4h' }, lma: { preset: 'Scalping', maType: 'VWMA' } },
     });
     expect(r.statusCode).toBe(200);
-    // Both indicators off: a chart with candles only (FD-CHARTFAV §1).
-    expect(r.json().charts).toEqual({ symbol: 'SOL/USDT', showPositions: true, showLma: false, showSlingshot: false, slingshotHidden: false, lmaHidden: false, lmaPane: 0.25 });
+    // Both indicators off: a chart with candles only (FD-CHARTFAV §1). The price scale stays logarithmic (FD-CHARTTV §4).
+    expect(r.json().charts).toEqual({ symbol: 'SOL/USDT', showPositions: true, showLma: false, showSlingshot: false, slingshotHidden: false, lmaHidden: false, lmaPane: 0.25, logScale: true, listId: null });
     expect(r.json().market.defaultTf).toBe('4h');
     expect(r.json().lma).toMatchObject({ preset: 'Scalping', maType: 'VWMA', period: 100 });
     for (const bad of [
@@ -327,6 +355,7 @@ describe('settings API', () => {
       { charts: { symbol: 'sol/usdt' } },
       { charts: { lmaPane: 0.95 } },
       { charts: { showSlingshot: 'no' } },
+      { charts: { logScale: 'yes' } },
       { lma: { period: 300 } },
       { lma: { shortThreshold: 0.5 } },
       { lma: { bullishColor: 'red' } },
@@ -340,6 +369,7 @@ describe('settings API', () => {
     const old = (await app.inject({ method: 'GET', url: '/api/settings', headers: H })).json();
     expect(old.market.defaultTf).toBe('15m');
     expect(old.charts.symbol).toBe('');
+    expect(old.charts.logScale).toBe(false);
     expect(old.lma.period).toBe(100);
   });
   it('deepMerge ignores prototype keys', () => {
@@ -369,8 +399,9 @@ describe('watchlist & sources API', () => {
     const r = await add({ kind: 'stock', coin: 'brk.b', name: 'Berkshire Hathaway Inc. Class B', exchange: 'nyse' });
     expect(r.statusCode).toBe(200);
     expect(r.json().at(-1)).toEqual({ coin: 'BRK.B', quote: 'USD', position: 3, aliases: ['Berkshire Hathaway'], kind: 'stock', name: 'Berkshire Hathaway Inc. Class B', exchange: 'NYSE' });
-    expect((await add({ kind: 'stock', coin: 'BRK.B' })).json().error.message).toBe('BRK.B este deja în favorite (ca acțiune)');
-    expect((await add({ kind: 'crypto', coin: 'BTC' })).json().error.message).toBe('BTC este deja în favorite (ca monedă)');
+    // FD-WATCHLISTS: the older route adds to the first list ("Favorite").
+    expect((await add({ kind: 'stock', coin: 'BRK.B' })).json().error.message).toBe('BRK.B e deja în Favorite');
+    expect((await add({ kind: 'crypto', coin: 'BTC' })).json().error.message).toBe('BTC e deja în Favorite');
     expect((await add({ kind: 'stock', coin: 'BTC' })).statusCode).toBe(409);
     expect((await add({ kind: 'stock', coin: '1ABC' })).statusCode).toBe(400);
     expect((await add({ kind: 'bond', coin: 'X' })).statusCode).toBe(400);
@@ -392,10 +423,11 @@ describe('watchlist & sources API', () => {
     );
     const r = await add({ kind: 'index', coin: 'spx' });
     expect(r.statusCode).toBe(200);
-    // The recent news are tagged again with the new favourite's aliases.
+    // The recent news are tagged again with the new favourite's aliases (in the background, FD-WATCHLISTS).
+    await ctx.retag.idle();
     expect(await ctx.db.all("SELECT coin FROM news_coins WHERE news_id = 'n-spx'")).toEqual([{ coin: '^SPX' }]);
     expect(r.json().at(-1)).toMatchObject({ coin: '^SPX', quote: 'USD', aliases: ['S&P 500', 'S&P500', 'SPX'], kind: 'index', name: 'S&P 500', exchange: null });
-    expect((await add({ kind: 'index', coin: '^SPX' })).json().error.message).toBe('SPX este deja în favorite (ca indice)');
+    expect((await add({ kind: 'index', coin: '^SPX' })).json().error.message).toBe('SPX e deja în Favorite');
     // SPX6900, the coin, is another symbol for Sentiq.
     expect((await add({ kind: 'crypto', coin: 'SPX' })).statusCode).toBe(200);
     const unknown = await add({ kind: 'index', coin: 'DAX' });
@@ -414,6 +446,7 @@ describe('watchlist & sources API', () => {
     expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/%5ESPX', headers: M })).statusCode).toBe(404);
     expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/SPX', headers: M })).statusCode).toBe(200);
     // FD-INDEXNEWS §7: the S&P 500 is one of the filter indices, named for everybody's filter, in the favourites or not.
+    await ctx.retag.idle();
     expect(await ctx.db.all("SELECT coin FROM news_coins WHERE news_id = 'n-spx'")).toEqual([{ coin: '^SPX' }]);
     await ctx.db.run("DELETE FROM news WHERE id = 'n-spx'");
   });
@@ -435,6 +468,34 @@ describe('watchlist & sources API', () => {
     expect((await app.inject({ method: 'DELETE', url: `/api/sources/${id}`, headers: M })).statusCode).toBe(200);
     setFetchImpl(async () => new Response('<html>blocked</html>', { status: 200 }));
     expect((await app.inject({ method: 'POST', url: '/api/sources', headers: M, payload: { name: 'Bad', url: 'https://bad.example/feed', category: 'macro' } })).statusCode).toBe(400);
+  });
+
+  it('adds a general source (FD-MULTICAT), refuses one without a category, and reclassifies its news when they change', async () => {
+    setFetchImpl(async () => new Response('<rss><channel><item><title>Hello</title><link>https://x.com/1</link></item></channel></rss>', { status: 200 }));
+    const none = await app.inject({ method: 'POST', url: '/api/sources', headers: M, payload: { name: 'None', url: 'https://none.example/feed', categories: [] } });
+    expect(none.statusCode).toBe(400);
+    expect(none.json().error.message).toMatch(/Alege cel puțin o categorie/);
+    expect((await app.inject({ method: 'POST', url: '/api/sources', headers: M, payload: { name: 'None', url: 'https://none.example/feed' } })).statusCode).toBe(400);
+    const added = await app.inject({ method: 'POST', url: '/api/sources', headers: M, payload: { name: 'Benzinga', url: 'https://benzinga.example/feed', categories: ['geopolitics', 'macro', 'stocks', 'crypto'] } });
+    expect(added.json()).toMatchObject({ category: 'crypto', categories: 'crypto,stocks,macro,geopolitics' });
+    const id = added.json().id as string;
+    const at = Date.now() - 60_000;
+    await ctx.db.run(
+      "INSERT INTO news(id, source_id, title, published_at, fetched_at, category, relevance, impact, cluster_id) VALUES ('bz1', ?, 'Fed holds interest rates steady', ?, ?, 'crypto', 0, 1, 'bz1')",
+      [id, at, at],
+    );
+    // Crypto and stocks only: a Fed story is about neither (relevance 0); with macro again, it is macro.
+    const narrowed = await app.inject({ method: 'PUT', url: `/api/sources/${id}`, headers: M, payload: { categories: ['stocks', 'crypto'] } });
+    expect(narrowed.json()).toMatchObject({ category: 'crypto', categories: 'crypto,stocks' });
+    expect(await ctx.db.get("SELECT category, relevance FROM news WHERE id = 'bz1'")).toEqual({ category: 'crypto', relevance: 0 });
+    await app.inject({ method: 'PUT', url: `/api/sources/${id}`, headers: M, payload: { categories: ['macro', 'crypto'] } });
+    expect(await ctx.db.get("SELECT category, relevance FROM news WHERE id = 'bz1'")).toEqual({ category: 'macro', relevance: 1 });
+    // One category again: every item takes it.
+    const one = await app.inject({ method: 'PUT', url: `/api/sources/${id}`, headers: M, payload: { categories: ['stocks'] } });
+    expect(one.json()).toMatchObject({ category: 'stocks', categories: null });
+    expect(await ctx.db.get("SELECT category FROM news WHERE id = 'bz1'")).toEqual({ category: 'stocks' });
+    // Built-in sources keep their category.
+    expect((await app.inject({ method: 'PUT', url: '/api/sources/coindesk', headers: M, payload: { categories: ['crypto', 'macro'] } })).statusCode).toBe(400);
   });
 });
 
@@ -541,6 +602,23 @@ describe('calendar API', () => {
 });
 
 describe('accounts & portfolio', () => {
+  it('after a trading action: a read started before it is not kept; the orders taken off stay hidden (FIX-SLTPDUP)', async () => {
+    const acc = (await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: { exchange: 'kucoin', label: 'Main', apiKey: 'key-123456789', secret: 'secret-123456789', password: 'pass' } })).json();
+    expect((await ctx.accounts.portfolio(acc.id)).orders.map((o) => o.id)).toEqual(['o1']);
+    // A read on its way when the order changes: its answer may be the old one, so the next read goes to the platform.
+    const before = ctx.accounts.portfolio(acc.id, true);
+    ctx.accounts.invalidate(acc.id);
+    await before;
+    const reads = history.orderReads;
+    await ctx.accounts.portfolio(acc.id);
+    expect(history.orderReads).toBeGreaterThan(reads);
+    // The platform still lists a cancelled order for a moment: hidden, from the cache too.
+    ctx.accounts.forgetOrders(acc.id, ['o1']);
+    expect((await ctx.accounts.portfolio(acc.id)).orders).toEqual([]);
+    expect((await ctx.accounts.portfolio(acc.id, true)).orders).toEqual([]);
+  });
+
+
   it('stores keys encrypted, warns on extra permissions and builds the portfolio', async () => {
     const bad = await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: { exchange: 'kucoin', label: 'Main', apiKey: 'key-123456789', secret: 'secret-123456789' } });
     expect(bad.statusCode).toBe(400); // passphrase required
@@ -633,6 +711,21 @@ describe('accounts & portfolio', () => {
     expect(stopDirection({ stop: 'entry' })).toBe('up');
     expect(stopDirection({ stop: '' })).toBeNull();
     expect(stopDirection(undefined)).toBeNull();
+    // FD-KUCOINHEDGE: the side KuCoin names in hedge mode wins over the size's sign; one-way (BOTH) keeps ccxt's.
+    expect(positionSideOf({ side: 'long', info: { positionSide: 'SHORT' } })).toBe('short');
+    expect(positionSideOf({ side: 'short', info: { positionSide: 'long' } })).toBe('long');
+    expect(positionSideOf({ side: 'short', info: { positionSide: 'BOTH' } })).toBe('short');
+    expect(positionSideOf({ side: undefined, info: {} })).toBeNull();
+    expect(orderPositionSide({ positionSide: 'SHORT' })).toBe('short');
+    expect(orderPositionSide({ positionSide: 'BOTH' })).toBeNull();
+    expect(orderPositionSide(undefined)).toBeNull();
+    // FD-HEDGEALL: OKX / Bitget `posSide` (net in one-way), Bybit `positionIdx` (0 in one-way).
+    expect(orderPositionSide({ posSide: 'long' })).toBe('long');
+    expect(orderPositionSide({ posSide: 'net' })).toBeNull();
+    expect(orderPositionSide({ positionIdx: 2 })).toBe('short');
+    expect(orderPositionSide({ positionIdx: '1' })).toBe('long');
+    expect(orderPositionSide({ positionIdx: 0 })).toBeNull();
+    expect(positionSideOf({ side: 'long', info: { positionIdx: 2 } })).toBe('short');
   });
 });
 
@@ -1068,6 +1161,32 @@ describe('open orders of the other exchanges (FD-TRADING §4)', () => {
     expect((await portfolio(bn3)).errors.orders).toBeDefined();
   });
 
+  it('FD-ORDEREDIT: OKX and Bitget TP / SL orders read in their own listings, with their levels', async () => {
+    const withPass = async (exchange: string) =>
+      (await app.inject({ method: 'POST', url: '/api/accounts', headers: M, payload: { exchange, label: exchange, credentials: { apiKey: 'k1234567', secret: 's1234567', password: 'p1234567' } } })).json().id as number;
+    const ok = await withPass('okx');
+    const asked: Params[] = [];
+    spotOf(ok).fetchOpenOrders = async (_s?: string, _since?: number, _l?: number, params?: Params) => {
+      asked.push(params);
+      // OKX's oco: both levels in one order, no trigger of its own.
+      if (params?.ordType === 'conditional,oco') return [order('a1', 'BTC/USDT:USDT', { type: 'market', side: 'sell', price: null, stopLossPrice: 57000, takeProfitPrice: 65000, reduceOnly: true })];
+      return [];
+    };
+    const p = await portfolio(ok);
+    expect(asked).toEqual(expect.arrayContaining([{ method: 'privateGetTradeOrdersAlgoPending', ordType: 'conditional,oco' }]));
+    expect(p.orders).toEqual([expect.objectContaining({ id: 'a1', market: 'futures', triggerPrice: null, stopLoss: 57000, takeProfit: 65000, reduceOnly: true })]);
+    const bg = await withPass('bitget');
+    const bgAsked: Params[] = [];
+    spotOf(bg).fetchOpenOrders = async (_s?: string, _since?: number, _l?: number, params?: Params) => {
+      bgAsked.push(params);
+      if (params?.planType === 'profit_loss') return [order('t1', 'BTC/USDT:USDT', { type: 'market', side: 'sell', price: null, triggerPrice: 57000, reduceOnly: true })];
+      return [];
+    };
+    const q = await portfolio(bg);
+    expect(bgAsked).toEqual(expect.arrayContaining([{ type: 'swap', productType: 'USDT-FUTURES', planType: 'profit_loss' }]));
+    expect(q.orders).toEqual([expect.objectContaining({ id: 't1', market: 'futures', triggerPrice: 57000 })]);
+  });
+
   it('Bybit: the plain listings ask for spot (its client defaults to linear); the linear orders come on their own', async () => {
     const by = await add('bybit');
     const orders: unknown[] = [];
@@ -1487,3 +1606,121 @@ describe('stocks API (FD-SENTIQ §4)', () => {
   });
 });
 
+
+describe('watch lists API (FD-WATCHLISTS)', () => {
+  const view = async () => (await app.inject({ url: '/api/watchlists', headers: H })).json() as { lists: { id: number; name: string; coins: string[] }[] };
+  const union = async () => ((await app.inject({ url: '/api/watchlist', headers: H })).json() as { coin: string }[]).map((w) => w.coin);
+  const post = (url: string, payload: object) => app.inject({ method: 'POST', url, headers: M, payload });
+  const feeds = async () => (await ctx.db.all<{ auto: string }>('SELECT auto FROM sources WHERE auto IS NOT NULL ORDER BY auto')).map((r) => r.auto);
+
+  it('the favourites are the list "Favorite"; lists made, filled, copied, moved, emptied; the rest of the app follows them all together', async () => {
+    const v0 = await view();
+    expect(v0.lists).toEqual([{ id: expect.any(Number), name: 'Favorite', coins: ['BTC', 'ETH', 'SOL'] }]);
+    const fav = v0.lists[0]?.id as number;
+    const made = await post('/api/watchlists', { name: '  Tech   AI ' });
+    expect(made.statusCode).toBe(200);
+    const tech = made.json().id as number;
+    expect(made.json().lists.map((l: { name: string }) => l.name)).toEqual(['Favorite', 'Tech AI']);
+    expect((await post('/api/watchlists', { name: 'tech ai' })).json().error.message).toBe('Ai deja o listă „Tech AI”');
+    expect((await post('/api/watchlists', { name: '   ' })).statusCode).toBe(400);
+    expect((await post('/api/watchlists', { name: 'x'.repeat(41) })).statusCode).toBe(400);
+    // A stock new to the user: followed, with its own feed.
+    const aapl = (await post(`/api/watchlists/${tech}/items`, { kind: 'stock', coin: 'aapl', name: 'Apple Inc. Common Stock' })).json();
+    expect(aapl).toMatchObject({ added: [{ coin: 'AAPL', kind: 'stock' }], gone: [], note: null });
+    expect(await feeds()).toEqual(['nasdaq:AAPL']);
+    // BTC with another pair: the same BTC (its pair is the same in every list), told so.
+    const btc = (await post(`/api/watchlists/${tech}/items`, { kind: 'crypto', coin: 'BTC', quote: 'USDC' })).json();
+    expect(btc).toMatchObject({ added: [], note: 'BTC e deja urmărit ca BTC/USDT; perechea e aceeași în toate listele.' });
+    expect((await post(`/api/watchlists/${tech}/items`, { kind: 'crypto', coin: 'BTC' })).json().error.message).toBe('BTC e deja în Tech AI');
+    expect((await post(`/api/watchlists/${tech}/items`, { kind: 'stock', coin: 'ETH' })).json().error.message).toBe('ETH e deja urmărit ca monedă');
+    expect(await union()).toEqual(['BTC', 'ETH', 'SOL', 'AAPL']);
+    // Copy ETH and BTC: ETH copied, BTC was there; move SOL.
+    expect((await post(`/api/watchlists/${fav}/items/copy`, { coins: ['ETH', 'BTC', 'DOGE'], to: tech })).json()).toMatchObject({ done: 1, already: 1, missing: 1 });
+    const moved = (await post(`/api/watchlists/${fav}/items/move`, { coins: ['SOL'], to: tech })).json();
+    expect(moved).toMatchObject({ done: 1, already: 0 });
+    expect(moved.lists).toEqual([
+      { id: fav, name: 'Favorite', coins: ['BTC', 'ETH'] },
+      { id: tech, name: 'Tech AI', coins: ['AAPL', 'BTC', 'ETH', 'SOL'] },
+    ]);
+    expect((await post(`/api/watchlists/${fav}/items/move`, { coins: ['BTC'], to: fav })).statusCode).toBe(400);
+    // The order of the lists makes the common order.
+    expect((await app.inject({ method: 'PUT', url: '/api/watchlists/order', headers: M, payload: { ids: [tech, fav] } })).statusCode).toBe(200);
+    expect(await union()).toEqual(['AAPL', 'BTC', 'ETH', 'SOL']);
+    await app.inject({ method: 'PUT', url: `/api/watchlists/${tech}/items/order`, headers: M, payload: { coins: ['SOL', 'ETH', 'BTC', 'AAPL'] } });
+    expect(await union()).toEqual(['SOL', 'ETH', 'BTC', 'AAPL']);
+    // Out of its only list, a stock stops being followed: its feed goes.
+    expect((await post(`/api/watchlists/${tech}/items/delete`, { coins: ['AAPL'] })).json()).toMatchObject({ done: 1, gone: ['AAPL'] });
+    expect(await feeds()).toEqual([]);
+    // A list deleted: what was only in it stops being followed; the last one stays.
+    const rm = (await app.inject({ method: 'DELETE', url: `/api/watchlists/${tech}`, headers: M })).json();
+    expect(rm.gone).toEqual(['SOL']);
+    expect(await union()).toEqual(['BTC', 'ETH']);
+    expect((await app.inject({ method: 'DELETE', url: `/api/watchlists/${fav}`, headers: M })).json().error.message).toBe('Păstrează cel puțin o listă; o poți goli');
+    expect((await app.inject({ method: 'PUT', url: `/api/watchlists/${fav}`, headers: M, payload: { name: 'Principala' } })).json().lists[0].name).toBe('Principala');
+    // Another user's list, or a deleted one: not found.
+    expect((await post(`/api/watchlists/${tech}/items`, { kind: 'crypto', coin: 'DOGE' })).json().error.message).toBe('Lista nu mai există');
+  });
+
+  it('a symbol added or removed by an older Sentiq is put right at the next read; the older routes work on the lists', async () => {
+    await ctx.db.run("INSERT INTO watchlist(user_id, coin, quote, position, aliases, added_at, kind) VALUES (1, N'XRP', N'USDT', 9, N'[]', 1, N'crypto')");
+    await ctx.db.run("DELETE FROM watchlist WHERE user_id = 1 AND coin = N'ETH'");
+    expect((await view()).lists[0]?.coins).toEqual(['BTC', 'SOL', 'XRP']);
+    // The older add goes into the first list; the older delete takes it out of all of them.
+    const two = (await post('/api/watchlists', { name: 'Două' })).json().id as number;
+    await post(`/api/watchlists/${two}/items`, { kind: 'crypto', coin: 'XRP' });
+    expect((await post('/api/watchlist', { kind: 'crypto', coin: 'ADA' })).json().map((w: { coin: string }) => w.coin)).toEqual(['BTC', 'SOL', 'XRP', 'ADA']);
+    expect((await app.inject({ method: 'DELETE', url: '/api/watchlist/XRP', headers: M })).statusCode).toBe(200);
+    expect((await view()).lists.map((l) => l.coins)).toEqual([['BTC', 'SOL', 'ADA'], []]);
+  });
+
+  it('at most 50 different symbols in all the lists, and 20 lists', async () => {
+    const fav = (await view()).lists[0]?.id as number;
+    for (let i = 0; i < 47; i++) await ctx.db.run("INSERT INTO watchlist(user_id, coin, quote, position, aliases, added_at, kind) VALUES (1, ?, N'USDT', ?, N'[]', 1, N'crypto')", [`C${i}`, 10 + i]);
+    expect((await view()).lists[0]?.coins).toHaveLength(50);
+    expect((await post(`/api/watchlists/${fav}/items`, { kind: 'crypto', coin: 'DOGE' })).json().error.message).toBe('Listele au împreună cel mult 50 de simboluri diferite');
+    // A symbol followed already still goes into another list.
+    const other = (await post('/api/watchlists', { name: 'Alta' })).json().id as number;
+    expect((await post(`/api/watchlists/${other}/items`, { kind: 'crypto', coin: 'C3' })).statusCode).toBe(200);
+    for (let i = 3; i <= 20; i++) await post('/api/watchlists', { name: `L${i}` });
+    expect((await view()).lists).toHaveLength(20);
+    expect((await post('/api/watchlists', { name: 'A 21-a' })).json().error.message).toBe('Poți avea cel mult 20 de liste');
+  });
+
+  it('the "Date financiare" of a symbol: an index without asking anyone; a stock from Nasdaq and TradingView; no translation without a key', async () => {
+    const idx = (await app.inject({ url: '/api/symbols/profile?kind=index&symbol=%5ESPX', headers: H })).json();
+    expect(idx).toMatchObject({ kind: 'index', name: 'S&P 500', description: { source: 'Sentiq', lang: 'ro' }, quarters: [] });
+    const asked: string[] = [];
+    setFetchImpl((async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      asked.push(url);
+      const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200 });
+      if (url.includes('company-profile')) return json({ data: { CompanyName: { value: 'Tesla, Inc. ' }, CompanyDescription: { value: 'Tesla makes electric cars.' }, Sector: { value: 'Industrials' }, Industry: { value: 'Auto Manufacturing' } } });
+      if (url.includes('scanner.tradingview.com')) {
+        expect(JSON.parse(String(init?.body)).filter[0].right).toEqual(['TSLA']);
+        return json({ data: [{ s: 'NASDAQ:TSLA', d: ['TSLA', true, 'stock', [28e9, 22e9], [4.7e9, 4.7e9], [3e9, 2e9], [1.1e9, 0.5e9], [0.31, 0.13], [-1e9, 1e9], 1782777600, 1792540800, 12, 1, 0.45, 'Consumer Durables', 'Motor Vehicles'] }] });
+      }
+      return new Response('no', { status: 404 });
+    }) as typeof fetch);
+    const tsla = (await app.inject({ url: '/api/symbols/profile?kind=stock&symbol=TSLA', headers: H })).json();
+    expect(tsla).toMatchObject({
+      kind: 'stock',
+      name: 'Tesla, Inc.',
+      description: { text: 'Tesla makes electric cars.', source: 'Nasdaq', lang: 'en' },
+      translated: null,
+      facts: [
+        { label: 'Sector', value: 'Industrials' },
+        { label: 'Industrie', value: 'Auto Manufacturing' },
+      ],
+      next: { day: '2026-10-21', time: 'after', confirmed: true, eps: 0.45 },
+      problems: [],
+    });
+    expect(tsla.quarters.map((q: { end: string }) => q.end)).toEqual(['2026-06-30', '2026-03-31']);
+    // Kept: a second opening asks nobody.
+    const n = asked.length;
+    await app.inject({ url: '/api/symbols/profile?kind=stock&symbol=TSLA', headers: H });
+    expect(asked).toHaveLength(n);
+    expect((await post('/api/symbols/translate', { kind: 'stock', symbol: 'TSLA' })).json().error.message).toBe('Fără o cheie AI, descrierea rămâne în engleză');
+    expect((await post('/api/symbols/translate', { kind: 'index', symbol: '^SPX' })).json().error.message).toBe('Nu e nimic de tradus');
+    expect((await app.inject({ url: '/api/symbols/profile?kind=bond&symbol=X', headers: H })).statusCode).toBe(400);
+  });
+});

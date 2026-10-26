@@ -567,6 +567,52 @@ describe('the indicators on the charts (FD-INDICATORS §4)', () => {
     // The other keys survived the broken one.
     expect(read.hlineTemplate).toMatchObject({ color: '#6FFFB0' });
   });
+
+  it("the chart's settings: own, merged part by part, the chart's zone checked, a broken part back to its defaults (FD-CHARTSETTINGS)", async () => {
+    const admin = await adminBrowser();
+    const ana = await anaBrowser();
+    expect((await ana.get('/api/settings')).json().chartStyle).toMatchObject({ precision: 'default', timezone: null, canvas: { scaleText: { size: 11 } } });
+    await ana.put('/api/settings', { chartStyle: { canvas: { vertGrid: { visible: true, color: '#33445580' } }, timezone: 'America/New_York' } });
+    const saved = (await ana.put('/api/settings', { chartStyle: { canvas: { scaleText: { size: 14 } }, precision: 4 } })).json().chartStyle;
+    // The earlier change stays: a patch changes only what it names.
+    expect(saved).toMatchObject({ precision: 4, timezone: 'America/New_York', canvas: { vertGrid: { visible: true, color: '#33445580', style: 'solid' }, scaleText: { size: 14 } } });
+    expect((await admin.get('/api/settings')).json().chartStyle).toMatchObject({ precision: 'default', timezone: null });
+    for (const bad of [{ chartStyle: { timezone: 'Mars/Olympus' } }, { chartStyle: { precision: 12 } }, { chartStyle: { canvas: { background: { top: 'red' } } } }]) {
+      expect((await ana.put('/api/settings', bad)).statusCode).toBe(400);
+    }
+    // Back to the account's zone: null.
+    expect((await ana.put('/api/settings', { chartStyle: { timezone: null } })).json().chartStyle.timezone).toBeNull();
+    const row = await ctx.db.get<{ value: string }>('SELECT value FROM user_settings WHERE user_id = 2');
+    const stored = JSON.parse(row?.value ?? '{}') as Record<string, unknown>;
+    stored.chartStyle = { ...(stored.chartStyle as object), canvas: { margins: { top: 'lots' } }, timezone: 'Mars/Olympus' };
+    await ctx.db.run('UPDATE user_settings SET value = ? WHERE user_id = 2', [JSON.stringify(stored)]);
+    ctx.settings.forget();
+    const read = (await ana.get('/api/settings')).json().chartStyle;
+    // The canvas back to its defaults, an unknown zone to the account's, the rest kept.
+    expect(read.canvas.scaleText.size).toBe(11);
+    expect(read.timezone).toBeNull();
+    expect(read.precision).toBe(4);
+    // And saving still works.
+    expect((await ana.put('/api/settings', { chartStyle: { alerts: { autoHideToasts: false } } })).statusCode).toBe(200);
+  });
+
+  it("Slingshot settings saved before the per-side looks keep their look when read back (FD-STYLEUNIFY)", async () => {
+    const ana = await anaBrowser();
+    // A first save makes the user's row.
+    expect((await ana.put('/api/settings', { indicator: { showShort: true } })).statusCode).toBe(200);
+    const row = await ctx.db.get<{ value: string }>('SELECT value FROM user_settings WHERE user_id = 2');
+    const stored = JSON.parse(row?.value ?? '{}') as Record<string, unknown>;
+    // As an older version wrote them: shared failed / invalidated colours, one size, one market structure style.
+    stored.indicator = { showLong: true, showShort: true, longColor: '#123456', failedColor: '#FF00FF', invalidColor: '#FFA50080', signalSize: 'Large', longTPColor: '#00BCD4', msLineWidth: 4, msTextSize: 'Tiny' };
+    await ctx.db.run('UPDATE user_settings SET value = ? WHERE user_id = 2', [JSON.stringify(stored)]);
+    ctx.settings.forget();
+    const read = (await ana.get('/api/settings')).json().indicator;
+    expect(read).toMatchObject({ longFormingColor: '#123456', longFailedColor: '#FF00FF', shortFailedColor: '#FF00FF', shortInvalidColor: '#FFA50080', longSize: 'Large', shortSlSize: 'Large', shortTPColor: '#00BCD4', msBullLineWidth: 4, msBearTextSize: 'Tiny' });
+    expect(read).not.toHaveProperty('failedColor');
+    // Saving one look keeps the others.
+    const saved = (await ana.put('/api/settings', { indicator: { shortSize: 'Huge' } })).json().indicator;
+    expect(saved).toMatchObject({ shortSize: 'Huge', longSize: 'Large', longFailedColor: '#FF00FF' });
+  });
 });
 
 describe('shared news, own tags (FD-USERS §2, review round 1)', () => {
@@ -582,6 +628,8 @@ describe('shared news, own tags (FD-USERS §2, review round 1)', () => {
     expect(fav.items.map((i: { title: string }) => i.title)).toContain('Zorblax Prime rallies again');
     // The admin's own alias does weigh (as before FD-USERS): BTC news count double.
     expect((await admin.put('/api/watchlist/BTC', { aliases: ['Zorblax Prime'] })).statusCode).toBe(200);
+    // The news are tagged again in the background (FD-WATCHLISTS).
+    await ctx.retag.idle();
     expect((await row())?.impact).toBe(2);
   });
 });

@@ -6,7 +6,7 @@ import { AI_PROVIDER_INFO } from '../../shared/ai.ts';
 import type { Db } from '../db/database.ts';
 import type { Logger } from '../log.ts';
 import type { AiConfig, AiService } from '../ai/service.ts';
-import { describeAiError } from '../ai/types.ts';
+import { aiErrorLine, describeAiError } from '../ai/types.ts';
 import type { DayContext, SummaryChart } from './context.ts';
 
 /** One new summary at most this often per user (each one costs a request on their key). */
@@ -152,7 +152,7 @@ export class SummaryService {
         timeoutMs: 180_000,
       });
     } catch (err) {
-      this.deps.log.warn(`summary: ${ai.provider} failed (${describeAiError(err)})`);
+      this.deps.log.warn(`summary: ${ai.provider} failed (${aiErrorLine(err)})`);
       throw new SummaryFailedError(`Rezumatul nu s-a putut genera: ${describeAiError(err)}.`);
     }
     // Billed whatever the answer (a refusal or a cut-off one too): counted before it is read (FD-AICLARITY).

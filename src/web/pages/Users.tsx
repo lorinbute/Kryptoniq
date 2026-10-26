@@ -19,7 +19,7 @@ const CONFIRM: Partial<Record<Action, (u: PublicUser) => string>> = {
   disable: (u) => `Dezactivezi contul ${u.email}? Sesiunile lui se închid și nu mai poate intra până îl reactivezi.`,
   'reset-2fa': (u) =>
     `Resetezi autentificarea în doi pași pentru ${u.email}? Sesiunile contului se închid; la următorul login, cu parola, își configurează din nou aplicația. Folosește asta doar dacă și-a pierdut telefonul și codurile de recuperare.`,
-  delete: (u) => `Ștergi definitiv contul ${u.email}, cu favoritele, setările, conturile de exchange și evenimentele lui?`,
+  delete: (u) => `Ștergi definitiv contul ${u.email}, cu listele de urmărire, setările, conturile de exchange și evenimentele lui?`,
 };
 
 function Status({ u }: { u: PublicUser }) {
@@ -152,7 +152,7 @@ export default function UsersPage() {
   const devMail = settings.data?.resendDev === true;
   const waiting = requests.data ?? [];
   return (
-    <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-3.5">
+    <div className="flex w-full flex-col gap-3.5">
       <h1 className="page-title">Utilizatori</h1>
       {devMail && (
         <Warning>

@@ -4,6 +4,10 @@ import { AiService, type AiServiceDeps } from './ai/service.ts';
 import { AccountsService, defaultClientFactory, type BrokerFactory, type ClientFactory } from './exchange/accounts.ts';
 import { TradingService, type TraderFactory } from './exchange/trading/service.ts';
 import { CalendarService } from './calendar/service.ts';
+import { WatchlistService } from './watchlists/service.ts';
+import { RetagQueue } from './news/retag-queue.ts';
+import { retagRecent } from './news/ingest.ts';
+import { SymbolProfiles } from './market/profile.ts';
 import { EconomyService } from './economy/service.ts';
 import { buildDayContext } from './summary/context.ts';
 import { SummaryService } from './summary/service.ts';
@@ -18,6 +22,8 @@ import { stockScopeFor } from './news/stock-scope.ts';
 import { seedSources, syncStockSources } from './news/sources.ts';
 import { Scheduler } from './jobs/scheduler.ts';
 import { Scanner } from './scanner/scanner.ts';
+import { BotEngine } from './bots/engine.ts';
+import { BotService } from './bots/service.ts';
 import { SecretBox } from './secrets/crypto.ts';
 import { DailySentimentService } from './sentiment/daily.ts';
 import { TransformersNli, type NliScorer } from './sentiment/local.ts';
@@ -52,6 +58,9 @@ export interface AppContext {
   accounts: AccountsService;
   /** FD-TRADING: orders on the accounts where trading was switched on. */
   trading: TradingService;
+  /** FD-BOT: the trading bots (the engine runs them in the `bots` job). */
+  botEngine: BotEngine;
+  bots: BotService;
   scheduler: Scheduler;
   /** FD-ECON. */
   economy: EconomyService;
@@ -63,6 +72,12 @@ export interface AppContext {
   passkeys: PasskeyService;
   mailer: Mailer;
   throttle: Throttle;
+  /** FD-WATCHLISTS: each user's lists of symbols. */
+  watchlists: WatchlistService;
+  /** FD-WATCHLISTS §3: a symbol's description and quarterly results. */
+  profiles: SymbolProfiles;
+  /** The last 7 days of news tagged again after the symbols followed change, in the background. */
+  retag: RetagQueue;
 }
 
 export interface ContextOverrides {
@@ -167,10 +182,47 @@ export async function createContext(config: AppConfig, log: Logger, overrides: C
   const accounts = new AccountsService(db, box, log, overrides.clientFactory ?? defaultClientFactory(proxy), { retryDelaysMs: overrides.retryDelaysMs, brokerFactory: overrides.brokerFactory });
   const trading = new TradingService({ db, accounts, log, traderFactory: overrides.traderFactory });
   const scheduler = new Scheduler(db, log);
+  const botEngine = new BotEngine({ db, log, settings, market, stocks, source: marketSource, daily, calendar, ai, trading, accounts });
+  const bots = new BotService(db, botEngine);
   const summary = new SummaryService({ db, ai, log, build: (userId, now) => buildDayContext({ db, settings, daily, calendar, economy, scanner }, userId, now) });
   const sessions = new Sessions(db);
   const passkeys = new PasskeyService(db, users);
   const mailer = new Mailer(() => settings.getResend(), log);
   const throttle = new Throttle();
-  return { config, log, db, box, settings, coins, indexMembers, nli, ai, sentiment, daily, calendar, economy, summary, market, marketSource, stocks, scanner, accounts, trading, scheduler, users, sessions, passkeys, mailer, throttle };
+  const watchlists = new WatchlistService(db);
+  const profiles = new SymbolProfiles(db, ai, log, stocks.nasdaq);
+  const retag = new RetagQueue(async () => retagRecent(db, await coins.get(), Date.now() - 7 * 86_400_000, await coins.classifier()), log);
+  return {
+    config,
+    log,
+    db,
+    box,
+    settings,
+    coins,
+    indexMembers,
+    nli,
+    ai,
+    sentiment,
+    daily,
+    calendar,
+    economy,
+    summary,
+    market,
+    marketSource,
+    stocks,
+    scanner,
+    accounts,
+    trading,
+    botEngine,
+    bots,
+    scheduler,
+    users,
+    sessions,
+    passkeys,
+    mailer,
+    throttle,
+    watchlists,
+    profiles,
+    retag,
+  };
 }

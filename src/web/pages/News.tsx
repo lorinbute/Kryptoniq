@@ -4,31 +4,28 @@ import { clsx } from 'clsx';
 import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import type { NewsItemDto, NewsPage, SourceRow } from '../../shared/api-types.ts';
 import { FILTER_INDICES } from '../../shared/stock-indices.ts';
-import { engineLabel } from '../../shared/ai.ts';
 import { dayKey } from '../../shared/time.ts';
 import { api, qs } from '../api.ts';
-import { fmtAgo, fmtDate, fmtDateTime, fmtNum, fmtTime } from '../format.ts';
+import { fmtAgo, fmtDate, fmtDateTime, fmtTime } from '../format.ts';
 import { plainSymbol } from '../../shared/indices.ts';
 import { useStockSet, useTz, useWatchlist } from '../hooks.ts';
 import { Link, useSearchParams } from 'react-router';
 import { Empty, ErrorNote, Loading, ScoreBar, Seg } from '../components/ui.tsx';
 import { CoinLogo, TopicIcon } from '../components/icons.tsx';
+import { ScoreWhy } from '../components/ScoreWhy.tsx';
 
 type Range = '24h' | 'today' | 'yesterday' | '7d';
-type Cat = '' | 'crypto' | 'stocks' | 'macro' | 'geopolitics';
+type Cat = '' | 'crypto' | 'stocks' | 'macro' | 'geopolitics' | 'other';
 type Sent = '' | 'positive' | 'neutral' | 'negative' | 'pending';
 
 /** Items first seen within this window carry the "nou" badge. */
 const NEW_MS = 15 * 60_000;
-const CAT_LABEL: Record<string, string> = { crypto: 'Crypto', stocks: 'Acțiuni', macro: 'Macro', geopolitics: 'Geopolitică' };
+const CAT_LABEL: Record<string, string> = { crypto: 'Crypto', stocks: 'Acțiuni', macro: 'Macro', geopolitics: 'Geopolitică', other: 'Altele' };
 const FLAG_LABEL: Record<string, string> = { sponsored: 'sponsorizat', speculative: 'speculativ', recap: 'rezumat', lowRelevance: 'relevanță scăzută' };
 
 function NewsRow({ item, tz, stocks }: { item: NewsItemDto; tz: string; stocks: ReadonlySet<string> }) {
   const [open, setOpen] = useState(false);
-  const meta = item.sentiment?.meta as { model?: number | null; rules?: { id: string; score: number; text: string; negated: boolean }[]; impact?: number } | null;
   const today = dayKey(item.publishedAt, tz) === dayKey(Date.now(), tz);
-  // Who gave the importance: the AI that scored the item ("Claude", "ChatGPT", "Gemini").
-  const aiName = item.sentiment && /^(claude|openai|gemini):/.test(item.sentiment.engine) ? engineLabel(item.sentiment.engine).replace(/ \(.*$/, '') : 'AI';
   return (
     <li
       className={clsx(
@@ -83,28 +80,9 @@ function NewsRow({ item, tz, stocks }: { item: NewsItemDto; tz: string; stocks: 
               </button>
             )}
             {item.sentiment && (
-              <details className="text-[12px] text-faint">
-                <summary className="cursor-pointer transition-colors hover:text-accent">De ce acest scor?</summary>
-                <div className="mt-1.5 space-y-0.5">
-                  <div>Motor: {engineLabel(item.sentiment.engine)}</div>
-                  {typeof meta?.model === 'number' && <div>Model: {meta.model.toFixed(2)}</div>}
-                  {meta?.rules?.map((r, i) => (
-                    <div key={i}>
-                      Regula „{r.id}” pe „{r.text}”: {r.score > 0 ? '+' : ''}
-                      {r.score}
-                      {r.negated ? ' (negată)' : ''}
-                    </div>
-                  ))}
-                  <div>
-                    Relevanță {fmtNum(item.relevance, 2)}, importanță {fmtNum(item.impact, 1)}{' '}
-                    {item.impactSource === 'ai'
-                      ? item.ruleImpact !== item.impact
-                        ? `(${aiName}), importanță ${fmtNum(item.ruleImpact, 1)} (cuvinte-cheie)`
-                        : `(${aiName} și cuvinte-cheie)`
-                      : '(cuvinte-cheie)'}
-                  </div>
-                </div>
-              </details>
+              <ScoreWhy
+                why={{ engine: item.sentiment.engine, meta: item.sentiment.meta, relevance: item.relevance, impact: item.impact, impactSource: item.impactSource, ruleImpact: item.ruleImpact, reason: item.sentiment.reason }}
+              />
             )}
           </div>
         )}
@@ -138,6 +116,8 @@ const CATEGORIES: { value: Cat; label: string }[] = [
   { value: 'stocks', label: 'Acțiuni' },
   { value: 'macro', label: 'Macro' },
   { value: 'geopolitics', label: 'Geopolitică' },
+  // FD-MACRORULES: news about none of the categories (out of every score).
+  { value: 'other', label: 'Altele' },
 ];
 const SENTIMENTS: { value: Sent; label: string; cls?: string }[] = [
   { value: '', label: 'Oricare' },
@@ -204,7 +184,7 @@ export default function NewsPageView() {
   const stockNote = scope ? scope.indices.map((id) => FILTER_INDICES.find((f) => f.id === id)?.name ?? id).join(', ') : null;
 
   return (
-    <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-3.5">
+    <div className="flex w-full flex-col gap-3.5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
         <h1 className="page-title">Știri</h1>
         <span className="inline-flex items-center gap-2 text-[12.5px] text-muted">
@@ -216,7 +196,7 @@ export default function NewsPageView() {
       {/* FD-INDEXNEWS §2: the stock news are limited to the indices picked in the settings. */}
       {stockNote && (
         <p className="text-[12.5px] text-muted">
-          Acțiuni: doar companiile din {stockNote} (plus știrile generale de bursă și favoritele). <Link to="/settings#stock-news">Schimbă în Setări</Link>
+          Acțiuni: doar companiile din {stockNote} (plus știrile generale de bursă și simbolurile urmărite). <Link to="/settings#stock-news">Schimbă în Setări</Link>
         </p>
       )}
       <div role="toolbar" aria-label="Filtre" className="panel flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-[14px] px-3 py-2.5">
@@ -257,7 +237,7 @@ export default function NewsPageView() {
             ))}
         </select>
         {favList.length > 0 && (
-          <div role="group" aria-label="Favoritele mele" className="flex flex-wrap items-center gap-1.5">
+          <div role="group" aria-label="Simbolurile urmărite" className="flex flex-wrap items-center gap-1.5">
             {favList.map((c) => (
               <button key={c} type="button" className="chip gap-1.5 pl-1.5" aria-pressed={activeCoins.includes(c)} onClick={() => toggleCoin(c)}>
                 <CoinLogo coin={c} size={16} badge={stockSet.has(c)} square={stockSet.has(c)} />
@@ -266,7 +246,7 @@ export default function NewsPageView() {
             ))}
             <label className="ml-1 inline-flex items-center gap-2 text-[12.5px] text-muted">
               <input type="checkbox" checked={favorites} onChange={(e) => setFavorites(e.target.checked)} />
-              doar favorite
+              doar urmărite
             </label>
           </div>
         )}

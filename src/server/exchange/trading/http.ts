@@ -24,7 +24,7 @@ export function brokerMessage(body: string): string {
 }
 
 export interface CallOptions {
-  method: 'GET' | 'POST' | 'DELETE';
+  method: 'GET' | 'POST' | 'DELETE' | 'PATCH';
   headers: Record<string, string>;
   body?: unknown;
   /** A write: a lost answer means the outcome is unknown. */

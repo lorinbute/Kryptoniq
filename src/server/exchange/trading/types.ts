@@ -1,6 +1,6 @@
 // What every platform's trader offers the trading service (TD-TRADING §3). The only place, with the traders next to it,
 // where Sentiq sends orders: the rest of src/server/exchange reads, and nothing anywhere moves funds.
-import type { InstrumentInfo, OrderPreview, OrderResult, OrderTicket, TradeMarket, TradeSymbol } from '../../../shared/trading.ts';
+import type { InstrumentInfo, ModifyPreview, ModifyResult, ModifyTicket, OrderPreview, OrderResult, OrderTicket, ReversePreview, ReverseTicket, TradeMarket, TradeSymbol } from '../../../shared/trading.ts';
 
 export type TradingErrorCode =
   | 'INVALID'
@@ -40,6 +40,15 @@ export interface CancelInput {
   trigger: boolean;
 }
 
+/**
+ * FD-ORDEREDIT: changes checked and planned. `internal` is what the trader needs to send them (the orders as read, the
+ * position): kept on the server, never sent to the page.
+ */
+export interface ModifyPlan {
+  preview: ModifyPreview;
+  internal: unknown;
+}
+
 export interface Trader {
   /** The pairs of a crypto market (brokers: none, the symbol is typed). */
   symbols(market: TradeMarket): Promise<TradeSymbol[]>;
@@ -49,6 +58,38 @@ export interface Trader {
   /** Sends exactly what `normalize` returned; never retried. */
   place(preview: OrderPreview): Promise<OrderResult>;
   cancel(input: CancelInput): Promise<OrderResult>;
+  /** FD-ORDEREDIT: reads the orders / position again, rounds and checks the changes, and decides how each goes out. */
+  normalizeModify(ticket: ModifyTicket): Promise<ModifyPlan>;
+  /** Sends exactly what `normalizeModify` planned, step by step; never retried. */
+  modify(plan: ModifyPlan): Promise<ModifyResult>;
+  /** FD-REVERSE: the position turned the other way, checked (where the platform can: crypto futures). */
+  normalizeReverse?(ticket: ReverseTicket): Promise<ReversePlan>;
+  /** Sends what `normalizeReverse` planned: the position closed, the opposite one opened, its old SL / TP cancelled. */
+  reverse?(plan: ReversePlan): Promise<ModifyResult>;
+}
+
+/** FD-REVERSE: a reversal checked; `internal` (the orders to send and to cancel) stays on the server. */
+export interface ReversePlan {
+  preview: ReversePreview;
+  internal: unknown;
+}
+
+/**
+ * FD-ORDEREDIT: a position's stop loss / take profit against the price now. A long's stop loss under it and take profit
+ * over it (else it would fire at once); a short's the other way round.
+ */
+export function protectionChecks(what: 'sl' | 'tp', long: boolean, level: number, last: number | null, out: { errors: string[] }, digits: (v: number) => string): void {
+  if (last === null || !(last > 0)) return;
+  const below = (what === 'sl') === long;
+  if (below && level >= last) out.errors.push(`${what === 'sl' ? 'Stop loss-ul' : 'Take profit-ul'} unui ${long ? 'long' : 'short'} trebuie să fie sub prețul de acum (${digits(last)}): altfel s-ar executa imediat.`);
+  if (!below && level <= last) out.errors.push(`${what === 'sl' ? 'Stop loss-ul' : 'Take profit-ul'} unui ${long ? 'long' : 'short'} trebuie să fie peste prețul de acum (${digits(last)}): altfel s-ar executa imediat.`);
+}
+
+/** The step results' overall outcome: all done, some, none, or one whose outcome is unknown. */
+export function modifyStatus(steps: { ok: boolean; unknown?: boolean }[]): 'done' | 'partial' | 'failed' | 'unknown' {
+  if (steps.some((s) => s.unknown)) return 'unknown';
+  if (steps.every((s) => s.ok)) return 'done';
+  return steps.some((s) => s.ok) ? 'partial' : 'failed';
 }
 
 /** A client order id the platforms accept (letters and digits, 32 characters) from the form's idempotency key. */

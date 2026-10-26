@@ -7,12 +7,12 @@ import { AI_PROVIDER_INFO, AI_PROVIDERS, effectiveModel, modelLabel, type AiProv
 import type { AiModelList, AiStatus, UsageCounts } from '../../shared/api-types.ts';
 import type { SettingsView } from '../../shared/settings.ts';
 import { api, errorMessage, qs } from '../api.ts';
-import { fmtNum } from '../format.ts';
+import { fmtDateTime, fmtNum, fmtTime } from '../format.ts';
+import { progressText } from './ai-progress.ts';
 import { useSaveSettings } from '../hooks.ts';
 import { Panel, Warning } from './ui.tsx';
 
 const tokens = (c: UsageCounts) => `${fmtNum(c.input, 0)} / ${fmtNum(c.output, 0)} tokeni (intrare / ieșire)`;
-
 export function AiSection({ s }: { s: SettingsView }) {
   const qc = useQueryClient();
   const save = useSaveSettings();
@@ -55,6 +55,12 @@ export function AiSection({ s }: { s: SettingsView }) {
   const aiScoring = s.ai.scoring && keyView.set;
   const st = status.data;
   const usage = st?.usage;
+  const lastError = st?.scorer?.lastError;
+  const failures = st?.scorer?.failures;
+  // FD-AISLOW §4: a passing error is tried again within a minute and usually goes; it shows from the second in a row.
+  const showError = lastError != null && (!lastError.passing || (failures ?? 2) >= 2);
+  const pausedUntil = st?.scorer?.pausedUntil ?? null;
+  const progress = st?.progress;
 
   return (
     <Panel id="ai" title="Inteligență artificială" icon={Sparkles}>
@@ -136,13 +142,18 @@ export function AiSection({ s }: { s: SettingsView }) {
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-1 text-faint">Scorul de sentiment al știrilor</legend>
           <label className="flex items-start gap-2">
-            <input type="radio" name="ai-scoring" checked={!s.ai.scoring} onChange={() => choose({ scoring: false })} disabled={save.isPending} className="mt-1" />
+            {/* The circle on the text's first line, however it wraps. */}
+            <span className="flex h-[1lh] shrink-0 items-center">
+              <input type="radio" name="ai-scoring" checked={!s.ai.scoring} onChange={() => choose({ scoring: false })} disabled={save.isPending} />
+            </span>
             <span>
               <strong>Model local</strong>: pe serverul Sentiq, plus reguli de piață. Gratuit; e scorul pe care îl văd toți cei fără AI propriu.
             </span>
           </label>
           <label className="flex items-start gap-2">
-            <input type="radio" name="ai-scoring" checked={s.ai.scoring} onChange={() => choose({ scoring: true })} disabled={save.isPending || !keyView.set} className="mt-1" />
+            <span className="flex h-[1lh] shrink-0 items-center">
+              <input type="radio" name="ai-scoring" checked={s.ai.scoring} onChange={() => choose({ scoring: true })} disabled={save.isPending || !keyView.set} />
+            </span>
             <span className={keyView.set ? undefined : 'text-faint'}>
               <strong>{info.product}</strong> ({model}), cu cheia ta: înțelege mai bine implicațiile macro. Titlurile știrilor din ultimele 48 de ore se trimit la {info.name}, în
               loturi de 25; costul crește cu numărul de știri (de obicei câteva sute pe zi). Scorurile și sentimentul zilei calculate așa le vezi doar tu.
@@ -151,11 +162,25 @@ export function AiSection({ s }: { s: SettingsView }) {
           </label>
         </fieldset>
         {s.ai.scoring && !keyView.set && <Warning>Fără cheia {info.name}, scorul știrilor vine în continuare de la modelul local.</Warning>}
-        {aiScoring && st?.scorer?.lastError && (
+        {aiScoring && lastError && showError && (
           <Warning>
-            {info.product}: {st.scorer.lastError.message}.{' '}
-            {st.scorer.lastError.permanent ? 'Până schimbi cheia sau modelul, vezi scorul modelului local.' : 'Între timp vezi scorul modelului local; se reîncearcă automat.'}
+            {info.product}: {lastError.message}
+            {lastError.passing && failures != null ? ` (a ${failures}-a eroare la rând)` : ''}.{' '}
+            {lastError.resetsAt != null && lastError.resetsAt > Date.now() ? `${info.name} resetează limita pe ${fmtDateTime(lastError.resetsAt, s.timezone)}. ` : null}
+            {lastError.permanent
+              ? 'Până schimbi cheia sau modelul, vezi scorul modelului local.'
+              : lastError.passing
+                ? `Se reîncearcă automat ${pausedUntil !== null && pausedUntil > Date.now() ? `la ${fmtTime(pausedUntil, s.timezone)}` : 'în curând'}; între timp, titlurile nescorate au scorul modelului local. Dacă se repetă, alege alt model din listă: unele răspund mai repede.`
+                : 'Între timp vezi scorul modelului local; se reîncearcă automat.'}
+            {lastError.detail && (
+              <span className="mt-1.5 block text-[12px] text-faint [overflow-wrap:anywhere]">
+                Răspunsul {info.name}: „{lastError.detail}”
+              </span>
+            )}
           </Warning>
+        )}
+        {aiScoring && progress && progress.total > 0 && (
+          <p className="text-[12px] text-muted">{progressText(info.product, progress)}</p>
         )}
 
         <section aria-labelledby="ai-use" className="flex flex-col gap-2 rounded-[10px] border border-line px-4 py-3">
@@ -181,8 +206,22 @@ export function AiSection({ s }: { s: SettingsView }) {
                   ? 'niciun rezumat azi.'
                   : `${fmtNum(usage.summary.calls, 0)} ${usage.summary.calls === 1 ? 'rezumat' : 'rezumate'}, ${tokens(usage.summary)}${usage.summary.model ? `, cu ${usage.summary.model}` : ''}.`}
             </li>
+            {/* FD-WATCHLISTS §3: the descriptions put into Romanian (older servers send no such row). */}
+            {usage?.translate && usage.translate.calls > 0 && (
+              <li>
+                <span className="text-text">Traduceri</span>:{' '}
+                {`${fmtNum(usage.translate.calls, 0)} ${usage.translate.calls === 1 ? 'descriere' : 'descrieri'}, ${tokens(usage.translate)}${usage.translate.model ? `, cu ${usage.translate.model}` : ''}.`}
+              </li>
+            )}
+            {/* FD-BOT §6: the Slingshot bots' last look before an entry (older servers send no such row). */}
+            {usage?.bot && usage.bot.calls > 0 && (
+              <li>
+                <span className="text-text">Boți</span>:{' '}
+                {`${fmtNum(usage.bot.calls, 0)} ${usage.bot.calls === 1 ? 'verificare' : 'verificări'}, ${tokens(usage.bot)}${usage.bot.model ? `, cu ${usage.bot.model}` : ''}.`}
+              </li>
+            )}
           </ul>
-          <p className="text-faint">Prețul în dolari îl arată consola furnizorului. Se trimit doar titlurile știrilor (pentru scor) și datele zilei din Sentiq (pentru Rezumat: sentimentul, știrile, calendarul, indicatorii, contextul pieței, favoritele tale), niciodată conturile, cheile sau portofoliile.</p>
+          <p className="text-faint">Prețul în dolari îl arată consola furnizorului. Se trimit doar titlurile știrilor (pentru scor) și datele zilei din Sentiq (pentru Rezumat: sentimentul, știrile, calendarul, indicatorii, contextul pieței, simbolurile tale urmărite; pentru Traduceri: descrierea companiei sau a monedei; pentru Boți: semnalul, nivelurile lui, sentimentul, știrile simbolului, calendarul și rezultatele botului în procente), niciodată conturile, cheile, sumele sau portofoliile.</p>
         </section>
 
         {aiScoring && (

@@ -612,3 +612,877 @@ Status legend: [ ] todo · [~] in progress · [x] done
 - [x] Teste (ordinea alfabetică cu numele noi); verificat în Chrome (legenda „[DE] Slingshot 3.3 38 62” și „[DE] LMA …”, panoul „[DE] Slingshot System 3.3”, tab-ul Premium)
 - [x] Review rounds (93: 5 probleme; 94: 2; 95: zero probleme); suita completă: 61 de fișiere, 601 teste
 - [x] Publicat pe Azure (deploy `e0ac6176`: build 11:29–11:32 UTC cu aplicația oprită, pornit la 11:34 UTC, `/api/ping` 200, „Sentiq running”, liniile orizontale și numele [DE] în codul servit); fără migrare de schemă; fără commit
+
+## Graficul ca în TradingView: lista de simboluri, tragere liberă, A / L, etichetele prețului; iPad (20 oct 2026)
+- [x] Cererea: (iPad) butonul ✕ al Safari peste simbol; „Pozițiile mele” mai scund; ieșirea din ecranul complet pe al doilea rând; lista de simboluri verticală în dreapta, redimensionabilă și ascunsă; „aplici generic, doar ✕ e pentru iPad”; tragere liberă fără deblocare; butoanele A și L; etichetele prețului curent și ale cursorului în culorile din captură; cursorul cruce; » mai la stânga; lista ca în TradingView (Symbol, Last, Chg, Chg%)
+- [x] Cercetare:
+  - „blocarea” e autoScale-ul scalei de preț: biblioteca mută graficul pe verticală doar pe manual, iar decizia o ia la începutul tragerii. Are `setVisibleRange` / `getVisibleRange` / `setAutoScale`;
+  - eticheta prețului curent nu poate avea două rânduri, deci e desenată de o primitivă pe scală;
+  - cursorul graficului se moștenește de la gazdă;
+  - datele listei există deja (banda de sus);
+  - pe ecran tactil, butoanele au 44 px, intervalele 48 px, iar „Pozițiile mele” avea 38 px
+- [x] FD-CHARTTV / TD-CHARTTV
+- [x] Implementare:
+  - `Watchlist.tsx` (coloanele, căutarea, reordonarea, ascunderea) și `watchlist-prefs.ts`; rândul grafic + listă cu marginea de tras; pastilele scoase;
+  - bara: rândul la aceeași înălțime, grupul butoanelor nedespărțit, ieșirea doar iconiță, butonul listei;
+  - pe iPad, în ecranul complet al sistemului, loc pentru ✕;
+  - graficul:
+    - `CurrentPriceLabel` (eticheta galben-pal cu numărătoarea), linia prețului galbenă punctată;
+    - etichetele cursorului gri, cursorul cruce;
+    - tragerea liberă (scala normală preluată de Sentiq, cea logaritmică lăsată bibliotecii);
+    - butoanele A / L (`charts.logScale` în setări);
+    - „+” pătrățel gri, » cu 34 px mai la stânga;
+  - ghidul
+- [x] Teste (numărătoarea, preferințele listei, iPad-ul); verificat în Chrome:
+  - 1440 px: lista și prețurile, bara pe un rând, cursorul cruce; tragerea orizontală păstrează A, cea verticală îl stinge, A îl aprinde, L se salvează (la fel pe scala logaritmică); » și „+” fără suprapunere; click pe rând, marginea trasă (420 px, ținută după reîncărcare), ascunderea și readucerea;
+  - 1024 / 1180 px, cu atingere și ecran complet: bara pe un singur rând, 48 px;
+  - 390 px: lista sub grafic, fără derulare orizontală; cu 14 favoriți, rândurile derulează în cei 360 px;
+  - căutarea cu lista îngustă (200 px): rezultatele întregi, peste grafic;
+  - cu atingeri emulate: un deget pe verticală stinge A, pinch-ul nu (pe ambele scale);
+  - cursorul pe prețul curent: eticheta lui gri rămâne deasupra celei galbene, iar numărătoarea merge
+- [x] Review rounds:
+  - 96: 1 problemă; 97: 1; 98: 1 (testul setărilor, găsit de suita completă); 99: 2 (pinch-ul, indentarea);
+  - 100: 2 (FD); 101: 1 (TD); 102: 1 (ghidul); 103: 1 (eticheta peste cursor); 104: 2 (căutarea tăiată, lista pe telefon);
+  - 105: zero probleme;
+  - suita completă: 64 de fișiere, 607 teste
+- [x] Publicat pe Azure (deploy `853f38b3`, împreună cu graficul TradingView, hedge-ul KuCoin și hedge-ul pe toate platformele): prima încercare (`0745c3c6`) oprită de Azure la o repornire a containerului de build, în timpul `npm ci` (codul vechi a rămas neatins); a doua: build 04:34–04:38 UTC cu aplicația oprită, pornit la 04:40 UTC, `/api/ping` 200, „Sentiq running”, textele noi în codul servit; fără migrare de schemă; fără commit
+
+## Futures KuCoin și în modul hedge (20 oct 2026)
+- [x] Cererea: un trade ratat, pentru că Sentiq refuza contul KuCoin în modul hedge; ordinele futures KuCoin trebuie să meargă și în hedge, nu doar în one-way
+- [x] Cercetare:
+  - KuCoin: modul e al contului; `positionSide` LONG / SHORT e obligatoriu în hedge; contul unificat nu-l primește; eroarea 330012;
+  - ccxt 4.5.85: `hedged: true` pune `positionSide` după direcție și reduce-only, inclusiv la TP / SL;
+  - Sentiq: refuzul din `assertOneWay`, poziția unică din formular, liniile graficului, rândurile din Tranzacții
+- [x] FD-KUCOINHEDGE / TD-KUCOINHEDGE
+- [x] Implementare:
+  - `crypto.ts`: modul citit (`hedgedOf`), ordinul KuCoin clasic cu `hedged: true`, UTA refuzat la verificare, nepotrivirea modului (330012) spusă și citită din nou; pozițiile long / short apart, avertismentele;
+  - `accounts.ts`: partea pozițiilor din `positionSide`, `positionSide` pe ordine;
+  - formularul: „Mod hedge” cu pozițiile, „Închide long / short”, confirmarea; Tranzacții: poziția ordinului; graficul: LONG / SHORT, ordinele legate de poziția lor;
+  - FD-TRADING / TD-TRADING / ghidul actualizate
+- [x] Teste (simulate, ccxt real: `positionSide` LONG / SHORT pe ordine și pe TP / SL, liniile graficului, `positionSideOf`); verificat în Chrome cu un cont KuCoin simulat în hedge:
+  - Tranzacții: long și short pe rânduri separate, ordinele cu „long” / „short”;
+  - „Închide” pe long: „Mod hedge · long 0.01 · short 0.02”, „Închide long”, confirmarea cu „Mod poziții”, ordinul trimis cu `hedged: true` și reduce-only;
+  - Short nou cu long deschis: avertismentul; reduce-only → „Închide short / Închide long”;
+  - graficul: „PnL LONG”, „PnL SHORT”, „Lichidare SHORT”
+- [x] Review rounds: 106: 2 probleme (UTA la nepotrivirea modului, FD / TD); 107: 1 (Binance dă același `positionSide`); 108: 1 (TD); 109: zero probleme; suita completă: 64 de fișiere, 611 teste
+- [x] Publicat pe Azure (deploy `853f38b3`, împreună cu graficul TradingView, hedge-ul KuCoin și hedge-ul pe toate platformele): prima încercare (`0745c3c6`) oprită de Azure la o repornire a containerului de build, în timpul `npm ci` (codul vechi a rămas neatins); a doua: build 04:34–04:38 UTC cu aplicația oprită, pornit la 04:40 UTC, `/api/ping` 200, „Sentiq running”, textele noi în codul servit; fără migrare de schemă; fără commit
+
+## Modul hedge pe toate platformele (20 oct 2026)
+- [x] Cererea: „verifici documentația pentru toate exchange-urile și aplici la fel pentru toate, inclusiv brokeri” (după FD-KUCOINHEDGE)
+- [x] Cercetare (documentațiile și ccxt 4.5.85):
+  - Binance `positionSide` (reduce-only interzis în hedge); Bybit `positionIdx`, modul pe pereche, citit din lista pozițiilor;
+  - OKX `posSide` (levierul izolat pe parte); Bitget clasic `tradeSide` open / close (levierul izolat cu `holdSide`), unificat `posSide`;
+  - eToro poziții separate pe linie; Alpaca o poziție netă pe simbol; Trading 212 fără short; Kraken / Coinbase doar spot; IBKR doar citire
+- [x] FD-HEDGEALL / TD-HEDGEALL
+- [x] Implementare:
+  - `crypto.ts`: modul citit pentru toate futures (Bybit nou), `hedged: true` pe toate (KuCoin unificat refuzat), Bitget fără `oneWayMode` în hedge, levierul izolat pe parte (OKX, Bitget), TP / SL Binance în hedge, nepotrivirea modului pe orice exchange (cu numele lui);
+  - eToro: ambele părți în formular, „Închide” / „De închis” la short-uri; Alpaca: poziția netă spusă; Tranzacții: cheia rândurilor;
+  - pașii cheilor (OKX, Bybit), FD-TRADING / TD-TRADING / FD-KUCOINHEDGE / ghidul
+- [x] Teste (ccxt real: Binance, Bybit, OKX, Bitget clasic și unificat; simulat: nepotrivirea pe Binance; eToro, Alpaca); verificat în Chrome:
+  - eToro simulat: două short-uri pe rânduri separate, „Poziții separate · long 2 · short 2”, „Închide” / „De închis”;
+  - KuCoin hedge din nou (regresie)
+- [x] Review rounds: 110: 2 probleme (partea ordinelor Bybit / OKX / Bitget, mesajul `HEDGE_MODE`); 111: 1 (TD-TRADING); 112: 1 (comentarii); 113: zero probleme; suita completă: 64 de fișiere, 617 teste
+- [x] Publicat pe Azure (deploy `853f38b3`, împreună cu graficul TradingView, hedge-ul KuCoin și hedge-ul pe toate platformele): prima încercare (`0745c3c6`) oprită de Azure la o repornire a containerului de build, în timpul `npm ci` (codul vechi a rămas neatins); a doua: build 04:34–04:38 UTC cu aplicația oprită, pornit la 04:40 UTC, `/api/ping` 200, „Sentiq running”, textele noi în codul servit; fără migrare de schemă; fără commit
+
+## Lista de simboluri pe telefon: panou din dreapta (20 oct 2026)
+- [x] Cererea (după deploy): pe telefon, lista nu trebuie sub grafic, ci un panou care glisează din dreapta; ascunsă nu mai putea fi readusă; pagina se lățea
+- [x] Reprodus în Chrome (320–430 px, cu atingere, cont cu tranzacționarea pornită): grupul butoanelor nu se rupea (până la 545 px), deci pagina era mai lată decât ecranul, iar butonul listei ajungea în afara lui (x 445–489)
+- [x] FD-WATCHDRAWER / TD-WATCHDRAWER
+- [x] Implementare: `media.ts` (`useMediaQuery`), `ListDrawer`; în `Charts.tsx`, panoul lateral doar de la 768 px, iar sub 768 px panoul glisant (închis la intrare, neținut minte); grupul butoanelor se rupe sub 768 px; Esc în ecranul complet închide întâi panoul
+- [x] Teste (`media.test.ts`); verificat în Chrome:
+  - telefon 320 / 360 / 390 / 430 / 744 px: pagina de lățimea ecranului; panoul din dreapta se deschide și se închide cu umbra, cu butonul lui și cu alegerea unui simbol; focusul în panou, pagina blocată; ecranul complet (Esc închide întâi panoul);
+  - rotirea 390 → 900 → 390;
+  - tabletă / desktop 768 / 1024 / 1440: panoul lateral ca înainte (ascuns, arătat, ținut minte); fluxurile vechi (1440, iPad 1180)
+- [x] Review rounds: 114: 1 problemă (Tab ieșea din panoul modal); 115: zero probleme; suita completă: 65 de fișiere, 619 teste
+- [x] Publicat pe Azure (deploy `08e4e061`: aplicația oprită la 05:08 UTC, deploy după un minut de pauză, build 05:09–05:12 UTC, pornit la 05:14 UTC, `/api/ping` 200, „Sentiq running”, panoul în codul servit); fără migrare de schemă; fără commit
+
+## Pinch pe grafic, butonul listei în dreapta; glisarea panoului (20 oct 2026)
+- [x] Cererea: „Pinch to zoom pe grafic face pe pagină, nu pe grafic; comportamentul e inconsecvent”; butonul listei primul la dreapta; „Se deschide până în extremă stânga și apoi se mută în dreapta”; un singur deploy, la final
+- [x] Cercetare și reproducere:
+  - lightweight-charts renunță la pinch la orice mișcare a primului deget înainte de al doilea; Safari trimite și mișcările de 1 px, iar Chrome le ascunde (reprodus cu `TouchEvent`-uri DOM: 1 / 3 px → graficul nemărit);
+  - panoul: focusul derula stratul în timpul glisării (cadru cu cadru: `scroll334`)
+- [x] FD-CHARTTOUCH / TD-CHARTTOUCH (și TD-WATCHDRAWER pentru glisare)
+- [x] Implementare:
+  - `touch-none` pe tot graficul; primele mișcări (sub 8 px) ale unui singur deget nu ajung la bibliotecă; tragerea la atingere de la 8 px; al doilea deget lasă „A” aprins;
+  - butonul listei ultimul, `ml-auto`; bara aliniată la dreapta când e pe rândul ei;
+  - panoul: focus fără derulare, strat `overflow-clip`
+- [x] Verificat în Chrome:
+  - pinch ca în Safari (0 / 1 / 3 / 6 px înainte → mărit, „A” aprins; 10 px → tragere) la 390 și 1180 px; pinch prin CDP; un deget pe orizontală (A aprins) și pe verticală (A stins); atingere pe „A”;
+  - butonul listei ultimul și la marginea conținutului la 320 / 390 / 768 / 1024 / 1440;
+  - panoul cadru cu cadru; fluxurile de telefon, desktop, iPad, rotirea, Tab
+- [x] Review rounds: glisarea raportată după deploy (reparată, notată); 116: zero; 117: 1 problemă (apăsarea lungă nedocumentată); 118: zero probleme; suita completă: 65 de fișiere, 619 teste
+- [x] Publicat pe Azure (cerut: „Faci deploy când termini”), un singur deploy (`e72ebab7`): aplicația oprită la 05:50 UTC, deploy după un minut, build 05:51–05:54 UTC, pornit la 05:55 UTC, `/api/ping` 200, „Sentiq running”, reparațiile în codul servit; fără migrare de schemă; fără commit
+
+## Lista, bara, A / L și „+”: corecturi (20 oct 2026)
+- [x] Cererea:
+  - spațiu între rândurile listei; la capătul listei derularea trece la pagină;
+  - fără butonul din capul listei; bara aliniată la stânga, doar butonul listei la dreapta;
+  - A / L la baza scalei prețului; crucea păstrată pe „+”
+- [x] FD-CHARTPOLISH / TD-CHARTPOLISH
+- [x] Implementare:
+  - `Watchlist.tsx`: `gap-1`, `overscroll-auto` în panoul lateral, fără butonul din cap; panoul de telefon se închide trăgându-l spre dreapta (`touch-pan-y` pe panou și pe rânduri);
+  - `Charts.tsx`: partea din dreapta a barei `flex-[1_1_auto]`, butonul listei separat cu `ml-auto`, grupul `contents` pe telefon;
+  - `CandleChart.tsx`: A / L la baza panoului cu lumânări (`bg-chart`), `HLinePlus` pune crucea la loc cât e mouse-ul pe el sau meniul e deschis, o șterge la plecarea în afara graficului
+- [x] Verificat în Chrome (măsurători și capturi):
+  - bara: intervalele la marginea stângă a conținutului, butonul listei la cea dreaptă, la 320 / 390 / 430 / 768 / 1024 / 1440; pe telefon, pe rândul lui „Indicatori”;
+  - rândurile: 4 px între ele; hover lângă rândul deschis (captură);
+  - rotița: lista derulează (120 → 240 → 246 / 246), apoi pagina (0 → 541);
+  - A / L: baza lor la linia dintre lumânări și LMA, în coloana scalei (1440 / 1024 / 768);
+  - „+”: eticheta prețului și linia punctată rămân cu mouse-ul pe el (pixeli și captură), dispar plecat de pe grafic (1440 / 1024 / 768);
+  - telefon: capul fără buton; tragerea de 40 px îl lasă, cea de 140 px îl închide; tragerea pornită pe un rând nu-l deschide; atingerea îl deschide; derularea verticală merge;
+  - fluxurile vechi: telefon, glisarea cadru cu cadru, Tab, rotirea, 1440, iPad, pinch
+- [x] Review rounds: 119: 3 probleme (crucea pe LMA, spațiul lui „»”, rigla care lățea pagina); 120: 1 (Azi pe telefon); 121: zero probleme
+- [x] Publicat pe Azure, un singur deploy pentru lot (`9c37795a`): aplicația oprită la 07:42 UTC, deploy după un minut, build 07:43–07:47 UTC, pornit la 07:48 UTC, `/api/ping` 200, „Sentiq running”, schimbările în codul servit; fără migrare de schemă; fără commit
+
+## Bara de sus pe un singur rând, cu „»” (20 oct 2026)
+- [x] Cererea (cu o captură: bara pe două rânduri): un rând; meniurile care nu încap sub „»”, cu lista plutitoare
+- [x] FD-NAVOVERFLOW / TD-NAVOVERFLOW
+- [x] Implementare: `components/PriorityNav.tsx` (`fitCount`, rigla, „»”, lista, tastatura); `TopNav` fără `flex-wrap` și fără rândul de telefon
+- [x] Teste (`priority-nav.test.ts`); verificat în Chrome la 320 / 390 / 768 / 1024 / 1280 / 1440 / 1700 / 2000:
+  - un rând (înălțimea antetului 57 px, toate pe același mijloc), nimic tăiat, pagina de lățimea ecranului;
+  - „»” deschide lista cu paginile ascunse; Esc (focusul înapoi pe „»”), ↓ / ↑, click în afară;
+  - pagina deschisă ascunsă colorează „»”; de la 1700 px încap toate, iar „»” dispare;
+  - capturi
+- [x] Review rounds: în lotul cu FD-CHARTPOLISH (119–121)
+- [x] Publicat pe Azure, un singur deploy pentru lot (`9c37795a`): aplicația oprită la 07:42 UTC, deploy după un minut, build 07:43–07:47 UTC, pornit la 07:48 UTC, `/api/ping` 200, „Sentiq running”, schimbările în codul servit; fără migrare de schemă; fără commit
+
+## Toate paginile pe toată lățimea (20 oct 2026)
+- [x] Cererea: „fă-le pe toate full width”, ca pe Calendar, Economie, Grafice
+- [x] FD-FULLWIDTH / TD-FULLWIDTH
+- [x] Implementare: `<main>` fără `max-w-[1600px]`; Știri, Tranzacții, Setări, Setări admin, Stare sistem, Utilizatori (1240), Securitate (1100), Economie (1400) fără limita lor
+- [x] Verificat în Chrome la 1440 și 1920: pe toate cele 11 pagini, conținutul are marginile lui `<main>` (ca la Calendar), fără lățime în plus; capturi (Azi, Știri, Setări, Tranzacții, Stare sistem)
+- [x] Review rounds: în lotul cu FD-CHARTPOLISH (119–121)
+- [x] Publicat pe Azure, un singur deploy pentru lot (`9c37795a`): aplicația oprită la 07:42 UTC, deploy după un minut, build 07:43–07:47 UTC, pornit la 07:48 UTC, `/api/ping` 200, „Sentiq running”, schimbările în codul servit; fără migrare de schemă; fără commit
+
+## iPad: ecranul complet nu se mai închide la tragerea în jos; loc pentru ✕ (20 oct 2026)
+- [x] Cererea:
+  - pe iPad, tragerea în jos în ecranul complet scotea din el (de la versiunea de la 10:48; cauza, spusă de utilizator: derularea trecută la pagină de la capătul listei, din FD-CHARTPOLISH);
+  - primul rând mai la dreapta, pentru ✕-ul Safari;
+  - pe iPhone, partea de sus a panoului de simboluri tăiată
+- [x] FD-IPADFS / TD-IPADFS
+- [x] Implementare:
+  - `Watchlist.tsx`: prop `contained`, rândurile `overscroll-contain` și în ecranul complet;
+  - `Charts.tsx`: `contained={fs.active}` pe panoul lateral, numele la `pl-20` pe iPad în ecranul complet al sistemului;
+  - FD-CHARTTV §1, FD-CHARTPOLISH §1, TD-uri și ghid actualizate
+- [x] Verificat în Chrome:
+  - iPad în ecranul complet nativ (1024 × 768, 1366 × 1024): lista `contain`, numele la 80 px; ieșit, lista `auto`;
+  - ecranul complet „din pagină” (1024 × 768, 820 × 1180, 844 × 390, 932 × 430): la fel;
+  - rotița: în afara ecranului complet, lista apoi pagina; în ecranul complet, lista se oprește la capăt (cadrul și pagina nemișcate);
+  - telefon: capul panoului vizibil (390 × 844, pagina derulată, și orizontal); lățimea paginii cât ecranul peste tot
+- [x] iPhone, partea de sus a panoului: nereprodusă în Chrome; tratată în FD-IPADFS2
+- [x] Rezultat pe iPad (utilizatorul, după deploy): ieșirea la tragerea în jos a rămas; cauza reală și reparația în FD-IPADFS2
+- [x] Review rounds: 122: 1 problemă (cadrul trecut necerut la `overscroll-none`, înapoi la `contain`); 123: 1 (FD-ul dădea ca sigure lucruri neverificate pe iPad); 124: 1 (TD-CHARTPOLISH §1 rămas în urmă); 125: zero probleme
+- [x] Teste: 66 fișiere, 622 teste, toate trec
+- [x] Publicat pe Azure, un singur deploy (`dd04edcd`): aplicația oprită la 08:51 UTC, deploy după un minut, build 08:52–08:55 UTC, pornit la 08:56 UTC, `/api/ping` 200, „Sentiq running”, schimbările în codul servit (`pl-20`, fără `pl-14`); fără migrare de schemă; fără commit
+
+## iPhone și iPad: ecranul complet „din pagină” (20 oct 2026)
+- [x] Cererea: „Nu a funcționat. Rezolvă.”; orice tragere în jos scoate din ecranul complet; „nici pe iPhone nu funcționează”
+- [x] Cercetare:
+  - codul WebKit: ecranul complet al sistemului pe iPhone / iPad iese la orice tragere în jos, recunoscută odată cu derularea paginii;
+  - inginerul WebKit (bug 264215): intenționat, pagina nu-l poate opri;
+  - a apărut odată cu lista din ecranul complet (FD-CHARTTV), a cărei derulare e o tragere în jos
+- [x] FD-IPADFS2 / TD-IPADFS2
+- [x] Implementare:
+  - `fullscreen.ts`: `isAppleTouch()` (în locul lui `isIPad()`), `nativeFullscreenAllowed()`, iar `enter()` nu mai cere ecranul complet al sistemului pe iPhone / iPad;
+  - `Charts.tsx`: fără `pl-20` / `iPad`;
+  - `apple-touch.test.ts`; documentele și ghidul
+- [x] Verificat în Chrome, cu click real:
+  - iPad (1024 × 768, 820 × 1180) și iPhone (390 × 844, 430 × 932, 844 × 390): ecranul complet „din pagină” (cadrul cât fereastra, pagina blocată, lista `contain`), Esc iese, pagina de lățimea ecranului;
+  - iPhone: capul panoului de simboluri vizibil în ecranul complet;
+  - Mac (1440 × 900): ecranul complet al sistemului, ca până acum
+- [x] Review rounds: 126: 3 probleme (comentariu / ternar, comentariul lui `contained`, nota din FD-IPADFS); 127: 2 (TD-IPADFS §3, testele din TD-CHARTTV); 128: 1 (o presupunere despre iPhone dată ca sigură); 129: zero probleme
+- [x] Teste: 66 fișiere, 623 teste, toate trec
+- [x] Publicat pe Azure, un singur deploy (`6a364703`): aplicația oprită la 09:30 UTC, deploy după un minut, build 09:31–09:35 UTC, pornit la 09:36 UTC, `/api/ping` 200, „Sentiq running”, schimbările în codul servit (`iPhone|iPod|iPad`, fără `pl-20`); fără migrare de schemă; fără commit
+
+## Pagina Grafice testată buton cu buton (20 oct 2026)
+- [x] Cererea: test pe toată pagina, fiecare buton, în și în afara ecranului complet; „+” rămas în urmă; „+” care nu dispare după închiderea meniului
+- [x] Testat:
+  - Safari real din simulatorul iOS 27 (iPhone 17 Pro, iPad Pro 11"), comandat de la distanță într-o copie de test, cu capturi;
+  - Chrome pe desktop (mouse, ecranul complet al sistemului) și pe telefon / tabletă (atingeri);
+  - simulatoarele, oprite și șterse la cererea utilizatorului (încărcau laptopul)
+- [x] FD-CHARTAUDIT / TD-CHARTAUDIT
+- [x] Reparat:
+  1. „+” se mută în același cadru cu crucea;
+  2. pe ecran tactil, „+” și crucea dispar după o atingere în afara meniului și după adăugarea liniei;
+  3. panoul de setări (indicatori, Slingshot, LMA, linia) cât partea vizibilă, cu butoanele de jos pe ecran (pe iPhone / iPad erau sub ecran); pe telefon, toată lățimea;
+  4. „Pe grafic” / „Pe grafic × N” în „Indicatori”;
+  5. căutarea din listă: ↓ / ↑ / Enter, iar Esc golește întâi căutarea;
+  6. eticheta de stare LMA trece în stânga când ar fi tăiată;
+  7. panoul graficului își păstrează înălțimea cât se încarcă un alt interval / simbol;
+  8. bannerul „nu răspunde” și în ecranul complet;
+  9. butonul listei nu mai rămâne singur pe un rând (1180 px, 1024 px în ecranul complet);
+  10. meniul lui „+” nu mai trece de marginea graficului la 320 px
+- [x] Verificat în Chrome după reparații:
+  - „+” la 0 px de cursor chiar în evenimentul de mișcare (25 de mișcări);
+  - atingeri: apariția, închiderea, adăugarea;
+  - telefon 320 / 390 în ecranul complet: toate ferestrele deasupra și pe ecran, „Salvează” vizibil;
+  - bara la 320–1440 px;
+  - căutarea cu tastele; „Pe grafic × 2”;
+  - intervalul nou: 682 px în fiecare cadru;
+  - bannerul în ecranul complet
+- [x] Review rounds: 130: 2 probleme (`aria-activedescendant`, două alerte); 131: 1 (ghidul); 132: zero probleme
+- [x] Retestat în Safari (simulatoarele iOS 27, câte unul pornit; FD §12):
+  - iPhone 17: toate reparațiile 1–10 confirmate;
+  - iPad Air 11": bara, panoul de setări, gesturile cu „+”
+- [x] Găsite la retestare și reparate (FD §13–§18):
+  11. pe ecran tactil, apăsarea lungă și tragerea nu mai mută prețurile și nu mai opresc „A”;
+  12. după ce „+” dispare printr-o atingere, graficul iese din modul cruce: următoarea glisare îl derulează (înainte readucea crucea și „+”);
+  13. „⌥H” nu mai apare în meniul lui „+” pe telefon;
+  14. o glisare pornită de pe o linie orizontală nu-i mai deschide setările
+- [x] Review rounds: 133: 2 probleme (FD §18, ghidul); 134: 3 (TD §11, FD §12, TD §15); 135: zero probleme
+- [x] Teste: 69 fișiere, 632 teste, toate trec
+- [x] Deploy: `6357bc2e` (20 oct 2026, 13:11 UTC); „Sentiq running” în jurnal, iar codul nou e în fișierele servite
+
+## FD-MODALFIT — ferestrele nu mai ies din ecran pe iPhone / iPad (20 oct 2026)
+- [x] FD-MODALFIT / TD-MODALFIT
+- [x] Cauza: ferestrele (Modal: „Indicatori”, „Ordin nou” și celelalte; asistentul de conturi; rezumatul zilei; căutarea) își luau înălțimea din `vh`, care pe iPhone / iPad e mai mare decât partea vizibilă; cu lista lungă („Indicatori” → „Toți”) jos ieșeau din ecran
+- [x] Reparat: înălțimea din partea vizibilă (`max-h-full` în stratul `fixed inset-0`); cu tastatura de pe ecran, ferestrele, panoul de setări al graficului și panoul listei stau deasupra ei (`useVisibleArea`)
+- [x] Verificat în Chrome (un singur browser, închis după): 390×664, 844×340, 1180×740, în și în afara ecranului complet, și cu pagina mărită 2×: marginea de jos în ecran, ✕ vizibil, lista se derulează
+- [x] Review rounds: 136: 1 problemă (FD-CHARTAUDIT §10); 137: zero probleme
+- [x] Teste: 70 fișiere, 636 teste, toate trec
+- [x] Deploy: `10a592ea` (20 oct 2026, 16:35 UTC)
+
+## FD-SCOREWHY — „De ce acest scor?” în „Ce mișcă piața” (Azi) (20 oct 2026)
+- [x] Cerut: la fiecare știre din „Ce mișcă piața”, ca pe pagina Știri (ales de utilizator dintre: Ce mișcă piața / Știri live / Sentimentul zilei)
+- [x] FD-SCOREWHY / TD-SCOREWHY
+- [x] Server: `explainDrivers` (motorul, meta, relevanța, importanța, ca `queryNews`, pentru scorul folosit de indice), doar în răspunsul `/api/sentiment/today`, nesalvat
+- [x] Web: `ScoreWhy.tsx` comun cu pagina Știri; în „Ce mișcă piața” plus „Cântărește X% din indicele zilei”
+- [x] Verificat în Chrome (390 și 1440 px) cu știri de test: toate rândurile, procentele adunate ≈ 100%, fără lățire, fără erori
+- [x] Review rounds: 138: 1 problemă (ghidul); 139: zero probleme
+- [x] Teste: 71 fișiere, 641 teste, toate trec
+- [x] Deploy: `10a592ea` (20 oct 2026, 16:35 UTC)
+
+## FD-INDEXWHY — „Cum s-a calculat?” la Sentimentul zilei (Azi) (20 oct 2026)
+- [x] FD-INDEXWHY / TD-INDEXWHY
+- [x] Calculul: `explainIndex` din aceleași funcții ca indicele (`select`, `weigh`, `aggregate`), cu termenii fiecărei știri; ponderile identice la ultima cifră (ordinea înmulțirilor păstrată), testele vechi ale indicelui trec
+- [x] Serverul: `explainToday` (primele 100 de știri cu „De ce acest scor?”, restul însumat), `GET /api/sentiment/today/explain`, pentru indicele utilizatorului (AI-ul lui, filtrul lui)
+- [x] Fereastra: pașii 1–6 cu cifrele de azi, categoriile, sursele (greutatea, plafonul), știrile (20 o dată, până la 100, apoi „Celelalte”), parametrii; „Recalculează”
+- [x] Verificat în Chrome (390 și 1440 px, 137 de știri de test): indicele ferestrei = cel de pe card, fereastra încape, fără lățire (după reparația formulelor), fără erori
+- [x] Review rounds: 140: 4 probleme (plafonul la pondere 0, greutatea sursei, explicația goală, FD); 141: zero probleme
+- [x] Teste: 72 fișiere, 649 teste. Din 4 rulări complete, prima a avut un test picat (neidentificat, ieșirea nu era salvată); următoarele 3 au trecut toate, inclusiv cea cu ieșirea păstrată
+- [x] Deploy: `10a592ea` (20 oct 2026, 16:35 UTC)
+
+## FD-WHYPLAIN — explicații pe înțeles (20 oct 2026)
+- [x] FD-WHYPLAIN / TD-WHYPLAIN (pornit de la datele reale: 1.147 de știri, 937 neutre, driverii mută indicele cu 0,1–0,2 puncte)
+- [x] „Ce mișcă piața”: de ce sunt acolo (rândul de sus); la fiecare, cât a mutat indicele („Fără ea, indicele ar fi …”), calculat refăcând indicele fără știre; de ce cântărește (față de o știre obișnuită: importanța, sursa, vechimea, povestea, factorul, plafonul)
+- [x] „Cum s-a calculat?”: pe rândul de titlu al cardului; „Pe scurt” în cuvinte; „fără ea” la fiecare știre
+- [x] Motivul scorului de la AI-ul utilizatorului: cerut cu scorul (o propoziție în română), salvat (migrarea 6), arătat primul în „De ce acest scor?” (Azi și Știri); doar pentru știrile notate după deploy
+- [x] Verificat în Chrome (schema de test, 390 și 1440 px); pornit local pe baza reală fără motiv (fără migrare), ca utilizatorul să vadă restul
+- [x] Review rounds: 142: 5 probleme (o singură încărcare a știrilor, TD, FD, „Pe scurt”, teste vechi); 143: zero; după vitest, 1 test vechi actualizat; 144: zero
+- [x] Corecții cerute: titlul „Sentimentul zilei” e legătura spre „Cum s-a calculat?” (fără buton separat); insigna PREMIUM după titlul ferestrei (doar insigna: nu există încă plăți / acces premium); legătura nu se aprindea venind de jos (cifra mare o acoperea), reparat
+- [x] Review rounds: 145, 146: zero probleme
+- [x] Teste: 74 fișiere, 658 teste, toate trec
+- [x] Deploy: `10a592ea` (20 oct 2026, 16:35 UTC)
+
+## FD-HISTORYCHART — „Ultimele 30 de zile” pe toată înălțimea, cu Fear & Greed (20 oct 2026)
+- [x] FD-HISTORYCHART / TD-HISTORYCHART (ales de utilizator: graficul mărit cu valoarea la hover + comparația cu Fear & Greed)
+- [x] Trei linii 0–100 pe aceeași scară: Sentiq (azi = indicele live), Crypto F&G (alternative.me), Stocks F&G (CNN); legenda ascunde / arată liniile, scara se mărește pe ce e afișat; hover / atingere cu valorile zilei, ținut în panou; etichetele scării într-o margine
+- [x] Fără cereri noi (aceeași interogare a contextului pieței ca banda)
+- [x] Verificat în Chrome (schema de test cu istoric și Fear & Greed): panoul cât „Ce mișcă piața” la 1440 px; telefon 390 fără ieșiri
+- [x] Review rounds: 147: 1 problemă (FD); 148, 149: zero probleme
+- [x] Teste: 75 fișiere, 663 teste, toate trec
+- [x] Deploy: `10a592ea` (20 oct 2026, 16:35 UTC)
+
+## FD-MULTICAT — surse de știri cu mai multe categorii („General”) (20 oct 2026)
+- [x] FD-MULTICAT / TD-MULTICAT
+- [x] Migrarea 7 (`sources.categories`); `category` rămâne prima categorie
+- [x] La o sursă cu mai multe categorii, fiecare știre primește categoria pe care o tratează (monede, companii, cuvintele subiectului); una fără niciun semn: relevanța 0, în afara indicelui
+- [x] Aducere, titlu schimbat, reetichetarea zilnică și schimbarea categoriilor (reclasează știrile păstrate) folosesc aceeași regulă
+- [x] Setări → Admin → Surse: „Categorii” cu patru butoane și „Toate (general)” la adăugare; „Schimbă” la sursele adăugate
+- [x] Verificat în Chrome (1440 și 390 px); testele noi (clasare, aducere, reetichetare, rută)
+- [x] Review rounds: 150: 3 probleme; 151: zero probleme
+- [x] Teste: 76 fișiere, 671 teste, toate trec
+- [x] Deploy: `10a592ea` (20 oct 2026, 16:35 UTC)
+
+## FD-HTMLFEED — știri de pe site-uri fără RSS (20 oct 2026)
+- [x] FD-HTMLFEED / TD-HTMLFEED, cercetat pe site-uri reale (CoinDesk, CNBC, Benzinga, Reuters, AP News)
+- [x] O adresă de pagină se citește, în ordine: feed RSS; feed declarat în pagină; JSON-LD; titlurile din pagină (cititor propriu, fără biblioteci noi); sitemap-ul de știri al site-ului (pentru pagini blocate sau fără titluri)
+- [x] `robots.txt` respectat la pagini și sitemap-uri (Reuters refuzat); fără ocolirea protecțiilor anti-bot; doar adrese ale aceluiași site
+- [x] Migrarea 8 (`sources.read_as`, `read_url`): modul găsit la adăugare, folosit la fiecare citire (la 10 minute)
+- [x] Titlurile fără dată: la prima citire doar notate; apoi cele noi intră cu ora la care au fost văzute; data doar din adresă → ora la care a fost văzută, după prima citire
+- [x] Admin: „Testează” spune cum se citește și câte știri au dată; tabelul arată modul
+- [x] Verificat în Chrome cu adrese reale: CoinDesk Markets (pagină, 27), Benzinga Markets (sitemap, 291), Reuters (refuzat, robots.txt), feed-ul Benzinga
+- [x] Review rounds: 152: 3 probleme; 153: zero probleme
+- [x] Teste: 78 fișiere, 693 teste, toate trec
+- [x] Deploy: `10a592ea` (20 oct 2026, 16:35 UTC), cu migrările 6, 7, 8; „Sentiq running” în jurnal, codul nou în fișierele servite
+- [x] Benzinga adăugat (cerut ca cel mai important): `https://www.benzinga.com/`, General, citit din sitemap-ul lor Google News; prima citire pe Azure: 486 de știri, fără eroare (Acțiuni 340, Crypto 117 din care 90 fără subiect, relevanța 0, Macro 16, Geopolitică 13)
+
+## FD-AIQUOTA — erorile de credit și de limită ale AI-ului, spuse exact (20 oct 2026)
+- [x] Cauza la utilizatorul 2 (Gemini), din jurnalul Azure:
+  - 12:49 UTC: `402: Your prepayment credits are depleted` (soldul Prepay al proiectului era 0);
+  - de la 14:12: refuzul de limită zilnică, ascuns sub mesajul general, inclusiv cu cheia salvată din nou la 16:51;
+  - limitele Google sunt ale proiectului, nu ale cheii.
+- [x] FD-AIQUOTA / TD-AIQUOTA
+- [x] Gemini: mesaj precis pentru Prepay epuizat (402 sau 429), limita zilnică a nivelului gratuit sau plătit (câte cereri, pentru ce model, „limita e a proiectului, nu a cheii”), limita 0 (model indisponibil pe nivel); ora resetării (miezul nopții ora Pacificului) în fusul utilizatorului
+- [x] Textul exact al furnizorului (orice furnizor) sub mesaj, la erorile de credit și limită și la cele de cereri pe minut; în jurnal la fel; cheile citate de furnizor ascunse peste tot
+- [x] Pauza și eroarea rămân după o repornire (nu se mai trimite o cerere imediat după deploy); eroarea veche dispare la primul răspuns bun și după o repornire (bug reparat)
+- [x] Salvarea cheii AI-ului ales (chiar aceeași) sau o altă alegere AI reîncearcă imediat, pe oricare instanță
+- [x] Verificarea cheii la salvare: același mesaj precis dacă Google refuză și lista de modele
+- [x] Verificat în Chrome (schema de test, o stare ca a utilizatorului 2): 1440 și 390 px, fără ieșiri orizontale, fără erori
+- [x] Review rounds: 154: 4 probleme; 155: 2; 156: 1; 157: 1; 158: zero probleme
+- [x] Teste: 79 fișiere, 706 teste, toate trec
+- [x] Deploy: 20 oct 2026, 18:41 UTC (deployment 0cbffd5b); schema rămâne v8
+
+## FD-AISLOW — scorarea AI când furnizorul răspunde greu (20 oct 2026)
+- [x] Cauza la utilizatorul 2 (eroarea din captură: „Google nu a răspuns la timp”, nu una de credit):
+  - de la 12:58 UTC, gemini-3.8-flash răspunde în 30–60 s, adesea peste 90 s; la 12:54–12:57 răspundea în ~5 s;
+  - după fiecare timp depășit, 5 minute de pauză: ~25 de titluri la 7 minute, 1.639 în așteptare;
+  - pe forumul Google, rapoarte de lentoare și 503 la 3.8 Flash de la 13 oct, mai rău pe 20 oct; problema e la Google.
+- [x] FD-AISLOW / TD-AISLOW
+- [x] Un lot are 3 minute (înainte 90 s), cu reîncercările cu tot, la toți furnizorii; mesajul spune cât s-a așteptat („Google nu a răspuns în 3 minute”)
+- [x] După o eroare trecătoare: pauza 1 → 2 → 4 → 8 → 15 minute, la zero după primul răspuns; credit 30 de minute, cheie refuzată până se schimbă (neschimbate)
+- [x] Utilizatorii în paralel (câte 4), un lot fiecare pe rundă; nicio rundă nouă după 5 minute: un furnizor lent nu-i mai ține pe ceilalți
+- [x] Setări → AI: o singură eroare trecătoare nu mai aprinde avertismentul; de la a doua, „(a N-a eroare la rând)”, ora reîncercării, sfatul de a alege alt model
+- [x] Rândul de progres: „Ultimele 48 h: Gemini a scorat X din Y titluri; ultimul scor acum N min.”
+- [x] Jurnalul: loturile care răspund după mai mult de un minut, cu durata
+- [x] Verificat în Chrome (schema de test, 3 erori la rând, 12 din 30 scorate): 1440 și 390 px, fără ieșiri orizontale, fără erori
+- [x] Review rounds: 159: 4 probleme; 160: 3; 161: 1; 162: 2; 163: zero; 164: 1 (găsită de suita completă); 165: zero probleme
+- [x] Teste: 81 fișiere, 723 teste, toate trec
+- [x] Deploy: 20 oct 2026, 20:28 UTC (deployment 40b71ff8), cu FD-EARNTV
+
+## FD-EARNTV — data rezultatelor trimestriale și de la TradingView (20 oct 2026)
+- [x] Cauza: Nasdaq (date de la Zacks) avea SPCX pe 3 nov., ca dată estimată algoritmic, deși SpaceX anunțase pe 16 oct. rezultatele pe 20 oct., după închidere; TradingView avea data corectă, marcată confirmată
+- [x] FD-EARNTV / TD-EARNTV (codurile TradingView deduse din 227 de companii: 10 estimată; 11 / 12 / 13 confirmată înainte de deschidere / după închidere / fără oră)
+- [x] O cerere TradingView pentru toate acțiunile din favorite, la fiecare reîmprospătare (6 h și la adăugare)
+- [x] Data confirmată de TradingView câștigă; o dată Nasdaq diferită dispare; după o publicare, o dată Nasdaq la mai puțin de 45 de zile e sărită; o estimare TradingView nu schimbă nimic
+- [x] Doar la TradingView: Prognoza = EPS-ul estimat de TradingView, fără Anterior; nota spune de unde e data și numerele
+- [x] TradingView căzut sau cu coloane schimbate: doar Nasdaq, cu avertisment în jurnal, fără eroare de job
+- [x] Verificat pe datele reale (fără scriere): SPCX azi, după închidere; TSLA, META, TXN mâine; restul pe zilele lor
+- [x] Review rounds: 166: 3 probleme; 167: 1; 168: 2; 169: zero probleme
+- [x] Teste: 82 fișiere, 735 teste, toate trec
+- [x] Deploy: 20 oct 2026, 20:28 UTC (deployment 40b71ff8), cu FD-AISLOW; schema rămâne v8; primul job după deploy a pus SPCX pe 20 oct., 16:30 ET
+
+## FD-WATCHLISTS — Liste de urmărire (20–21 oct 2026)
+- [x] Alegerile utilizatorului: toate listele împreună alimentează restul aplicației; descrierile traduse cu AI-ul utilizatorului
+- [x] FD-WATCHLISTS / TD-WATCHLISTS
+- [x] Migrarea 9: `watch_lists`, `watch_list_items`; favoritele fiecăruia devin lista „Favorite”; `watchlist` rămâne registrul (reuniunea)
+- [x] Pagina „Liste de urmărire” (după Tranzacții): liste (nouă, redenumire, ștergere, ordine), adăugare, selecție multiplă (Shift + clic), Copiază / Mută / Șterge, ordine, aliasuri, prețuri
+- [x] Popup „Date financiare”: descrierea (Nasdaq / CoinGecko / Sentiq), tradusă cu AI-ul tău și ținută minte; ultimele 4 trimestre (TradingView), comparația cu anul trecut, rezultatele următoare; ETF / indici / crypto fără rezultate
+- [x] Grafice: dropdown cu listele în panoul de simboluri, lista aleasă ținută minte
+- [x] Setări fără panoul Favorite; textele „favorite” → „urmărite” unde însemnau toate listele; consumul AI cu rândul „Traduceri”
+- [x] Rutele vechi `/api/watchlist` lucrează peste liste (o filă deschisă înainte de actualizare)
+- [x] Verificat în Chrome pe o schemă de test (server de test cu codul nou): 1440 și 390 px, fără ieșiri orizontale, fără erori
+- [x] Review rounds: 170: 5 probleme; 171: 2 (Chrome); 172: 1; 173: zero probleme
+- [x] Teste: 85 fișiere, 756 teste, toate trec
+- [x] Testare locală pe datele reale (FD-LOCALSTAGE, decizia utilizatorului): Sentiq local cu codul nou, baza reală migrată la v9 pe 21 oct, 00:57 (ora României); fiecare utilizator are lista „Favorite”
+- [x] Reparații după testarea utilizatorului (rundele 174–177):
+  - nimic nu mai împinge pagina (bara selecției, mesajele, „+”, indicii);
+  - rândurile alternante nu mai ies din panou;
+  - reetichetarea știrilor trece în fundal, iar schimbările se văd imediat;
+  - 762 de teste trec.
+- [x] Deploy: 21 oct 2026, 01:49 (ora României; deployment 37de46c0), cerut de utilizator după reparații; baza era deja la v9
+
+## FD-SLINGSHOT34 — Slingshot System 3.4: partea SHORT (21 oct 2026)
+- [x] FD-SLINGSHOT34 / TD-SLINGSHOT34
+- [x] **Pine:** `sling-shot-system-3.4.pine`, fișier nou (repo separat, necomis). Conține:
+  - grupul „Signals” (Long, Short, culoarea short-ului), cu eroare dacă amândouă sunt debifate;
+  - mașina SHORT, TP/SL, istoricul și alertele ei;
+  - afișarea TP/SL a fiecărei părți.
+  `sling-shot-system.pine` (3.3) e neatins.
+- [x] **Portul** `slingshot.ts` (3.4, linie cu linie). Setările noi au `refine`: cel puțin o parte bifată.
+- [x] **Sentiq:**
+  - graficul (SHORT, TAKE PROFIT short, TP/SL ale fiecărei părți, prin modulul nou `slingshot-draw.ts`);
+  - setările (ultima casetă bifată blocată);
+  - tabelul de semnale, alertele, caseta TP/SL;
+  - Azi (scanner) și contextul AI.
+- [x] **Corecție la cererea utilizatorului (21 oct 2026).** SHORT-ul trebuie să aibă exact regulile LONG-ului, inversate, iar backtest-ul verifică doar că semnalele se activează unde trebuie. Am scos două lucruri adăugate de mine:
+  - regula „confirmare doar cu o închidere sub nor”, aleasă după rata de succes; ea sărea semnale valide;
+  - legătura dintre părți (un semnal nou al unei părți oprea urmărirea TP/SL a celeilalte).
+
+  Acum fiecare parte e independentă și își afișează singură TP/SL-ul. Din FD au ieșit cifrele de succes.
+- [x] **Verificări pe toate cele 192 de serii reale** (44 de monede pe 1h / 4h / 1d, 60 de acțiuni și ETF-uri pe 1d):
+  - SHORT pe graficul real = LONG pe graficul întors (6273 de semnale SHORT; etichete, alerte, TP/SL, stare);
+  - ambele bifate = fiecare parte singură;
+  - doar Long = 3.3;
+  - fiecare SHORT verificat față de regulile scrise, independent de cod.
+- [x] **Pine:** codul SHORT = codul LONG trecut mecanic prin tabelul de inversare (mașina de stări, TP/SL, istoricul, afișarea). Singura diferență e blocul mort `currentCycleLabel` din LONG.
+- [x] **Chrome**, pe schema de test, cu interfața construită în scratchpad:
+  - caseta TP/SL cu LONG urmărit și SHORT în formare (AVAX 4h, 17 sep), la 1440 / 390 / 320;
+  - textul nu se rupe și caseta rămâne în grafic, inclusiv cu prețuri de 10 caractere;
+  - setările și cardurile din Azi.
+- [x] Review: runda 181 (3 probleme), 182 (2), 183 (zero); vezi mai jos.
+- [x] Teste: 89 de fișiere, 791 de teste, toate trec.
+- [x] Deploy: 21 oct 2026, 18:59 (ora României; deployment fcacd546), cerut de utilizator; aplicația oprită pe durata build-ului (B1)
+
+## FD-SS34LIVE — invalidarea live, X pentru invalidat, personalizarea semnalelor (21 oct 2026)
+- [x] **Cauza „două LONG la rând fără TP”** (găsită de utilizator):
+  - eticheta semnalului nou apare din prima bară a căutării V2;
+  - cel vechi se înroșea abia la confirmare.
+- [x] FD-SS34LIVE / TD-SS34LIVE
+- [x] **Pine 3.4:**
+  - invalidarea live, la LONG și la SHORT;
+  - X pentru invalidat; eșecul are culoarea lui;
+  - culorile tuturor semnalelor și „Signal Size”;
+  - grupul „Cloud”;
+  - opacitatea păstrată (`fade` cu `color.t`).
+- [x] **Portul:** aspectul etichetelor (`'signal' | 'failed' | 'invalid'`), în aceeași ordine pe bară.
+- [x] **Sentiq:**
+  - setările noi;
+  - X-ul și mărimile, calibrate pe TradingView;
+  - norul cu culorile lui;
+  - tabelul de semnale („invalidat (semnal nou în formare)”).
+- [x] **Verificări pe date reale:**
+  - 6408 bare (8 serii × 800): 3.3 arăta două LONG valide neîncheiate pe 16 bare, 3.4 pe niciuna;
+  - cele 192 de serii (oglinda, independența, Long = 3.3, auditul regulilor) trec.
+- [x] Chrome: grupurile, câmpurile și graficul (X, Large).
+
+## FD-OPACITY — opacitatea oricărei culori, în orice indicator (21 oct 2026)
+- [x] FD-OPACITY / TD-OPACITY
+- [x] `color.ts` (citire, salvare, `fade`) și `ColorPicker`. Panoul stă peste pagină, cu culoarea, codul hex și opacitatea.
+- [x] **Folosit peste tot unde se alege o culoare:**
+  - Slingshot și LMA;
+  - indicatorii standard (Intrări și Stil);
+  - linia orizontală.
+- [x] **Schemele** Slingshot / LMA acceptă `#RRGGBBAA`. LMA păstrează opacitatea aleasă, cu semantica Pine.
+- [x] **Chrome** (1440 / 390 / 320):
+  - panoul stă în ecran și nu mută nimic;
+  - Esc închide doar panoul;
+  - un click în afara lui îl închide;
+  - se salvează `#00FFAA66` la Slingshot și `#7E57C280` la RSI.
+- [x] **Umplerile indicatorilor standard** (fundalul Bollinger etc.): adăugate de FD-FILLS, la cererea utilizatorului.
+
+## FD-SSSL — eticheta STOP LOSS; FD-SSLIVEBOX — TP/SL ale semnalului în formare; FD-FILLS — umplerile în tab-ul Stil (21 oct 2026)
+- [x] FD / TD pentru toate trei.
+- [x] **Pine 3.4:**
+  - eticheta STOP LOSS pe bara eșecului (Long / Short Stop Loss Color, Signal Size);
+  - afișarea TP/SL ia întâi semnalul în formare.
+- [x] **Portul și graficul:** marcajele `stopLoss` / `shortStopLoss`; ordinea nouă a afișării.
+- [x] **Umplerile:**
+  - cheile stabile (id / titlu / perechea de linii);
+  - lista din tab-ul Stil, cu transparența de acum;
+  - ascunderea și recolorarea (fără `transp`);
+  - schema și memoria.
+- [x] **Verificări:** cele 192 de serii trec; Chrome (STOP LOSS pe SOL 15m, Bollinger, RSI, la 1440 / 390).
+- [x] Review: runda 184, zero probleme.
+- [x] Teste: 89 de fișiere, 797 de teste, toate trec.
+- [x] Deploy: 21 oct 2026, 18:59 (ora României; deployment fcacd546), cerut de utilizator; aplicația oprită pe durata build-ului (B1)
+
+## FD-ORDEREDIT — modificarea ordinelor și a SL / TP, în Tranzacții și pe grafic; alinierea „KuCoin” / „isolated” (21 oct 2026)
+- [x] Cercetare: cum modifică fiecare platformă un ordin și SL / TP-ul unei poziții (Bybit amend / trading-stop, OKX amend-order / amend-algos, Binance, KuCoin, Bitget, Kraken, Coinbase, eToro `PATCH`, Alpaca `PATCH`, Trading 212).
+- [x] FD / TD, cu tabelul platformelor, ordinea înlocuirii și edge cases.
+- [x] **Server:**
+  - schema schimbărilor, verificarea și planul (`/modify/preview`), trimiterea o singură dată (`/modify`, jurnalul „Modificare”);
+  - citirile noi: TP / SL OKX (algo) și Bitget (`profit_loss`), TP / SL atașate ordinelor;
+  - înlocuirea păstrează direcția declanșării și marja; un SL / TP de poziție: întâi cel nou, apoi anularea celui vechi.
+- [x] **Tranzacții:** „SL / TP” pe poziții (și dețineri), „Modifică” pe ordine; impactul pe PnL în formular și în confirmare.
+- [x] **Grafic:** SL / TP-ul pozițiilor, liniile ordinelor și TP / SL-ul lor se trag (mouse direct; pe telefon după o atingere); Confirmă / Renunță pe linia de intrare; rezultatul într-un mesaj.
+- [x] **Alinierea:** „KuCoin” cu variația pe 24 h, „isolated” cu simbolul (măsurate).
+- [x] **Verificări în Chrome** (KuCoin și eToro simulate) la 1440 / 390 / 320.
+- [x] Review: rundele 185–189, ultima cu zero probleme.
+- [x] Teste: 93 de fișiere, 853 de teste, toate trec (rularea completă a găsit garda de securitate de actualizat; reluată după reparație).
+- [x] Deploy: 21 oct 2026, 18:59 (ora României; deployment fcacd546), cerut de utilizator; aplicația oprită pe durata build-ului (B1)
+
+## FD-TRADEUI — grafica unui trade ca în TradingView; Confirmă / Renunță la dreapta; alinierea în toată aplicația (21 oct 2026)
+- [x] FD / TD.
+- [x] **Casetele de pe grafic:** cantitate | PnL (sau felul ordinului) | ×, la 64 px de scala prețului, în culorile TradingView. „PnL acum” trece în caseta intrării. Se trag și de casetă.
+- [x] **×:** închide poziția (formularul ei), șterge un SL / TP, scoate TP / SL-ul atașat, anulează un ordin. Toate cu confirmare.
+- [x] **Confirmă / Renunță:** pe linie, imediat la stânga casetei; compacte; pe un ecran îngust, deasupra casetei, fără salturi.
+- [x] **Alinierea:** ×-ul mesajelor, rândurile cu butoane din Tranzacții, bifele din Liste, iconițele și radio-urile lângă text (centrate pe primul rând, la orice font), titlurile ferestrelor, alertele de pe grafic la 320 px.
+- [x] **Verificarea automată a alinierii** în Chrome, pe toate paginile și în ferestrele principale, la 1440 / 390 / 320: zero diferențe peste 1,5 px. Casetele, măsurate pe pixeli la 2×.
+- [x] **Confirmă / Renunță ca în TradingView:** două casete de 20 px pe linia intrării, „Renunță” apoi „Confirmă” (albastru), lipite de caseta poziției. O modificare neconfirmată apare colorată și estompată, cu linia punctată.
+- [x] Review: rundele 190–193, ultima cu zero probleme.
+- [x] Teste: 94 de fișiere, 859 de teste, toate trec.
+- [x] Deploy: 21 oct 2026, 18:59 (ora României; deployment fcacd546), cerut de utilizator; aplicația oprită pe durata build-ului (B1)
+
+## FD-REVERSE — întoarcerea poziției (⇅), zona dintre intrare și SL / TP, etichetele de preț la aceeași mărime (21 oct 2026)
+- [x] FD / TD.
+- [x] **Întoarcerea poziției** (futures crypto, one-way și hedge): închidere reduce-only, deschiderea poziției opuse cu același levier și marjă, anularea SL / TP-urilor vechi. Verificare, confirmare, o singură trimitere, jurnal („Întoarcere poziție”). ⇅ pe grafic (la stânga casetei de intrare, ca în TradingView) și „Întoarce” în Tranzacții.
+- [x] **Zona colorată** între intrare și SL / TP-ul tras (verde / portocaliu), sub lumânări, cât ții linia.
+- [x] **Etichetele de pe scala prețului:** prețul curent are geometria celorlalte (aceeași lățime, colțuri, distanță de margine). Măsurat la 2×.
+- [x] **Verificări în Chrome:** 1440 / 390 / 320; întoarcerea trimisă pe KuCoin simulat (hedge); verificarea de aliniere: zero.
+- [x] Review: rundele 194–196, ultima cu zero probleme.
+- [x] Teste: 94 de fișiere, 866 de teste, toate trec.
+- [x] Deploy: 21 oct 2026, 18:59 (ora României; deployment fcacd546), cerut de utilizator; aplicația oprită pe durata build-ului (B1)
+
+## FD-CHARTSETTINGS — meniul graficului (click dreapta) și setările graficului, ca în TradingView (21 oct 2026)
+- [x] FD / TD; ghidul utilizatorului.
+- [x] **Meniul de click dreapta:** „Resetează vizualizarea” (și ⌥R / Alt+R), „Șterge N desene”, „Șterge N indicatori” (cu „Anulează” în mesaj), „Setări…”. Tastatura, întors la margini, doar pe mouse (pe atingere, ⚙).
+- [x] **Fereastra „Setări”** (din meniu sau ⚙ sub scala prețului): tab-urile Simbol, Linia de stare, Canvas, Alerte, cu opțiunile din capturi. Previzualizare pe loc; OK salvează pe cont, Renunță / × / Esc / click în afară pun la loc; „Valorile implicite” pe tab.
+- [x] **Linia de stare** (logo, titlu cu interval și sursă, starea pieței, D / Max / Min / Î, variația lumânării, volumul, variația față de ziua precedentă); legendele indicatorilor după setări (titluri, parametri, valori, fundal cu opacitate).
+- [x] **Canvas:** fundal plin / degrade (casetele tranzacțiilor, butoanele și banda A / L îl urmează), grila, separatoarele, cursorul, filigranul, textul și liniile scalelor (etichetele rămân la aceeași lățime), butoanele, marginile.
+- [x] **Simbol:** culorile lumânărilor, colorarea după închiderea anterioară, precizia (doar afișarea), fusul orar al graficului.
+- [x] **Selectorul de culoare ca în TradingView** peste tot (paletă, culorile proprii, opacitate, tipul liniei).
+- [x] Ecran complet: Esc închide întâi fereastra deschisă; panourile plutitoare se văd și în ecran complet nativ.
+- [x] **Verificări în Chrome:** 1440 / 390 / 320; tema luminoasă; etichetele de preț la 2× (14 px); verificarea de aliniere: zero în pagină, în cele patru tab-uri și în meniu.
+- [x] Review: rundele 197–200, ultima cu zero probleme.
+- [x] Teste: 96 de fișiere, 879 de teste, toate trec.
+- [ ] Mai târziu (cerut): restul meniului (copiază / lipește prețul, alerte, ordine, cumpărare / vânzare).
+- [x] Deploy: 21 oct 2026, 18:59 (ora României; deployment fcacd546), cerut de utilizator; aplicația oprită pe durata build-ului (B1)
+
+## FD-BARCOLORBODY — un indicator colorează doar corpul lumânării (21 oct 2026)
+- [x] FD / TD; ghidul utilizatorului.
+- [x] **LMA („Color Price Bars”)** și orice `barcolor`: corpul ia culoarea indicatorului; marginea și fitilul rămân în culorile din Setări → Simbol, după direcție (deschiderea sau închiderea anterioară). Cu „Corp” debifat, corpul rămâne gol.
+- [x] `barcolor` generic: doar interiorul corpului, cu geometria bibliotecii, peste fundalul graficului.
+- [x] Verificat în Chrome la 2× (margini și fitiluri în culori distincte).
+- [x] Review: rundele 201–202, ultima cu zero probleme.
+- [x] Teste: 97 de fișiere, 883 de teste, toate trec.
+- [x] Deploy: 21 oct 2026, 18:59 (ora României; deployment fcacd546), cerut de utilizator; aplicația oprită pe durata build-ului (B1)
+
+## FD-STYLEUNIFY — Slingshot: culoare, opacitate și mărime pentru fiecare stare; o singură casetă de linie în toți indicatorii (21 oct 2026)
+- [x] FD / TD; ghidul utilizatorului; `slingshot-port.md`.
+- [x] **Slingshot, pe fiecare parte (LONG / SHORT):** Forming, Signal, Failed, Invalidated, Take Profit, Stop Loss, fiecare cu culoarea (și opacitatea) și mărimea ei. Nivelurile ATR (linia: culoare, grosime, stil; mărimea etichetei) pe parte și nivel. EMA-urile au grosimea și stilul. Market Structure are fiecare linie cu stilul ei. Setările vechi își păstrează aspectul.
+- [x] **Fișierul Pine 3.4:** aceleași intrări (rânduri inline: culoare + mărime / grosime / stil).
+- [x] **LMA:** pragurile cu culoare (implicit a scriptului), grosime și stil; linia de semnal cu grosime și stil.
+- [x] **O singură casetă de linie peste tot** (Slingshot, LMA, indicatorii standard, linia orizontală, cursorul din setările graficului): culoarea, opacitatea, grosimea 1–4 px (o grosime veche mai mare rămâne afișată) și stilul liniei. Aceeași listă de mărimi (Tiny…Huge) și aceleași mărimi de text.
+- [x] **Verificări în Chrome:** 1440 / 390 / 320; verificarea de aliniere: zero pe 66 de ecrane.
+- [x] Review: rundele 203–204, ultima cu zero probleme.
+- [x] Teste: 98 de fișiere, 889 de teste, toate trec.
+- [x] Deploy: 21 oct 2026, 18:59 (ora României; deployment fcacd546), cerut de utilizator; aplicația oprită pe durata build-ului (B1)
+
+## FD-TRADESOUND — sunetul de monede la închiderea unui trade (21 oct 2026)
+- [x] FD / TD; ghidul utilizatorului.
+- [x] **Sunetul `coin-money.mp3`, o dată,** când un trade se termină (SL, TP, închis de mână, ⇅, lichidat), în oricare cont, cât timp graficul e deschis și se vede. Portofoliile se citesc la 20 s (serverul nu întreabă bursa mai des).
+- [x] Nimic la deschidere, nimic pentru ce s-a închis cu fila ascunsă; închiderile parțiale nu cântă; o eroare a bursei nu e luată drept închidere. Pe iPhone / iPad, gata după prima atingere.
+- [x] Setarea: Setările graficului → Alerte → „Sunet la închiderea unui trade” (implicit pornit).
+- [x] Verificat în Chrome pe KuCoin-ul simulat: un sunet după 16 s, niciunul repetat sau cu fila ascunsă.
+
+## FD-MACRORULES — categoria Macro după regulile utilizatorului (21 oct 2026)
+- [x] FD / TD; ghidul utilizatorului.
+- [x] **Macro doar pentru știrile despre economie la nivel de țară sau de sistem financiar:** politica monetară, inflația, creșterea, piața muncii, fiscalul, comerțul și valutele, temele dominante. Fără companii individuale.
+- [x] **Celelalte trec la subiectul lor** (Acțiuni, Crypto, Geopolitică) sau la noua categorie „Altele”, fără scor; filtrul „Altele” e pe pagina de știri.
+- [x] Știrile salvate se reclasifică o dată la prima pornire a versiunii instalate, iar istoricul scorurilor se recalculează (`INDEX_VERSION` 3).
+- [x] Verificat pe știrile reale (3 976, doar citire): 410 Macro, 2 203 Acțiuni, 62 Geopolitică, 38 Crypto, 558 Altele.
+- [x] Review: rundele 205–206, ultima cu zero probleme.
+- [x] Teste: 101 fișiere, 903 teste, toate trec.
+- [x] Deploy: 21 oct 2026, 18:59 (ora României; deployment fcacd546), cerut de utilizator; aplicația oprită pe durata build-ului (B1)
+
+## Deploy 21 oct 2026 (deployment fcacd546)
+- [x] Cerut de utilizator. Conține toate funcțiile de după deploy-ul 37de46c0: FD-SLINGSHOT34 … FD-MACRORULES (reparațiile din 21 oct, editarea ordinelor, grafica trade-urilor ca în TradingView, întoarcerea poziției, setările graficului, colorarea doar a corpului, culorile pe stări și caseta de linie, sunetul, regulile macro).
+- [x] Procedura din `deploy-azure.md` (plan B1): aplicația oprită la 15:45:36 UTC, build 15:45:53–15:50:40 (neîntrerupt), pornită la 15:55:59, `/api/ping` 200 de la 15:57:26. Pachetul web servit e cel construit local (`index-DD_H6qph.js`).
+- [x] Jurnalul Sentiq de pe Azure: „Sentiq running” la 15:57:10; „stored news classified again with the macro rules” la 15:59:23; „daily history recomputed” la 15:59:31.
+- [x] În bază (ultimele 3 zile): Macro 433, Acțiuni 3 846, Crypto 605, Geopolitică 224, Altele 554 (niciuna în scor); `sentiment.daily` = `{indexVersion: 3, classifyVersion: 2}`.
+
+## FD-BOT — boți de tranzacționare în Grafice: Grid, DCA și Slingshot Premium (21 oct 2026)
+- [x] Cercetarea boților (research §14); FD / TD; ghidul utilizatorului.
+- [x] **Butonul „Bot”** lângă „Tranzacționează” (nu pe indici). Fereastra cu lista boților, alegerea tipului, formularul cu rezumatul serverului, pagina unui bot (poziții, grilă / ciclu, tranzacții, jurnal), Pauză / Reia / Oprește / Editează / Duplică / Șterge.
+- [x] **Clasic:**
+  - **Grid:** aritmetic / geometric; Long / Short / Neutru pe futures; preț de pornire; oprește sub / peste.
+  - **DCA:** ordinele de siguranță cu multiplicatori; TP din prețul mediu; SL din prețul de bază; cicluri, pauză.
+- [x] **Premium:** semnalele Slingshot ca declanșator, filtrate de scorul Sentiq (scorul zilei, aria, 7 zile, știrile simbolului, R:R + structura).
+  - Opțiuni: aria împotrivă, evenimentele cu impact mare, AI-ul utilizatorului care poate doar opri o intrare.
+  - Mărimea fixă sau pe risc, cu levierul cel mai mic care încape și SL-ul înaintea lichidării.
+  - Ieșirile: SL / TP ale semnalului sau R:R, semnalul de TP, întoarcerea trendului, semnalul opus.
+- [x] **Limitele utilizatorului:** direcția, suma maximă, levierul maxim, perioada și ce face la sfârșit, pierderea pe zi, pierderea la care se oprește, comisionul.
+- [x] **Simulare (implicit) sau real:**
+  - Realul merge doar pe exchange-uri crypto, cu ordine la piață prin serviciul de tranzacționare (aceeași cheie anti-dublură, același jurnal).
+  - Cheia se salvează înaintea trimiterii; un ordin rămas „în trimitere” pleacă din nou exact la fel.
+  - Pozițiile închise din afara botului sunt reconciliate.
+  - O Problemă oprește orice ordin până la „Reia”.
+  - Acțiunile rulează doar în simulare.
+- [x] **Pe server:** job-ul `bots` la 30 s; migrarea 10 (`bots`, `bot_trades`, `bot_events`); consumul AI are rândul „Boți”.
+- [x] **Verificări în Chrome** (serverul de audit, KuCoin simulat), la 1440 / 390 / 320:
+  - alegerea, cele trei formulare, editarea, realul, pagina unui bot, oprirea;
+  - nimic mai lat decât ecranul, nicio suprapunere, câmpurile unui rând la aceeași înălțime;
+  - verificarea de aliniere: zero.
+- [x] Review: rundele 207–209, ultima cu zero probleme.
+- [x] Teste: 105 fișiere, 951 de teste, toate trec.
+- [x] Local, pe baza reală: `dist/` refăcut, serverul local repornit (migrarea 10 aplicată). Local job-urile sunt oprite, deci boții nu rulează aici: rulează pe instanța care ține job-urile, după deploy.
+- [x] Deploy: 21 oct 2026, 21:05 (ora României; deployment 76ddc2cc), cerut de utilizator; aplicația oprită pe durata build-ului (B1)
+
+## Deploy 21 oct 2026, seara (deployment 76ddc2cc)
+- [x] Cerut de utilizator. Conține FD-BOT (boții de tranzacționare) și migrarea 10.
+- [x] Procedura din `deploy-azure.md` (plan B1): aplicația oprită la 18:01:25 UTC, build 18:01:45–18:04:51 (neîntrerupt), pornită la 18:05:09, `/api/ping` 200 de la 18:06:28. Pachetul web servit e cel construit local (`index-525FLQ4w.js`).
+- [x] Jurnalul Sentiq de pe Azure: „this instance runs the background jobs” și „Sentiq running” la 18:06:22.
+- [x] Job-ul `bots`: prima rulare la 18:06:51, terminată fără eroare. `/api/bots` răspunde (cere login); schema bazei e 10.
+
+## FD-BOTSTOCKS — boții reali pe acțiuni (21 oct 2026)
+- [x] Cerut de utilizator după deploy: motivul „acțiunile doar în simulare” nu ținea, aplicația știe deja cum închide fiecare broker. FD-BOT §10, TD-BOTSTOCKS; ghidul utilizatorului.
+- [x] **Real pe acțiuni la Trading 212, eToro și Alpaca:** ordine la piață, pe cantitate, prin serviciul de tranzacționare; doar în sesiunea bursei; fără levier.
+- [x] **Trading 212 și Alpaca:** botul vinde doar cantitatea lui (cel mult cât e liber); acțiunile utilizatorului rămân. Doar long.
+- [x] **eToro:**
+  - botul își notează pozițiile (id-urile apărute după ordinul lui, și când eToro le arată mai târziu) și le închide doar pe ele;
+  - short, cu stop loss-ul cerut de eToro: tranzacția Premium, SL-ul ciclului DCA, „Oprește peste” la grilă; formularul spune ce lipsește;
+  - grila pe ordine separate pe laturi;
+  - reconcilierea după id.
+- [x] Formularul: „Real” cu conturile de acțiuni; Short / Ambele / Neutru doar unde se poate.
+- [x] **Verificat în Chrome** (eToro simulat), la 1440 / 390 / 320: nimic mai lat decât ecranul, rândurile la aceeași înălțime, nicio eroare în consolă.
+- [x] Review: rundele 210–211, ultima cu zero probleme.
+- [x] Teste: 105 fișiere, 955 de teste, toate trec.
+- [x] Local, pe baza reală: `dist/` refăcut, serverul local repornit (fără migrare nouă).
+- [x] Deploy: 21 oct 2026, 22:15 (ora României; deployment 9914a406), cerut de utilizator; aplicația oprită pe durata build-ului (B1)
+
+## Deploy 21 oct 2026, noaptea (deployment 9914a406)
+- [x] Cerut de utilizator. Conține FD-BOTSTOCKS (boții reali pe acțiuni).
+- [x] Procedura din `deploy-azure.md` (plan B1): aplicația oprită la 19:10:07 UTC, build 19:10:33–19:15:11 (neîntrerupt), pornită la 19:15:32, `/api/ping` 200 de la 19:16:52. Pachetul web servit e cel construit local (`index-CzmeDghQ.js`).
+- [x] Jurnalul Sentiq de pe Azure: „this instance runs the background jobs” și „Sentiq running” la 19:16:44.
+- [x] Job-ul `bots` pe codul nou: rulat 19:17:16–19:17:37, fără eroare. Botul utilizatorului (Premium, real, futures) rulează, fără nicio problemă în jurnal.
+
+## FIX-SLTPDUP — SL / TP mutat: o singură linie, la nivelul nou (21 oct 2026)
+- [x] Raportat de utilizator: după mutarea SL / TP și confirmare, o linie apărea dublată sau rămânea cea veche. Cauza: KuCoin (plasat-apoi-anulat) listează ordinele cu câteva secunde întârziere, iar Sentiq ținea lista citită imediat 20 s, iar graficul o recitea abia după un minut. FD / TD.
+- [x] **Graficul:** linia mutată stă la nivelul nou imediat după confirmare, până o listează bursa (cel mult un minut); ordinul vechi nu se mai vede.
+- [x] **Serverul:**
+  - un ordin anulat sau înlocuit dispare imediat, chiar dacă bursa îl mai listează;
+  - după orice acțiune de tranzacționare, portofoliul se citește la 3 s, timp de 30 s (pe grafic și în Tranzacții);
+  - o citire pornită înainte de acțiune nu mai e păstrată după ea.
+- [x] Verificat în Chrome pe un KuCoin simulat cu 8 s întârziere: o singură linie, la nivelul nou, de la prima secundă.
+- [x] Review: rundele 212–213, ultima cu zero probleme.
+- [x] Teste: 105 fișiere, 960 de teste, toate trec.
+- [x] Local, pe baza reală: `dist/` refăcut, serverul local repornit.
+- [x] Deploy: 21 oct 2026, 22:50 (ora României; deployment 68c10bf1), cerut de utilizator; aplicația oprită pe durata build-ului (B1)
+
+## Deploy 21 oct 2026, 22:50 (deployment 68c10bf1)
+- [x] Cerut de utilizator. Conține FIX-SLTPDUP.
+- [x] Procedura din `deploy-azure.md` (plan B1): aplicația oprită la 19:45:48 UTC, build 19:46:09–19:50:17 (neîntrerupt), pornită la 19:50:37, `/api/ping` 200 de la 19:51:57. Pachetul web servit e cel construit local (`index-BOmcf2Bo.js`).
+- [x] Jurnalul Sentiq de pe Azure: „this instance runs the background jobs” și „Sentiq running” la 19:51:49.
+- [x] Job-ul `bots`: rulat 19:52:18–19:52:38, fără eroare. Botul utilizatorului (Premium, real, futures) rulează, fără probleme în jurnalul lui.
+
+## FIX-COINSOUND — sunetul de monede nu mai sună la deschiderea aplicației (21 oct 2026)
+- [x] Raportat de utilizator. Cauza: după o pauză fără ca pagina să devină ascunsă (laptop în sleep, aplicație în fundal), prima citire era comparată cu una de acum câteva ore, iar un trade închis între timp suna la deschidere. FD / TD.
+- [x] Se compară doar citiri la cel mult 50 s una de alta; pregătirea sunetului la prima atingere e complet fără sunet (mut și volum 0).
+- [x] Verificat pe datele reale (citiri consecutive fără alarme false) și în Chrome (pagina înghețată 70 s: fără sunet; un trade închis cât e urmărită: un sunet).
+- [x] Review: runda 214, zero probleme.
+- [x] Teste: 105 fișiere, 961 de teste, toate trec.
+- [x] Local, pe baza reală: `dist/` refăcut, serverul local repornit.
+- [x] Deploy: 22 oct 2026, 00:23 (ora României; deployment ec00bf61), cerut de utilizator.
+- [ ] **Nerezolvat:** utilizatorul raportează că sunetul se aude în continuare la orice tab nou cu graficul, local și pe server, cu și fără trade-ul SOL. Investigația continuă ca FIX-COINSOUND2. Până acum:
+  - în Chrome nu se reproduce: zero redări cu sunet; pregătirea la primul click rămâne la 0,000 s;
+  - 7 minute de citiri reale: nicio închidere falsă;
+  - utilizatorul folosește Safari (macOS și iPhone), deci urmează verificarea în WebKit.
+- [x] Rezolvat de FIX-COINSOUND2 (mai jos). Regula de 50 s rămâne.
+
+## FD-COLORUNIFY — o culoare, o casetă, un efect, la toți indicatorii standard (21 oct 2026)
+- [x] Cerut de utilizator (MA Ribbon: culori și în Intrări, și în Stil, cu efecte diferite). FD / TD.
+- [x] Verificat automat pe toți cei 118 indicatori. Ce s-a corectat:
+  - **MA Ribbon:** culoarea din Intrări și caseta liniei din Stil sunt aceeași valoare, cu aceeași casetă în ambele taburi (culoare, opacitate, grosime, tip), legate;
+  - **11 indicatori cu linii în mai multe culori** (MACD, Price / Volume Oscillator, AO, Bull Bear Power, Woodies CCI, Aroon Oscillator, Volatility Stop, Relative Volume at Time, BBTrend, Chop Zone): câte o casetă pentru fiecare culoare, fiecare aplicată (înainte, caseta unică nu schimba nimic);
+  - **Technical Ratings:** caseta coloanelor spune că acele culori se aleg în Intrări (Table Settings);
+  - **TSI, Technical Ratings:** liniile orizontale urmează culoarea din Intrări, ca în Pine, până alegi alta în Stil.
+- [x] **Setările salvate înainte:** aspectul se păstrează (culoarea aleasă înainte în Stil la MA Ribbon devine culoarea liniei, dacă ea era cea desenată).
+- [x] Un test pe toți indicatorii: orice culoare desenată de o linie din Stil are caseta ei, iar legăturile cu Intrările sunt exact cele din tabel.
+- [x] Verificat în Chrome (1440 / 390 / 320) pe serverul de audit: MA Ribbon, MACD, Technical Ratings, TSI; nimic mai lat decât ecranul.
+- [x] Review: rundele 215–216, ultima cu zero probleme.
+- [x] Teste: 106 fișiere, 970 de teste, toate trec.
+- [x] Local, pe baza reală: `dist/` refăcut (`index-Dt1BOmTS.js`), serverul local repornit.
+- [x] Deploy: 22 oct 2026, 00:23 (ora României; deployment ec00bf61), cerut de utilizator.
+
+## FIX-COINSOUND2 — sunetul de la deschiderea în Safari; doar trade-urile graficului de pe ecran (22 oct 2026)
+- [x] **Raportat de utilizator:** sunetul la orice tab nou cu graficul. **Cerut:** sunet doar pentru trade-urile simbolului din grafic. FD / TD.
+- [x] **Cauza, confirmată în WebKit (motorul Safari):** pregătirea sunetului la primul click îl oprea și îi dădea drumul la volum. Safari nu oprește însă clipul, care se auzea până la capăt.
+- [x] **Reparat:**
+  - pregătirea rămâne pe mut; doar sunetul unui trade încheiat pornește volumul;
+  - se urmăresc doar trade-urile simbolului din grafic (pozițiile pe perechile monedei și deținerea ei; la acțiuni, ale tickerului), în conturile de felul graficului;
+  - alt simbol pe același tab pornește urmărirea de la zero.
+- [x] **Verificat fără sunet pe difuzoare:**
+  - WebKit: pregătirea pe mut până la capăt; un trade BTC închis pe graficul BTC sună o dată;
+  - Chrome: primul click e silențios; un trade BTC închis cât graficul arată ETH nu sună.
+  - Notă: primele teste WebKit din investigație au redat sunetul pe difuzoarele utilizatorului (o dată, apoi de două ori). De atunci, testele nu mai pot scoate sunet.
+- [x] Review: rundele 217–218, ultima cu zero probleme.
+- [x] Teste: 106 fișiere, 973 de teste, toate trec.
+- [x] Local, pe baza reală: `dist/` refăcut (`index-DxdT_tiY.js`), serverul local repornit; sesiunea temporară de test ștearsă.
+- [x] Deploy: 22 oct 2026, 00:23 (ora României; deployment ec00bf61), cerut de utilizator.
+
+## Deploy 22 oct 2026, 00:23 (deployment ec00bf61)
+- [x] Cerut de utilizator. Conține FIX-COINSOUND, FD-COLORUNIFY și FIX-COINSOUND2.
+- [x] Procedura din `deploy-azure.md` (plan B1):
+  - aplicația oprită la 21:18:19 UTC;
+  - build terminat la 21:23:33 (neîntrerupt);
+  - pornită la 21:23:39; `/api/ping` 200 de la 21:25:05.
+  - Pachetul web servit e cel construit local (`index-DxdT_tiY.js`).
+- [x] Jurnalul Sentiq de pe Azure: „this instance runs the background jobs” și „Sentiq running” la 21:24:56.
+- [x] Job-ul `bots`: rulat 21:25:24–21:25:31, fără eroare.
+
+## FIX-PANES — un indicator nou în panourile de jos nu mai strică scalele lor (22 oct 2026)
+- [x] **Raportat de utilizator:** după al doilea indicator în panourile de jos (Stoch RSI sub LMA), scalele și desenele se stricau. FD / TD.
+- [x] **Cauza:** cu prețul pe scară logaritmică, biblioteca graficului dădea logaritmul (și autoscala oprită, marginile) panourilor create la adăugarea unui indicator; la reîncărcare era corect.
+- [x] **Reparat:** fiecare panou de jos pornește cu scala lui normală, ca la deschiderea paginii. Prețul își păstrează scala.
+- [x] Verificat în Chrome (1440 / 390 / 320) și în WebKit, cu preț logaritmic și cu autoscala prețului oprită: adăugare, a doua adăugare, scoatere.
+- [x] Review: rundele 219–220, ultima cu zero probleme.
+- [x] Teste: 106 fișiere, 973 de teste, toate trec.
+- [x] Local, pe baza reală: `dist/` refăcut (`index-Fv08sp52.js`), serverul local repornit.
+- [x] Deploy: 22 oct 2026, 01:06 (ora României; deployment e95aa120), cerut de utilizator.
+
+## Deploy 22 oct 2026, 01:06 (deployment e95aa120)
+- [x] Cerut de utilizator. Conține FIX-PANES.
+- [x] Procedura din `deploy-azure.md` (plan B1):
+  - aplicația oprită la 22:01:47 UTC;
+  - build terminat la 22:06:23 (neîntrerupt);
+  - pornită la 22:06:30; `/api/ping` 200 de la 22:08:11.
+  - Pachetul web servit e cel construit local (`index-Fv08sp52.js`).
+- [x] Jurnalul Sentiq de pe Azure: „this instance runs the background jobs” și „Sentiq running” la 22:08:05.
+- [x] Job-ul `bots`: rulat 22:08:34–22:08:39, fără eroare.
+
+## FD-BOTTF — timeframe-ul semnalelor se schimbă și la un bot Slingshot pornit (22 oct 2026)
+- [x] **Cerut de utilizator:** la Editează, timeframe-ul unui bot nu se putea schimba. Cercetare, FD / TD.
+- [x] **La Editează, pe un bot Slingshot Premium:** câmpul „Timeframe-ul semnalelor”. La Grid și DCA nu apare (nu folosesc lumânări), iar serverul refuză o schimbare pentru ele. Pe acțiuni fără cheie Twelve Data, sub 1d e refuzat.
+- [x] **Motorul preia schimbarea la următoarea verificare:**
+  - ca la pornire, lumânarea deja închisă e doar notată, iar semnalele vin de pe cele care se închid după ea;
+  - pozițiile deschise își păstrează SL / TP-ul; semnalul lor de pe timeframe-ul vechi nu se mai urmărește;
+  - jurnalul o spune.
+- [x] Teste noi (5): pică pe codul fără reparație (4 din 5; al cincilea verifică doar API-ul).
+- [x] Verificat în Chrome (1440 / 390 / 320) și în WebKit (390), pe un server de test: câmpul, salvarea 1h → 4h → 1h, nota din jurnal după o verificare a motorului.
+- [x] Review: rundele 221–223, ultima cu zero probleme.
+- [x] Teste: 106 fișiere, 978 de teste, toate trec.
+- [x] Local, pe baza reală: `dist/` refăcut (`index-UR38N08O.js`), serverul local repornit.
+- [x] Deploy: 22 oct 2026, 09:40 (ora României; deployment eb5a4f5b), cerut de utilizator.
+
+## Deploy 22 oct 2026, 09:40 (deployment eb5a4f5b)
+- [x] Cerut de utilizator. Conține FD-BOTTF.
+- [x] Procedura din `deploy-azure.md` (plan B1):
+  - aplicația oprită la 06:33:41 UTC;
+  - build terminat la 06:38:32 (neîntrerupt);
+  - pornită la 06:38:45; `/api/ping` 200 de la 06:40:14.
+  - Pachetul web servit e cel construit local (`index-UR38N08O.js`).
+- [x] Jurnalul Sentiq de pe Azure: „this instance runs the background jobs” și „Sentiq running” la 06:40:05–06:40:06.
+- [x] Job-ul `bots`: rulat 06:40:33–06:40:40, fără eroare.
+
+## FD-BOTSLRR — cu „Slingshot”, botul intră cu SL-ul și TP-ul semnalului, fără niciun R:R; FIX-INFOTIP (22 oct 2026)
+- [x] **Cerut de utilizator, după analiza botului SOL/USDT:**
+  - singurele două semnale de la pornire au fost refuzate: unul de o poziție manuală pe SOL, celălalt de „R:R minim” (0,91 < 1, calculat din prețul de la confirmare);
+  - Slingshot își dă singur SL-ul și TP-ul, deci nu se combină cu niciun R:R;
+  - în formular, explicația că variantele se exclud;
+  - raportul scris ca 1:2, nu ca număr.
+- [x] **„Stop loss și take profit”: „Slingshot” sau „Risc / câștig”**, cu explicația pe toată lățimea.
+  - „R:R minim la intrare” nu mai există.
+  - Scorul (partea Slingshot = doar structura) și AI-ul nu mai văd niciun R:R.
+  - Prețul trecut de SL / TP refuză tot, pentru că ordinul nu s-ar putea pune.
+- [x] **„Risc / câștig”:** raportul în două câmpuri, riscul întâi (implicit 1 : 2), păstrat cum e scris; limitele 2:1–1:10.
+  - Setările vechi se citesc: R → 1:R, „R:R minim” ignorat. Botul SOL e verificat pe baza reală: SL / TP Slingshot, 1:2, fără R:R minim.
+- [x] **FIX-INFOTIP:** iconița (i) din setările tuturor indicatorilor (cei standard, Slingshot, LMA) arată explicația:
+  - la hover;
+  - la click sau tap (rămâne deschisă), din tastatură;
+  - Esc închide întâi bula.
+  - Nu mai era doar `title`-ul browserului, care la click nu arăta nimic și pe iPhone nu exista.
+- [x] **Verificat în Chrome (1440 / 390 / 320) și în WebKit (mouse la 1440, tap la 390):**
+  - formularul fără depășiri, cu rândurile la același nivel;
+  - bula în ecran, căsuța de lângă (i) neatinsă;
+  - iconița centrată pe text la 0,9 px.
+- [x] Review: rundele 224–228, ultima cu zero probleme.
+- [x] Teste: 106 fișiere, 984 de teste, toate trec.
+- [x] Local, pe baza reală: `dist/` refăcut (`index-CkihU4xZ.js`), serverul local repornit.
+- [x] Deploy: 22 oct 2026, 13:38 (ora României; deployment 0d6d0258), cerut de utilizator.
+
+## Deploy 22 oct 2026, 13:38 (deployment 0d6d0258)
+- [x] Cerut de utilizator („După ce termin, faci deploy”). Conține FD-BOTSLRR și FIX-INFOTIP.
+- [x] Procedura din `deploy-azure.md` (plan B1):
+  - aplicația oprită la 10:26:31 UTC;
+  - build terminat la 10:30:34 (neîntrerupt);
+  - pornită la 10:36:50; `/api/ping` 200 de la 10:38:31.
+  - Pachetul web servit e cel construit local (`index-CkihU4xZ.js`).
+- [x] Jurnalul Sentiq de pe Azure: „this instance runs the background jobs” și „Sentiq running” la 10:38:17–10:38:18.
+- [x] Job-ul `bots`: rulat 10:39:19–10:39:23, fără eroare. Botul SOL/USDT a fost verificat la 10:39:21, „running”, fără problemă.
+
+## FD-BOTPCT — „Risc / câștig” = SL % și TP % de la intrare, raportul calculat (22 oct 2026)
+- [x] **Cerut de utilizator:** la „Risc / câștig” vrea să stabilească singur până unde merge SL-ul și până unde merge TP-ul. Dintre cele trei variante propuse, a ales „SL % și TP % direct”.
+- [x] **„Risc / câștig” are două câmpuri,** „Stop loss (% de la intrare)” și „Take profit (% de la intrare)” (implicit 1% și 2%).
+  - Sub ele, raportul calculat: „Raportul risc : câștig: 1:2”.
+  - Nimic de la Slingshot în modul ăsta: varianta „SL: Slingshot” și raportul scris în două câmpuri (FD-BOTSLRR) dispar.
+  - Limitele raportului: de la 2:1 la 1:10.
+- [x] **Setările vechi se citesc cu aceleași niveluri.** Botul SOL rămâne pe Slingshot (procentele ascunse: 2% și 4%), verificat pe baza reală.
+- [x] **Verificat în Chrome (1440 / 390 / 320) și în WebKit (390 cu tap, 1440):** fără depășiri, raportul urmează procentele scrise.
+- [x] Review: rundele 229–230, ultima cu zero probleme.
+- [x] Teste: 106 fișiere, 984 de teste, toate trec.
+- [x] Local, pe baza reală: `dist/` refăcut (`index-DmBPk_3s.js`), serverul local repornit.
+- [x] Deploy: 22 oct 2026, 14:20 (ora României; deployment ee6a0d74), cerut de utilizator.
+
+## Deploy 22 oct 2026, 14:20 (deployment ee6a0d74)
+- [x] Cerut de utilizator („fa deploy”). Conține FD-BOTPCT.
+- [x] Procedura din `deploy-azure.md` (plan B1):
+  - aplicația oprită la 11:15:02 UTC;
+  - build terminat la 11:18:56 (neîntrerupt);
+  - pornită la 11:19:07; `/api/ping` 200 de la 11:20:47.
+  - Pachetul web servit e cel construit local (`index-DmBPk_3s.js`).
+- [x] Jurnalul Sentiq de pe Azure: „this instance runs the background jobs” și „Sentiq running” la 11:20:31–11:20:32.
+- [x] Job-ul `bots`: rulat 11:21:01–11:21:23, fără eroare. Botul SOL/USDT a fost verificat la 11:21:02, „running”, fără problemă.
+
+## FIX-BROTLI — conținutul extern se descarcă fără decompresie Brotli (22 oct 2026)
+- [x] **Cerut de utilizator, după avizul Node.js din 21 oct 2026** (CVE-2026-111497, Brotli, rulare de cod de la distanță).
+  - Azure rulează Node 24.20.0 (imaginea Microsoft „24-lts” din 4 sept.); reparat e 24.22.1, pe care îl aplică Microsoft când vrea.
+  - Varianta aleasă: o protecție în cod, până atunci.
+- [x] **Transport propriu (`plainFetch`, pe `node:https`) pentru știri, pagini, calendar, componența indicilor și contextul piețelor:**
+  - cere doar gzip / deflate;
+  - refuză Brotli / zstd înainte de orice decodare.
+  - API-urile serviciilor cunoscute (brokeri, ordine, burse, AI, e-mail, date de piață) rămân pe `fetch`.
+- [x] Teste noi (5) pe un server local. 48 de surse reale: aceleași răspunsuri ca prin `fetch`.
+- [x] Review: rundele 231–232, ultima cu zero probleme.
+- [x] Teste: 107 fișiere, 989 de teste, toate trec.
+- [x] Local, pe baza reală: `dist/` refăcut (`index-DmBPk_3s.js`, interfața neschimbată), serverul local repornit.
+- [x] Deploy: 22 oct 2026, 15:34 (ora României; deployment 8aa45557), cerut de utilizator.
+
+## Deploy 22 oct 2026, 15:34 (deployment 8aa45557)
+- [x] Cerut de utilizator („ok, fă 1”). Conține FIX-BROTLI.
+- [x] Procedura din `deploy-azure.md` (plan B1):
+  - aplicația oprită la 12:29:02 UTC;
+  - build terminat la 12:32:57 (neîntrerupt);
+  - pornită la 12:33:16; `/api/ping` 200 de la 12:34:58.
+  - Pachetul web servit e cel construit local (`index-DmBPk_3s.js`).
+- [x] Jurnalul Sentiq de pe Azure: „this instance runs the background jobs” și „Sentiq running” la 12:34:47.
+  - Azure raportează încă Node 24.20.0, deci Microsoft n-a trecut imaginea pe 24.22.1.
+- [x] Job-urile `news.fetch` (12:34:47–12:35:54), `scanner` și `bots`: fără eroare.
+  - 46 din cele 48 de surse active au fost descărcate după deploy, cu noul transport, fără nicio eroare.
+
+## FD-BOTDIR — scorul pieței, cu un prag pentru long și altul pentru short (26 oct 2026)
+- [x] **Cerut de utilizator:** „un scor mic favorizează short-urile, un scor mare favorizează long-urile […] trebuie să avem scoruri diferite pe direcții diferite”.
+- [x] **Verificat pe baza reală, botul SOL:**
+  - pe 2h, din 23 oct 21:11 UTC, Slingshot n-a confirmat niciun semnal (29 de lumânări refăcute una câte una);
+  - nicio intrare refuzată pentru scor după 23 oct 16:00 UTC. Scorul de atunci era al tranzacției, deci un singur minim M însemna deja „long de la M, short până la 100 − M” pe scara pieței.
+- [x] **Scorul pieței** (aceleași cinci părți, cu semnul pieței):
+  - un scor mare favorizează long-urile, unul mic short-urile;
+  - pragurile: „Scorul minim pentru long” și „Scorul maxim pentru short” (implicit 50 / 50).
+  - Setările vechi se citesc la fel: botul SOL, cu minimul 39, devine long de la 39 și short până la 61.
+- [x] **În aplicație:**
+  - formularul arată pragurile direcțiilor botului și o propoziție cu zona lor;
+  - jurnalul spune „Scorul pieței … (short până la 45)” și „spre long / spre short”;
+  - „Verifică” spune pragurile și avertizează la un prag de neatins;
+  - AI-ul primește scorul pieței cu pragul laturii.
+- [x] **Verificat în Chrome (1440 / 390 / 320)**, pe o schemă de test ștearsă la sfârșit: formularul și jurnalul, fără depășiri.
+- [x] Review: rundele 233–239, ultima cu zero probleme.
+- [x] Teste: 107 fișiere, 994 de teste, toate trec (pe Node 26.12.1, după actualizarea Mac-ului).
+- [x] Local, pe baza reală: `dist/` refăcut (`index-BeUUmOfJ.js`), serverul local repornit. Setările botului SOL se citesc: Ambele, Slingshot, long de la 39, short până la 61.
+- [x] Deploy: 26 oct 2026, 11:34 (ora României; deployment 1cdb0797), cerut de utilizator.
+
+## Deploy 26 oct 2026, 11:34 (deployment 1cdb0797)
+- [x] Cerut de utilizator („Fă deploy”). Conține FD-BOTDIR.
+- [x] Înainte: botul SOL fără poziții și fără ordine în curs; următoarea lumânare de 2h se închidea la 10:00 UTC.
+- [x] Procedura din `deploy-azure.md` (plan B1):
+  - aplicația oprită la 08:29:31 UTC;
+  - build terminat la 08:34:09 (neîntrerupt);
+  - pornită la 08:34:25; `/api/ping` 200 de la 08:35:45.
+  - Pachetul web servit e cel construit local (`index-BeUUmOfJ.js`).
+- [x] Jurnalul Sentiq de pe Azure: „this instance runs the background jobs” și „Sentiq running” la 08:35:38–08:35:39.
+- [x] **Azure pornește acum cu Node 24.22.1** (imaginea Microsoft `24-lts_20261022.3`): breșele din avizul Node.js din 21 oct sunt reparate și pe server. FIX-BROTLI rămâne.
+- [x] Job-ul `bots`: rulat 08:36:11–08:36:19, fără eroare.
+  - Botul SOL e „running”, citit cu setările convertite: long de la 39, short până la 61.
+  - Niciun eveniment nou în jurnalul lui.
+- [x] Job-urile `news.fetch` (08:35:42–08:37:34), `scanner`, `calendar.*`, `sentiment.*`, `market.context`: fără eroare.
+- [x] **De notat din zilele trecute:** pe 25 oct, la 00:59 UTC, Azure a repornit aplicația.
+  - Prima pornire a eșuat: „Baza de date nu răspunde acum”.
+  - A doua a mers la 01:00:07, deci pauza a fost de câteva minute, fără niciun semnal pierdut de bot.
+
+## FD-NEWSWIN — „Ferește știrile (min înainte)” redenumită după ce face (26 oct 2026)
+- [x] **Cerut de utilizator:** numele vechi „nu spune nimic”. Setarea se numește acum „Evită deschiderea de tranzacții în perioada știrilor economice importante”.
+- [x] **Sub câmp, ce înseamnă numărul:** „Minutele dinaintea unei știri economice cu impact mare pentru dolar (și încă 15 după ea) în care botul nu deschide tranzacții. Pozițiile deschise merg normal. 0: oprit.”
+- [x] **Așezarea:**
+  - un rând al ei, cu câmpul cât o coloană;
+  - „Pauză după o pierdere” pe rândul următor.
+  - Erorile spun „Minutele dinaintea știrilor economice importante”.
+- [x] **Neschimbate:** valorile salvate (botul SOL: 60) și comportamentul.
+- [x] **Verificat în Chrome (1440 / 390 / 320)**, pe o schemă de test ștearsă la sfârșit.
+- [x] Review: rundele 240–241, ultima cu zero probleme.
+- [x] Teste: 107 fișiere, 995 de teste, toate trec.
+- [x] Local, pe baza reală: `dist/` refăcut (`index-C5FVobCC.js`), serverul local repornit.
+- [x] Deploy: 26 oct 2026, 12:20 (ora României; deployment 050108d3), cerut de utilizator.
+
+## Deploy 26 oct 2026, 12:20 (deployment 050108d3)
+- [x] Cerut de utilizator („ok, fa deploy”). Conține FD-NEWSWIN.
+- [x] Înainte: botul SOL fără poziții și fără ordine în curs; următoarea lumânare de 2h se închidea la 10:00 UTC.
+- [x] Procedura din `deploy-azure.md` (plan B1):
+  - aplicația oprită la 09:16:05 UTC;
+  - build terminat la 09:20:20 (neîntrerupt);
+  - pornită la 09:20:34; `/api/ping` 200 de la 09:21:55.
+  - Pachetul web servit e cel construit local (`index-C5FVobCC.js`).
+- [x] Jurnalul Sentiq de pe Azure: „this instance runs the background jobs” și „Sentiq running” la 09:21:49–09:21:50.
+- [x] Toate job-urile au rulat după pornire fără eroare, `bots` inclus (09:23:01–09:23:03). Botul SOL e „running”.
+
+## FIX-PINESYNC — Slingshot 3.4 în TradingView: numele și prețurile ca în Sentiq (26 oct 2026)
+- [x] **Cerut de utilizator:** indicatorul în TradingView, cu ultimele modificări.
+- [x] **Prima verificare a fost greșită.** M-am uitat la datele fișierelor și la setări, iar utilizatorul a semnalat că nu e destul.
+- [x] **Refăcută pe ce se desenează efectiv:** o captură a graficului Sentiq cu setările utilizatorului (SOL/USDT 15m, pe o schemă de test), comparată cu `label.new` / `table.cell` din Pine.
+  - Etichetele sunt aceleași. La stop loss: SHORT „eșuat” plus „STOP LOSS”, cu triunghi; X doar pentru invalidat.
+  - Utilizatorul a ales să rămână așa.
+- [x] **În `Sling Shot System/sling-shot-system-3.4.pine`:**
+  - numele „[DE] Slingshot System 3.4” / „[DE] Slingshot 3.4”;
+  - prețurile din etichetele nivelurilor și din tabel cu `format.mintick` (precizia tick-ului), nu `#.##`.
+- [x] Review: rundele 242–245, ultima cu zero probleme.
+- [x] Teste: 107 fișiere, 995 de teste, toate trec (codul Sentiq neschimbat).
+- [x] Local: `dist/` refăcut (același `index-C5FVobCC.js`), serverul local repornit.
+- [ ] Fișierul Pine e necomis în repo-ul „Sling Shot System”; se adaugă de mână în TradingView.

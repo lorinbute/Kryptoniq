@@ -112,13 +112,20 @@ export async function seedSources(db: Db): Promise<void> {
 
 /** The columns of `SourceRow` (not the computed `url_hash`, TD-AZURE §3): use instead of `SELECT *`. */
 export const SOURCE_COLUMNS =
-  'id, name, url, category, enabled, weight, builtin, etag, last_modified, last_attempt_at, last_success_at, last_new_item_at, last_error, failures, next_fetch_at, item_count, auto';
+  'id, name, url, category, categories, read_as, read_url, enabled, weight, builtin, etag, last_modified, last_attempt_at, last_success_at, last_new_item_at, last_error, failures, next_fetch_at, item_count, auto';
 
 export interface SourceRow {
   id: string;
   name: string;
   url: string;
+  /** The source's first category (FD-MULTICAT: the only one, or the first of several). */
   category: SourceCategory;
+  /** FD-MULTICAT: the categories of a source covering several ("crypto,macro"), in a fixed order; null for one. */
+  categories: string | null;
+  /** FD-HTMLFEED: how the source is read (`declared`, `sitemap`, `jsonld`, `page`); null: its address is a feed. */
+  read_as: string | null;
+  /** FD-HTMLFEED: the feed or sitemap then read (for `declared`, `sitemap`). */
+  read_url: string | null;
   enabled: number;
   weight: number;
   builtin: number;

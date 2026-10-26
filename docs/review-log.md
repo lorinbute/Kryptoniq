@@ -2344,3 +2344,1711 @@ Recitite, full scope:
 - FD / TD / ghidul.
 
 Suita completă (după HLINE și DENAMES): 61 de fișiere, 601 teste, toate trec.
+
+# FD-CHARTTV
+
+## Runda 96 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Numărătoarea la acțiuni | număra până la începutul lumânării + intervalul. Ultima lumânare de 1h a zilei și cea de o zi se închid însă la închiderea bursei (16:00 la New York), iar cea săptămânală nu se închide azi | sfârșitul e `min(început + interval, închiderea bursei)`; pe 1w, la acțiuni și indici, fără numărătoare; FD / TD |
+
+Recitite fără alte probleme:
+- **Tragerea liberă:**
+  - scala normală: preluată după 3 px pe verticală, cu `k` din `coordinateToPrice`; cea orizontală lasă A aprins;
+  - scala logaritmică: lăsată bibliotecii, pentru că `setVisibleRange` din 5.2.1 nu convertește prețurile în spațiul ei logaritmic;
+  - panourile indicatorilor neatinse; atingerea pe ecran tactil.
+- **A / L:** starea citită după `pointerup` / `dblclick` / `wheel`; A aprins la schimbarea simbolului; L în setări.
+- **`CurrentPriceLabel`:** două rânduri, desenate o dată pe secundă; linia galbenă rămâne a seriei.
+- **Lista:**
+  - coloanele după lățimea măsurată, aceleași date ca banda;
+  - reordonarea pe verticală, căutarea, rândul curent;
+  - marginea: indicatorul, tastele, dublu-click; preferințele în browser.
+- **Bara:** rândul la aceeași înălțime, grupul nedespărțit, ieșirea doar iconiță; locul pentru ✕ doar pe iPad, în ecranul complet al sistemului.
+
+## Runda 97 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Ghidul | un rând descria încă favoritele de deasupra graficului, reordonate cu Alt + ← / → | rândul trimite la lista din dreapta (Alt + ↑ / ↓, în secțiunea nouă) |
+
+## Runda 98 — 1 problemă (reparată), găsită de suita completă
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Teste | `server.test.ts` („remembers the chart settings…”) compara exact grupul `charts`, fără `logScale`, deci a picat | testul cere `logScale: false` implicit, îl salvează `true`, refuză `'yes'` și îl are `false` la setările vechi |
+
+## Runda 99 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `CandleChart.tsx`, tragerea | la un pinch (zoom cu două degete, pe iPad), primul deget pornea tragerea: prețurile se mutau și A se stingea (pe scala logaritmică chiar de la atingere) | al doilea deget încheie tragerea ca la eliberare, iar biblioteca face zoom-ul. În Chrome, cu atingeri emulate, A rămâne aprins după pinch pe ambele scale (fără reparație se stingea) și se stinge la tragerea cu un deget. FD (caz limită) și TD actualizate |
+| 2 | `Charts.tsx` | copiii celor două `div`-uri noi (grupul de butoane, rândul grafic + listă) nu erau indentați sub ele | reindentați (doar spații; `tsc` și build-ul trec) |
+
+## Runda 100 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | FD-CHARTTV §3 | nu spunea că cotația monedei („/USDT”) apare doar de la 340 px (deci nu la lățimea implicită) și nici pragurile coloanelor | adăugate (280 / 220 / 340 px, ca în TD și în cod) |
+| 2 | FD-CHARTTV §6 | „Niciun favorit” spunea că se adaugă din căutare. Lista trimite, corect, la Setări → Favorite, iar căutarea doar deschide un grafic | rândul spune ce scrie lista |
+
+## Runda 101 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | TD-CHARTTV | rămăsese în urma codului în 7 locuri: butonul de ieșire `w-[44px]` (e `w-[38px]`, 44 doar la atingere), prop-ul `width` din `Watchlist` (nu există), marginea `md:block` (e `md:flex`), unde derulează lista, tragerea marginii „pe `window`” (e pointer capture pe margine), prop-ul `lastBarTime` (nu există; lipsea `closeCap`), testele | TD aliniat la cod; la teste: `server.test.ts`, testele listei și ale iPad-ului, pinch-ul |
+
+## Runda 102 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Ghidul | ieșirea din ecranul complet era descrisă ca „iconița galbenă”, dar e în culoarea de accent: aurie în tema întunecată, teal / cyan în celelalte | „iconița în culoarea de accent” |
+
+## Runda 103 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `primitives.ts`, `CurrentPriceLabel` | eticheta prețului curent era desenată cu `zOrder 'top'`, adică pe stratul de sus al scalei, după eticheta cursorului. Cu cursorul lângă prețul curent, caseta galbenă (2 rânduri) acoperea prețul cursorului | `zOrder 'normal'`: pe stratul principal, ca eticheta proprie a bibliotecii, iar cea a cursorului rămâne deasupra. În Chrome, cu cursorul pe etichetă: galben pe stratul principal, gri deasupra (captura arată prețul cursorului peste casetă). Numărătoarea se redesenează în continuare (`requestUpdate` redesenează stratul principal) |
+
+## Runda 104 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | Lista, căutarea | `<aside>`-ul avea `overflow-hidden`. Cu lista îngustă (200 px), rezultatele căutării (260 px) ieșeau peste grafic, dar partea aceea era tăiată (în Chrome, la marginea lor stângă se vedea canvasul graficului). Pe telefon le tăia și jos | fără `overflow-hidden`: rezultatele se văd întregi (Chrome: 1440 px cu lista de 200 px, apoi 390 px) |
+| 2 | Lista pe telefon | cu mulți favoriți (14), zona rândurilor nu era limitată la 360 px (`h-full` dintr-un `max-h` nu se rezolvă): ultimele rânduri erau tăiate și nu se puteau derula | lanț flex `min-h-0 flex-1` (`aside` → strat → `Watchlist`): rândurile derulează în listă (Chrome, 390 px: 224 px vizibili din 440, ultimul rând accesibil). FD (cazuri) și TD actualizate |
+
+## Runda 105 — zero probleme (CHARTTV)
+Recitite, full scope, după reparațiile din rundele 98–104:
+- `CandleChart.tsx` (tragerea, pinch-ul, A / L, cursorul, „+”, »), `primitives.ts` (`CurrentPriceLabel`, `zOrder`), `countdown.ts`;
+- `Watchlist.tsx`, `watchlist-prefs.ts`;
+- `Charts.tsx` (bara, rândul grafic + listă, `aside`-ul, marginea, iPad-ul), `fullscreen.ts`;
+- `charts.logScale` și `server.test.ts`;
+- FD / TD / ghidul.
+
+Fără variabile sau importuri nefolosite în fișierele schimbate (`tsc --noUnusedLocals`), fără `console.log` / TODO. Fluxurile din Chrome trec din nou:
+- 1440 px: lista, bara, A / L, », „+”, marginea, ascunderea;
+- 1180 px, ecran complet cu atingere;
+- pinch-ul;
+- eticheta sub cursor;
+- căutarea peste grafic și lista pe telefon.
+
+# FD-KUCOINHEDGE
+
+## Runda 106 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `crypto.ts`, `place` | pe contul unificat KuCoin, un refuz pentru mod (330012) dădea „modul s-a schimbat, trimite-l din nou”. Acolo ordinele hedge nu merg deloc, deci retrimiterea ar fi dat același refuz la nesfârșit | pe contul unificat, `HEDGE_MODE` cu explicația UTA (test nou) |
+| 2 | FD / TD | nu spuneau ce face formularul cu un mod necitibil (nu-l arată) și nici cazul UTA de la #1 | FD §5 și TD §2 completate |
+
+## Runda 107 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `accounts.ts` / FD / TD | comentariile spuneau că `positionSide` vine doar de la KuCoin, dar Binance pune același câmp pe ordinele și pozițiile unui cont în hedge (pe care Sentiq doar îl citește), deci acolo se arată și „long” / „short” | comentariile, FD §4 și TD §3 spun și Binance (comportamentul e corect, doar nu era scris) |
+
+## Runda 108 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | TD-KUCOINHEDGE | rămăsese în urma codului în 4 locuri: `positionMode` pus de `availability` (îl pun `instrument` / `normalize`), „Long x · Short y” (formularul scrie cu literă mică), eticheta LONG / SHORT „cu mai multe tranzacții futures” (doar cu un long și un short), testele (lipseau cazul UTA la nepotrivire și buy reduce-only → SHORT; o mapare „testată” care nu avea test propriu) | TD aliniat la cod |
+
+## Runda 109 — zero probleme (KUCOINHEDGE)
+Recitite, full scope:
+- `crypto.ts` (`hedgedOf`, `place` cu `hedged`, UTA, nepotrivirea modului, `availability` pe părți, avertismentele, `instrument`);
+- `accounts.ts` (`positionSideOf`, `orderPositionSide`, rândurile portofoliului);
+- `shared/trading.ts`;
+- `OrderTicket.tsx` (rândul „Mod hedge”, butoanele, închiderea, confirmarea), `Trades.tsx`, `chart/pnl.ts`;
+- testele;
+- FD / TD / FD-TRADING / TD-TRADING / ghidul.
+
+Impactul asupra celorlalte exchange-uri: Bitget `oneWayMode` și refuzul hedge-ului rămân; Binance, Bybit și OKX citesc modul doar la trimitere, ca înainte; eToro, Alpaca și Trading 212 dau `position` în aceeași formă (`HeldPosition`).
+
+# FD-HEDGEALL
+
+## Runda 110 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `accounts.ts`, `hedgeSide` | partea unui ordin hedge se citea doar din `positionSide` (KuCoin, Binance). Pe Bybit (`positionIdx`), OKX și Bitget (`posSide`), ordinele hedge nu primeau „long” / „short” în Tranzacții, iar pe grafic nu se legau de poziția lor | `hedgeSide` citește și `posSide` (net → nimic) și `positionIdx` (0 → nimic). La un close Bitget, ccxt inversează `side`, iar `posSide` rămâne poziția (verificat în ccxt). Teste noi; FD / TD |
+| 2 | `crypto.ts`, `tradingErrorOf` | o eroare despre mod prinsă altundeva (de ex. la levier) spunea încă „Sentiq trimite ordine futures doar în modul one-way pe acest exchange”, acum fals | mesaj neutru, cu cuvintele exchange-ului: „Exchange-ul a refuzat din cauza modului pozițiilor (one-way / hedge): …” |
+
+## Runda 111 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | TD-TRADING, lista testelor | spunea încă „modul hedge refuzat” | lista spune ce se testează acum: poziția numită pe fiecare exchange, pe clasele ccxt reale; refuzat doar pe contul unificat KuCoin |
+
+## Runda 112 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | comentarii (`shared/trading.ts`, `crypto.ts`) | `InstrumentInfo.positionMode` / `OrderPreview.positionMode` spuneau „KuCoin futures… nu se citește pentru ceilalți” (acum: toate exchange-urile cu futures, plus eToro); comentariul de la nepotrivire spunea că modul e „al contului, pentru toate perechile” (pe Bybit e al perechii) | comentariile spun ce face codul acum |
+
+## Runda 113 — zero probleme (HEDGEALL)
+Recitite, full scope:
+- `crypto.ts`: modul pe toate futures (Bybit din lista pozițiilor), `hedged`, Bitget fără `oneWayMode` în hedge, levierul izolat pe parte, TP / SL Binance, nepotrivirea, `tradingErrorOf`;
+- `accounts.ts` (`hedgeSide` pe trei câmpuri);
+- `etoro.ts`, `alpaca.ts`;
+- `shared/trading.ts` (tipuri, pașii cheilor);
+- `OrderTicket.tsx` (rândul pozițiilor, „Închide” la short-urile eToro), `Trades.tsx` (cheia rândurilor), `chart/pnl.ts`;
+- testele (ccxt real pe cinci conturi, simulat, brokeri);
+- FD-HEDGEALL / TD-HEDGEALL / FD-TRADING / TD-TRADING / FD-KUCOINHEDGE / ghidul.
+
+Neatinse și verificate: spot-ul, Kraken, Coinbase, Trading 212, IBKR (doar citire).
+
+# FD-WATCHDRAWER
+
+## Runda 114 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `ListDrawer` | panoul era declarat modal (`aria-modal="true"`), dar Tab putea ieși din el, la pagina de dedesubt, acoperită de umbră | Tab / Shift+Tab se rotesc în panou (Chrome: 15 Tab și 15 Shift+Tab, focusul mereu în panou); TD |
+
+Verificat în aceeași rundă, fără probleme: reordonarea favoritelor în panou (apăsare lungă, apoi tragi; ordinea salvată), `useScrollLock(open)`, straturile (umbra `z-[46]` peste bara aplicației `z-30`, sub ⌘K `z-50`), Esc în ecranul complet.
+
+## Runda 115 — zero probleme (WATCHDRAWER)
+Recitite, full scope:
+- `media.ts`;
+- `ListDrawer` (focusul, Tab, Esc, umbra, `inert`, `overflow-hidden`);
+- `Charts.tsx`: `wide` / `listOpen` / `listShown`, butonul listei, rândul grafic, panoul în cadrul paginii, `blockEsc`, grupul butoanelor `md:flex-nowrap`;
+- `Watchlist.tsx`;
+- FD-WATCHDRAWER / TD-WATCHDRAWER / notele din FD-CHARTTV și TD-CHARTTV / ghidul.
+
+Impact: ecranele late (panoul lateral, lățimea, ascunderea ținute minte), iPad în ecran complet (bara pe un rând), ⌘K și setările indicatorilor (straturi și blocare numărată).
+
+## Raportat după deploy (`08e4e061`) — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `ListDrawer`, deschiderea | „Se deschide până în extremă stânga și apoi se mută în dreapta.” Măsurat cadru cu cadru: la 25 ms, stratul se derula cu 334 px, pentru că focusul dat panoului în timpul glisării derula stratul `overflow-hidden` până la el; panoul sărea în loc să gliseze, iar umbra se mișca. Testele mele măsuraseră doar poziția finală, la 700 ms | focus cu `preventScroll`; stratul `overflow-clip` (nu se mai poate derula deloc). Cadru cu cadru, la 320 și 390 px: marginea panoului coboară continuu de la marginea ecranului la locul ei, derularea stratului 0. Fluxurile de telefon rulate din nou |
+
+## Runda 116 — zero probleme (WATCHDRAWER, după reparație)
+Recitite, full scope: `ListDrawer` (focusul fără derulare, `overflow-clip`, Tab, Esc, umbra), `Charts.tsx`, `media.ts`, TD-WATCHDRAWER. Clasa CSS de rezervă (`hidden` înainte de `clip`) încercată și scoasă: minifierul o reduce oricum la `clip`, fiindcă browserele țintă îl știu toate.
+
+# FD-CHARTTOUCH
+
+## Runda 117 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | FD / TD | efectul filtrului asupra apăsării lungi nu era scris: biblioteca o anulează la o mișcare de 5 px, iar mișcările oprite (sub 8 px) n-o mai anulează, deci o tragere pornită foarte încet poate deveni crucea de urmărire | caz limită în FD §3 și efectul în TD §2 (acceptat: pragul de 8 px e ce face pinch-ul să meargă mereu) |
+
+Verificat în rundă, fără probleme:
+- tap-ul (evenimentele de tap vin la `touchend`, neatinse);
+- al doilea deget care se ridică (starea rămâne „trece”);
+- creionul (pragul de 3 px, ca la mouse);
+- mouse-ul;
+- `ml-auto justify-end` pe un rând comun cu numele (fără spațiu liber, nicio schimbare);
+- straturile panoului;
+- ordinea butoanelor.
+
+## Runda 118 — zero probleme (CHARTTOUCH)
+Recitite, full scope:
+- `CandleChart.tsx`: filtrul în captură (un deget, sub 8 px; două degete trec; ridicarea unui deget), `touch-none` pe container, `dragFrom`, `endPan(true)`, scara logaritmică;
+- `Charts.tsx`: ordinea butoanelor, `ml-auto`, partea din dreapta `ml-auto justify-end`;
+- `Watchlist.tsx` (`ListDrawer`: focus fără derulare, `overflow-clip`);
+- FD-CHARTTOUCH / TD-CHARTTOUCH / TD-WATCHDRAWER / ghidul.
+
+Impact verificat: mouse-ul și desktopul (fluxul de la 1440 px), iPad în ecran complet, telefonul (panoul, lățimea paginii), suprapunerile peste grafic (atingerea pe „A”).
+
+# FD-CHARTPOLISH, FD-NAVOVERFLOW, FD-FULLWIDTH (un singur lot)
+
+## Runda 119 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `HLinePlus` (CHARTPOLISH §4) | plecat de pe „+” pe panoul LMA (tot pe grafic), codul credea că mouse-ul a ieșit (acolo nu e preț pentru „+”) și ștergea crucea pe care o arăta biblioteca, până la următoarea mișcare | `onChart` (mouse-ul pe oricare panou) separat de prețul de pe panoul cu lumânări; crucea pusă la loc se șterge doar când mouse-ul e în afara graficului |
+| 2 | `PriorityNav` (NAVOVERFLOW) | spațiul dinaintea lui „»” se număra de două ori (`more + GAP`), deci o pagină putea fi ascunsă cu 4 px prea devreme | `fitCount` primește lățimea lui „»”; spațiul de dinainte îl adaugă el, după ultima pagină (testul unitar o fixează) |
+| 3 | `PriorityNav` | rigla invizibilă (toate paginile pe un rând, ~930 px) lățea pagina pe telefon și tabletă (Chrome: 947 / 948 / 967 px) | rigla într-o cutie `size-0 overflow-hidden` (măsurabilă, fără lățime); Chrome: pagina de lățimea ecranului la 320 / 390 / 768 / 1024 / 1440 |
+
+## Runda 120 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | bara de sus (NAVOVERFLOW) | pe Azi, butonul „Rezumat” și textul căutării nu încăpeau: la 320 px pagina avea 347 px, la 640 px 672 px (meniul se strângea la 0, iar „»” ieșea din rând) | sub 768 px, „Rezumat” e doar iconița, iar căutarea doar lupa; spații mai mici sub 640 px; meniul păstrează mereu loc pentru „»”. Chrome, pe Azi și pe Grafice, la 320 / 390 / 640 / 700 / 768 / 1024 / 1440 / 2000: un rând, nimic tăiat, pagina de lățimea ecranului |
+
+Verificat în rundă, fără probleme:
+- toate paginile pe toată lățimea, la 1440 și 1920, cu capturi pe 9 pagini; pe Azi, abaterea de 1 px era un titlu `sr-only`;
+- lista „»” (Esc, ↓ / ↑, click în afară, pagina activă).
+
+## Runda 121 — zero probleme (CHARTPOLISH, NAVOVERFLOW, FULLWIDTH)
+Recitite, full scope:
+- `PriorityNav.tsx` (`fitCount`, rigla în cutia de lățime zero, `ResizeObserver` și fonturile, „»”, lista: Esc / click în afară / ruta / ↓ ↑, pagina activă ascunsă);
+- `App.tsx` (`TopNav` pe un rând, „Rezumat” și căutarea sub 768 px, `<main>` pe toată lățimea);
+- cele 8 pagini fără limită;
+- `Watchlist.tsx` (spațiu, derulare, capul, tragerea, `touch-pan-y`);
+- `Charts.tsx` (bara: stânga, butonul listei la dreapta, `contents` pe telefon);
+- `CandleChart.tsx` (A / L la baza panoului, crucea pe „+” cu `onChart`);
+- FD / TD / ghidul / PROGRESS.
+
+# FD-IPADFS
+
+## Runda 122 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `Charts.tsx`, cadrul ecranului complet | `overscroll-contain` devenise `overscroll-none`: necerut, și oprește și „bounce”-ul cadrului. Pe iPad nu se poate verifica dacă, fără „bounce”, gestul de ieșire al Safari nu pornește tocmai de acolo. Cu `contain`, versiunea de dinainte de 10:48 mergea | înapoi la `overscroll-contain`; FD §1, cazul limită și TD §2 / §4 corectate |
+
+Verificat în rundă:
+- iPad, ecranul complet nativ (1024 × 768, 1366 × 1024): rândurile `contain`, cadrul `contain`, numele la 80 px (h1 la 96 px); ieșit, rândurile `auto`;
+- ecranul complet „din pagină” (1024 × 768, 820 × 1180, 844 × 390, 932 × 430): la fel;
+- rotița: în afara ecranului complet lista trece la pagină; în ecranul complet, lista se oprește la capăt (cadrul și pagina la 0);
+- telefon 390 × 844, cu pagina derulată: capul panoului la `top` 0, vizibil; lățimea paginii, peste tot, cât ecranul.
+
+## Runda 123 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | FD-IPADFS (cercetarea, §4) | FD-ul dădea ca sigure lucruri neverificate pe iPad: că „cât derularea rămâne în pagină, gestul nu ajunge la Safari” și că pe grafic sau pe bară „ecranul complet rămâne” | spus ce se știe: din codul WebKit nu reiese când pornește gestul; versiunea de dinainte de 10:48 (lista blocată la capăt) nu ieșea. Graficul și bara: „neschimbat față de versiunea de dinainte de 10:48” |
+
+Recitite, full scope: `Watchlist.tsx` (`contained`, clasele rândurilor, comentariul); `Charts.tsx` (`contained={fs.active}`, cadrul neschimbat, `pl-20` și comentariul); FD / TD / ghidul; FD-CHARTTV §1 și TD-CHARTTV (80 px, `pl-20`); FD-CHARTPOLISH §1 (excepția).
+
+## Runda 124 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | TD-CHARTPOLISH §1 | spunea încă „`overscroll-contain` doar în panoul de telefon”, deși acum și ecranul complet îl are | adăugat: și în ecranul complet (prop `contained`, TD-IPADFS); `overscroll-auto` doar în panoul lateral, în afara ecranului complet |
+
+Recitite, full scope: codul (`Watchlist.tsx`, `Charts.tsx`), FD / TD-IPADFS, toate mențiunile `overscroll` din documente, FD-CHARTTV §1 / TD-CHARTTV, FD-CHARTPOLISH §1, ghidul.
+
+## Runda 125 — zero probleme (FD-IPADFS)
+Recitite, full scope:
+- `Watchlist.tsx`: `contained` și `inDrawer`; clasele rândurilor (`touch-pan-y` doar în panoul de telefon); comentariul;
+- `Charts.tsx`: `contained={fs.active}` pe panoul lateral; cadrul `overscroll-contain` neschimbat; `pl-20` doar cu `native && iPad`; comentariul;
+- FD-IPADFS (cererea, lămuririle, cercetarea spusă cu ce se știe, §1–5, iPhone nereprodus);
+- TD-IPADFS și testele; FD-CHARTTV §1, TD-CHARTTV, FD-CHARTPOLISH §1, TD-CHARTPOLISH §1; ghidul.
+
+# FD-IPADFS2
+
+## Runda 126 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `fullscreen.ts` | comentariul de sus trecea de 120 de caractere pe un rând; ternarul imbricat pe 7 rânduri pentru `request` se citea greu | comentariul rupt la loc; `ask` (cererea browserului), apoi `request = nativeFullscreenAllowed() ? ask : null` |
+| 2 | `Watchlist.tsx`, comentariul lui `contained` | spunea încă că derularea trecută mai departe „ajungea la Safari”, deci că de aici venea ieșirea; FD-IPADFS2 arată că gestul nu ține cont de pagină | rămâne doar motivul adevărat: în ecranul complet nu e pagină de derulat |
+| 3 | FD-IPADFS | titlul și §1 lăsau să se înțeleagă că ieșirea a fost reparată acolo | o notă la început: nu a rezolvat ieșirea; reparația e FD-IPADFS2; §1 rămâne, §2 retras |
+
+Verificat în rundă:
+- Chrome, cu click real: iPad (1024 × 768, 820 × 1180) și iPhone (390 × 844, 430 × 932, 844 × 390) → ecranul complet „din pagină”, fără cel al sistemului; Mac (1440 × 900) → al sistemului;
+- panoul de pe iPhone, cu capul vizibil; Esc iese; pagina de lățimea ecranului peste tot;
+- `apple-touch.test.ts` (3 teste).
+
+## Runda 127 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | TD-IPADFS §3 | descria încă `pl-20` pe iPad ca valabil | notă: retras de TD-IPADFS2 |
+| 2 | TD-CHARTTV, testele | trimitea la testele lui `isIPad` (iPhone → fals), care acum sunt ale lui `isAppleTouch` (iPhone → adevărat) | trimiterea la `apple-touch.test.ts` |
+
+Recitite, full scope: `fullscreen.ts` (`isAppleTouch`, `nativeFullscreenAllowed`, `enter`), `Charts.tsx` (antetul fără `pl-20`, importul), `Watchlist.tsx` (comentariul), `apple-touch.test.ts`; FD-CHARTUX §4, FD-CHARTTV §1, FD-IPADFS (nota, §2), FD-IPADFS2; TD-CHARTUX §5, TD-CHARTTV §1, TD-IPADFS, TD-IPADFS2; ghidul.
+
+## Runda 128 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | FD-IPADFS2 (cercetarea, §1) și nota din FD-IPADFS | dădea ca sigur că panoul de pe iPhone era tăiat de zona camerei din ecranul complet al sistemului, deși nu e verificat pe un iPhone; nota din FD-IPADFS nu spunea unde a ajuns §3 (iPhone) | „probabil”, cu ce s-a verificat (Chrome: capul întreg); nota trimite §3 la FD-IPADFS2 |
+
+Recitite, full scope: codul (`fullscreen.ts`, `Charts.tsx`, `Watchlist.tsx`, `apple-touch.test.ts`) și toate documentele atinse (FD-CHARTUX §4, FD-CHARTTV §1, FD-IPADFS, FD-IPADFS2, TD-CHARTUX §5, TD-CHARTTV, TD-IPADFS, TD-IPADFS2, ghidul).
+
+## Runda 129 — zero probleme (FD-IPADFS2)
+Recitite, full scope:
+- `fullscreen.ts`: `isAppleTouch` (iPhone / iPod / iPad, „Macintosh” cu atingere), `nativeFullscreenAllowed`, `enter` (`ask` / `request`, căderea în `'css'`, `lockScroll`);
+- `Charts.tsx`: antetul fără `pl-20`, fără `isIPad`; `contained={fs.active}`;
+- `Watchlist.tsx`: comentariul lui `contained`;
+- `apple-touch.test.ts`;
+- FD-IPADFS2 (cercetarea spusă cu ce e verificat, §1–3), notele din FD-CHARTUX §4, FD-CHARTTV §1, FD-IPADFS; TD-IPADFS2 și notele din TD-CHARTUX §5, TD-CHARTTV, TD-IPADFS; ghidul.
+
+# FD-CHARTAUDIT
+
+Găsite în testarea buton cu buton (Safari din simulatorul iOS 27 pe iPhone și iPad, Chrome pe desktop și pe telefon), reparate și documentate în FD §1–9: „+” rămas în urmă; „+” rămas după atingere; panoul de setări sub ecran; panoul de setări pe telefon; „Pe grafic”; tastele căutării; eticheta LMA tăiată; panoul care se strângea la încărcare (și o primă reparație greșită: înălțimea din valorile LMA); bannerul în ecranul complet; butonul listei singur pe rând; meniul lui „+” tăiat la 320 px.
+
+## Runda 130 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `SymbolSearch` | `aria-activedescendant` putea numi un rezultat care nu mai există (lista s-a scurtat după ↓) | doar cu `active < paths.length` |
+| 2 | `OfflineBanner` în ecranul complet | două `role="alert"` (cel din pagină e tot în DOM): un cititor de ecran anunța de două ori | în cadru, `role="status"` |
+
+Recitite, full scope: `HLinePlus` (poziția prin `place`, `useLayoutEffect`, `dismiss`, `quietUntil`, hover numai de la mouse, `lastPointer`, meniul limitat la grafic), `SettingsDrawer`, `IndicatorPicker` (`studiesOn`), `SymbolSearch` (tastele, ARIA, `paths` în ordinea afișată), `search-nav.ts`, `edgeLabelSide` și desenul în oglindă, `chartHeight` și cutiile de încărcare / eroare, `OfflineBanner` (mutat, `framed`), bara (butonul listei în grup), FD / TD.
+
+## Runda 131 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | ghidul | nu spunea de tastele căutării (↓ / ↑ / Enter / Esc) și nici cum se folosește „+” pe ecran tactil | două rânduri în „Lista de simboluri” și la „adăugare” |
+
+Recitite, full scope: codul din runda 130, plus impactul: `App` (`usePing` pentru ceas și banner, din `OfflineBanner.tsx`), `Watchlist` în panoul lateral și în cel de telefon, Esc în `ListDrawer` / `useFullscreen` / `SettingsDrawer` / `Modal` (toate sar peste un Esc folosit), Alt+H după `dismiss` (până la următoarea mișcare nu e preț, deci nimic), fluxurile vechi ale lui „+” cu mouse-ul (evenimentele pointer ale mouse-ului); FD / TD / ghidul.
+
+
+## Runda 132 — zero probleme (FD-CHARTAUDIT)
+Recitite, full scope:
+- `HLinePlus`: `place` / `useLayoutEffect`, `dismiss`, `quietUntil` (numai după o atingere), hover numai de la mouse, `lastPointer`, meniul cu `min` / `maxWidth` din `plotWidth`;
+- `SettingsDrawer` (de sus până jos, toată lățimea sub 440 px);
+- `IndicatorPicker` (`studiesOn`, „Pe grafic × N”, butonul activ);
+- `SymbolSearch` (`paths`, tastele, ARIA, `aria-activedescendant` limitat);
+- `search-nav.ts`, `edgeLabelSide`;
+- `chartHeight` (din ce e pornit) și cutiile de încărcare / eroare (și `h-full` în ecranul complet);
+- `OfflineBanner` (mutat, `framed`, `role="status"`);
+- bara (butonul listei în grup, `contents` pe telefon);
+- impactul asupra lui `App`, `ListDrawer`, `useFullscreen`, `Modal`, Alt+H;
+- FD / TD / ghidul.
+
+## Retestarea în Safari (FD-CHARTAUDIT §12)
+Cu un singur simulator (iPhone 17, iOS 27), după reparațiile din rundele 130–132. Toate reparațiile §1–§9 s-au confirmat. Găsite, reparate și documentate în FD §13–§18:
+- pe ecran tactil, apăsarea lungă și tragerea mutau și prețurile (tragerea din FD-CHARTTV §4), iar „A” se oprea;
+- după ce „+” dispărea printr-o atingere, biblioteca rămânea în modul cruce: următoarea glisare readucea crucea și „+” în loc să deruleze;
+- „⌥H” în meniul lui „+” pe telefon;
+- o glisare orizontală pornită de pe o linie orizontală îi deschidea setările.
+În implementare: verificarea modului cruce stătea întâi în `onDown`. Cu meniul lui „+” deschis, o tragere pe grafic n-ar mai fi mutat prețurile, pentru că `onDown` rulează înaintea închiderii meniului. A fost mutată în `onPanMove`.
+
+## Runda 133 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | FD §18 | rândul „glisare verticală pornită de pe linie” spunea „graficul se mută”; de fapt e ce face biblioteca, ca până acum (tragerea prețurilor nu pornește de pe o linie) | „ca până acum: graficul se mută cum îl mută biblioteca” |
+| 2 | ghidul | nu spunea că prețurile stau pe loc la apăsarea lungă, că glisarea derulează după ce „+” dispare, de „⌥H” pe telefon și de glisarea pornită de pe linie | rândurile „adăugare” și „pe telefon” |
+
+Recitite, full scope:
+- `touch-cross.ts`: gărzile, ordinea `touchstart` / `touchend`, poziția departe de grafic;
+- ce face biblioteca la atingerile sintetice: `_touchStartHandler` (cu atingere activă se oprește), `tryExitTrackingMode`, „tap”-ul fără abonați, dublu tap, `blur`, `lastTouchEventTimeStamp` (mouse-ul ignorat 500 ms în Safari, nimic în Chrome);
+- efectul liniilor și al prețurilor: `lastType`, `touchCross` (crucea pusă înapoi ignorată, panoul 0), `onPanMove` (`endPan(true)`, scala logaritmică), ciupirea, crucea mouse-ului pe iPad;
+- `HLinePlus.dismiss` (`endTouchCross` după `clearCrosshairPosition`, fără eveniment), `quietUntil` păstrat;
+- linia: `startX`, distanța pentru deget, pragurile;
+- `<kbd>` `hidden md:inline`;
+- interacțiunea cu FD-CHARTTOUCH (`first` pus și scos de atingerile sintetice), `checkFactors`, a doua atingere în timpul primei (React golește actualizarea înainte de următorul `pointerdown`, deci `dismiss` nu se cheamă de două ori);
+- FD §12–§18, TD §11–§15.
+
+## Runda 134 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | TD §11 | descria verificarea modului cruce în `onDown`, deși a fost mutată în `onPanMove` | §11 rescris: verificarea la mișcare și de ce nu la apăsare |
+| 2 | FD §12 | nu numea §18 printre cele găsite și nici retestarea pe iPad | completat |
+| 3 | TD §15 | spunea că testele citesc vederea după 1,2 s fără schimbare; de fapt așteptarea aceea se oprea prea devreme, iar testul folosește 3,5 s | corectat, cu motivul |
+
+Recitite, full scope: ca în runda 133, plus FD §18 (creionul, ca mouse-ul) și lista testelor din TD §14.
+
+## Runda 135 — zero probleme (FD-CHARTAUDIT §12–§18)
+Recitite, full scope:
+- `touch-cross.ts` (gărzile, ținta, ordinea, `FAR`, `ID`) și testul lui;
+- ce face biblioteca după atingerea sintetică:
+  - o atingere reală în următoarele 500 ms e numărată ca a doua, departe de prima, deci nu e nici dublu tap, nici „tap” (fără efect în Sentiq: „tap”-ul bibliotecii ajunge doar la `subscribeClick`);
+  - ieșirea din modul cruce se face la `touchend`, independent de „tap”;
+- `HLinePlus.dismiss`, `<kbd>`;
+- efectul liniilor și al prețurilor: `lastType`, `touchCross`, `onPanMove`, `endPan(true)`, ciupirea, `startX`;
+- FD §12–§18, TD §11–§15, ghidul.
+
+# FD-MODALFIT
+
+## Runda 136 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | FD-CHARTAUDIT §10 | rândul „panou de setări cu tastatura deschisă” spunea că butoanele urcă deasupra tastaturii doar dacă Safari micșorează fereastra; acum stau mereu deasupra | rândul actualizat, cu trimitere la FD-MODALFIT |
+
+Recitite, full scope:
+- `visible-area.ts`: `areaStyle` (pragul de 1 px, `offsetTop` negativ, rotunjirea), `useVisibleArea` (ascultătorii, starea păstrată când nu se schimbă nimic, fără `visualViewport`);
+- `Modal`, `AccountWizard`: `max-h-full` în stratul `fixed inset-0` cu `pt` / `pb`; procentul se raportează la stratul flex cu înălțime definită;
+- `DaySummary`: pe telefon `h-full`, de la `sm` `max-h-full`;
+- `CommandPalette`: fereastra în coloană, rândul căutării nu se strânge (`min-height: auto`), lista `min-h-0` cu `max-h-[50vh]`, `pb-4` nou;
+- `SettingsDrawer`, `ListDrawer`: stilul peste `top-0 bottom-0` / `inset-0`; panoul închis al listei se mută și el, invizibil;
+- Android: tastatura micșorează și fereastra (`innerHeight`), deci rămâne CSS-ul; desktop: mărirea cu două degete mută panourile în partea mărită (FD §3);
+- `SummaryFailed` neatins (fără câmpuri, scurt);
+- FD-MODALFIT, TD-MODALFIT.
+
+## Runda 137 — zero probleme (FD-MODALFIT)
+Recitite, full scope: ca în runda 136, plus FD-CHARTAUDIT §10 actualizat și testul `visible-area.test.ts`.
+
+# FD-SCOREWHY
+
+## Runda 138 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | ghidul | nu spunea de „De ce acest scor?” în „Ce mișcă piața” | rândul despre Azi completat |
+
+Recitite, full scope:
+- `explainDrivers`: alegerea scorului (comun / al AI-ului utilizatorului) la fel ca `loadItems` (`COALESCE(a.impact, n.sentiment_impact, n.impact)`, `a.score IS NOT NULL`) și ca `queryNews`; o știre lipsă sau nescorată (fără motor) rămâne fără `why`; fără driveri, nicio interogare;
+- ruta `/api/sentiment/today`: instantaneul salvat înainte de explicație (fără `why` în baza de date); `/api/sentiment/day/:day` și rezumatul AI neatinse;
+- `ScoreWhy.tsx` (mutat din `NewsRow`: aceleași rânduri, același nume al AI-ului, același stil) și pagina Știri (importurile rămase fără folos scoase);
+- `fmtDayShare` (semnul, 0, valori nefinite, sub 0,5 %, plafonul de 100 %);
+- `DriversTile`: titlul cu `line-clamp-2` păstrat, explicația sub el, cheile după `id` (deschisă rămâne deschisă la reîmprospătare);
+- testele: orele știrilor de test mereu în ziua de azi (UTC), oricând rulează;
+- FD-SCOREWHY, TD-SCOREWHY.
+
+## Runda 139 — zero probleme (FD-SCOREWHY)
+Recitite, full scope: ca în runda 138, plus ghidul și capturile din Chrome (390 și 1440 px: explicațiile deschise, pagina de lățimea ecranului, fără erori).
+
+# FD-INDEXWHY
+
+În verificarea din Chrome (390 și 1440 px, o zi de test cu 137 de știri, 5 surse, una zgomotoasă):
+- pe telefon, conținutul ferestrei avea 818 px într-o fereastră de 364: formulele aveau `.num` (`white-space: nowrap`); acum `font-mono tabular-nums`, care se rup pe rânduri;
+- plafonul surselor arăta procente („17% → 25%” la o sursă tăiată, pentru că totalul scade și el); acum ponderile înainte și după, plus partea după;
+- indicele din fereastră e scris și colorat ca pe card („52.0”).
+
+## Runda 140 — 4 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `aggregate` | o sursă cu Σ pondere 0 primea factorul plafonului 0, deci știrile ei apăreau cu „plafon 0,00”, deși plafonul nu le-a atins | factorul 1 când sursa nu cântărește (ponderea rămâne 0, indicele identic); test nou |
+| 2 | „Pe surse” | lipsea greutatea sursei, cifra care se poate schimba din Admin | `sourceWeight` în `sources`, afișat |
+| 3 | rândul știrii | o știre ștearsă între calcul și explicație ar fi avut un „De ce acest scor?” gol | afișat doar cu `why` |
+| 4 | FD §2 / §3 | „Pe surse” descria procentele înainte și după; lipseau cazul știrii șterse și cel al plafonului la pondere 0 | FD actualizat; TD §1 la fel |
+
+Recitite, full scope:
+- `daily-index.ts`: `select`, `weigh` (ordinea înmulțirilor neschimbată, deci aceleași ponderi la ultima cifră), `aggregate` (`bySource`, `capped`, `cap`), `breakdownOf`, `computeIndex` (neschimbat numeric: testele vechi trec), `explainIndex`, `INDEX_RULES` (aceleași constante ca `specFactor` / `confidenceFor`);
+- `explainToday` (fereastra și `asOf` ca `computeDay`, `loadItems(scope)`, primele 100 cu `whyOf`, restul), `whyOf` comun cu `explainDrivers`, ruta nouă;
+- `IndexExplain.tsx` (pașii, formulele, categoriile, sursele, lista cu „Arată încă 20”, rândul „Celelalte” care include și ce nu s-a afișat încă, parametrii, „Recalculează” și eroarea ei, `gcTime: 0`), butonul din `SentimentTile`;
+- FD-INDEXWHY, TD-INDEXWHY, ghidul.
+
+## Runda 141 — zero probleme (FD-INDEXWHY)
+Recitite, full scope: ca în runda 140, plus testul nou (sursa cu greutate 0) și TD §1.
+
+# FD-WHYPLAIN
+
+Pe datele reale (citite fără scriere): 1.147 de știri azi, 937 neutre; driverii au 0,2–0,4 % din pondere și mută indicele cu 0,1–0,2 puncte; Investing.com, 393 de știri, tăiată la 25 %. De aici FD-WHYPLAIN.
+
+În verificarea din Chrome (schema de test, 137 de știri):
+- propoziția despre plafon („de aceea abia mută indicele”) era falsă pentru o sursă chiar la limită (știrea a mutat indicele cu +1,68 puncte): acum spune doar cât îi taie plafonul din pondere; cât mută indicele spune rândul efectului;
+- indicele era scris „52,0” în explicații și „52.0” pe card: acum ca pe card.
+
+Testul pur a arătat că o știre dintr-o sursă tăiată de plafon, cu același scor ca celelalte ale ei, are efect 0: comportament real (fără ea, sursa tot are 25 %), trecut în FD §4.
+
+## Runda 142 — 5 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `/api/sentiment/today` | știrile zilei se încărcau de două ori la fiecare cerere (indicele, apoi explicațiile), iar pagina Azi cere la fiecare minut | `todayExplained`: o încărcare, `dayFrom` + `explainDrivers(…, items)` |
+| 2 | TD §4 | descria `reason` ca opțional la citire; e obligatoriu (schemele stricte OpenAI) | corectat, cu motivul |
+| 3 | FD-INDEXWHY §1 | spunea încă butonul sub categorii | trimitere la FD-WHYPLAIN §2 |
+| 4 | „Pe scurt” | „cea mai mare mișcare” e căutată doar printre cele 100 mai grele, fără să o spună | „(dintre cele N mai grele)” când sunt mai multe |
+| 5 | testele vechi ale explicației | `toEqual` pe `why` fără noul `reason` | actualizate |
+
+Recitite, full scope:
+- `indexValue` / `toIndex` (aceeași valoare, rotunjită), `effects` (aceleași funcții, `ids` necunoscute → 0), `IndexExplain.total.value`;
+- `dayFrom` / `computeDay` / `todayExplained` / `explainDrivers` (fereastra și `asOf` ale zilei), instantaneul salvat fără `why` / `effect` / `weighs` (test);
+- `why-text.ts` (puncte, „tot”, raportul față de o știre obișnuită, termenii doar când spun ceva, plafonul), `DriversTile` (rândul de sus, efectul mereu vizibil, explicația ponderii în „De ce acest scor?”), `SentimentTile` (butonul pe rândul de titlu, „în analiză” sub categorii), `IndexExplain` („Pe scurt”, „fără ea” pe rând);
+- motivul: migrarea 6, `ai-scorer` (schema, prompt, `cleanReason`), `scoreUsers` (`reason` scris cu scorul), `whyOf` și `queryNews` (doar scorul AI-ului utilizatorului), `ScoreWhy` (primul rând), pagina Știri;
+- pornirea: codul refuză o bază mai nouă, deci migrarea 6 ajunge pe baza reală doar cu deploy-ul; serverul local de acum rulează codul de dinainte de migrare (pornit înainte de ea) și nu se repornește;
+- FD-WHYPLAIN, TD-WHYPLAIN, ghidul.
+
+## Runda 143 — zero probleme (FD-WHYPLAIN)
+Recitite, full scope: ca în runda 142, plus `cleanReason` (expresia `\s+` în fișier), interogarea `OPENJSON` cu `reason nvarchar(400)` (motivele au cel mult 160 de caractere), și ordinea deploy → pornire locală.
+
+Vitest complet după runda 143: un test vechi (`sentiment.test.ts`, scorurile AI-ului) compara exact rezultatul scorării, fără noul `reason`; actualizat (`reason: null` când răspunsul nu are motiv).
+
+## Runda 144 — zero probleme (FD-WHYPLAIN)
+Recitite, full scope: ca în runda 143, plus toate testele care compară exact un `AiScore` sau un `ScoreWhy` (`sentiment.test.ts`, `ai-reason.test.ts`, `drivers-why.test.ts`, `impact.test.ts`, `ai/service.test.ts`): doar cel reparat compara exact.
+
+Corecții cerute după runda 144: „pe eyebrow” însemna ca titlul „Sentimentul zilei” să fie legătura care deschide fereastra, nu un buton nou pe rând; și insigna PREMIUM după titlul ferestrei (funcție plătită; Sentiq nu are încă plăți sau acces premium, deci e doar insigna).
+
+## Runda 145 — zero probleme (FD-WHYPLAIN §2)
+Recitite, full scope:
+- `Tile`: `onLabel` / `labelHint` (doar pe cardul sentimentului; celelalte carduri neschimbate), butonul din `h2` (`aria-haspopup`, `title`, `aria-description`), subliniat punctat, accent la hover; fără zi încărcată, titlul e text simplu;
+- `SentimentTile`: `actions` doar cu cifrele, niciun alt „Cum s-a calculat?” (verificat în Chrome: 0 butoane în plus); sub categorii, doar „în analiză”;
+- `IndexExplain`: titlul `Modal` cu `PremiumBadge` (din `IndicatorPicker`, ca în panoul de setări al graficului); pe telefon insigna trece sub titlu;
+- FD-WHYPLAIN §2, TD §3, ghidul.
+
+Raportat de utilizator după runda 145: legătura „Sentimentul zilei” nu se aprindea venind de jos cu mouse-ul. Cauza (verificată cu `elementFromPoint`): cifra mare a indicelui (104 px, `leading-[0.85]`) are cutia de text mai înaltă decât rândul ei și urca ~18 px peste rândul de titlu, deasupra butonului. Reparat: rândul de titlu `relative z-[1]` când titlul e legătură; butonul `py-1 -my-1` (aceeași poziție, iar linia punctată e în zona care prinde cursorul). Verificat: tot dreptunghiul butonului (133,8–160,7 px) e al butonului.
+
+## Runda 146 — zero probleme
+Recitite, full scope: `Tile` (doar cardul cu `onLabel` primește `z-[1]`; celelalte carduri neschimbate), butonul (zona mărită fără să mute titlul), cifra mare (tot selectabilă, nimic interactiv în ea).
+
+# FD-HISTORYCHART
+
+În verificarea din Chrome (schema de test cu 29 de zile de istoric, Fear & Greed crypto pe 31 de zile, CNN pe zilele de bursă; 1440 și 390 px):
+- pe telefon, eticheta zilei ieșea din panou pe ziua din mijloc (nu încăpea în nicio parte): acum e măsurată și ținută în panou;
+- valoarea Sentiq din legendă și punctul de azi veneau din istoric, care avea doar ultima salvare (ieri, 48.8) cât cardul arăta 52.0: acum azi e indicele live;
+- scara cu doar Sentiq (limitele 45–55 de la graficul pe ore) lăsa zilele reale într-o treime din înălțime: strânsă (o zecime din interval, cel puțin un punct, cu 50 inclus);
+- eticheta „50” stătea peste punctul de azi: marginea din dreapta pentru etichetele scării (sus, 50, jos).
+
+## Runda 147 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | FD §1 | nu spunea ce face eticheta zilei pe ecran tactil (rămâne până la următoarea atingere) și nici că azi e indicele live | completat |
+
+Recitite, full scope:
+- `history-chart.ts` (`daySlots`, `byDay`, zilele crypto (UTC) și CNN (New York), `chartScale` nou, `segments` / `joined`, `fearGreedLabel` pe benzile fiecărui indice) și testele;
+- `HistoryTile`: aceeași interogare a contextului pieței ca banda, `useSentiment` pentru azi (aceeași cheie, nicio cerere în plus), `useSize` (SVG absolut, deci nu-și schimbă singur cutia), liniile (Sentiq întreruptă la zilele lipsă, CNN unită peste weekend), punctele goale pentru zilele provizorii, legenda (`aria-pressed`, ultima linie rămâne), hover-ul (mouse / atingere, marginea scării), eticheta ținută în panou, rezumatul pentru cititorul de ecran, nota pentru istoricul scurt;
+- `Today.tsx`: importurile (scos `addDays`, nefolosit);
+- FD-HISTORYCHART, TD-HISTORYCHART.
+
+## Runda 148 — zero probleme (FD-HISTORYCHART)
+Recitite, full scope: ca în runda 147, plus FD §1 completat.
+
+Întrebat „CNN F&G e pe acțiuni sau global?”: e doar al bursei americane. Eticheta „CNN F&G” nu o spunea: acum „Acțiuni SUA F&G”, cu sursa la hover (`title`) și în rezumatul pentru cititorul de ecran.
+
+## Runda 149 — zero probleme
+Recitite: `SERIES` (etichete, surse), legenda, rezumatul, FD §1; niciun test sau text rămas cu vechea etichetă.
+La cererea utilizatorului, eticheta e „Stocks F&G” (sursa, la hover: Fear & Greed al bursei americane, CNN).
+
+# FD-MULTICAT
+
+## Runda 150 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | ruta `POST /api/sources` | `.refine` pe schema de bază, apoi `.extend`: Zod 4 refuză `.extend` pe un obiect cu `.refine` (eroare la pornire) | `.refine` după `.extend` |
+| 2 | `ingestItems` (apelanți) | testele și codul vechi trimit sursa fără `categories` | `categories` opțional: lipsă = o categorie, ca înainte |
+| 3 | `SettingsAdmin` | un `id` pus pe eticheta „Categorii”, nefolosit (grupul are `aria-label`) | scos |
+
+Recitite, full scope:
+- migrarea 7, `SOURCE_COLUMNS` / `SourceRow`, `categorize.ts` (termenii, semnele monedelor și companiilor prin `isCrypto`, egalitățile, fără semn), `CoinDetector.isCrypto`;
+- `weighItem` (o categorie → neschimbat; mai multe → categoria, `classify`, fără semn → relevanța 0 și `lowRelevance`), `ingestItems` (știre nouă, titlu schimbat → și `category`), `retagRecent` / `reclassifySource` (`JOIN sources`; la o categorie, a știrii, cum a fost păstrată);
+- rutele: `categories` sau `category`, zero categorii → 400, sursele implicite blocate, `changed` (comparația listelor), o categorie → toate știrile o primesc, reclasarea după tranzacție;
+- `Health` (`categories` în listă), `CategoryPicker`, `SourceCategories` (doar sursele adăugate, nu și cele automate), formularul;
+- FD-MULTICAT, TD-MULTICAT, ghidul.
+
+## Runda 151 — zero probleme (FD-MULTICAT)
+Recitite, full scope: ca în runda 150, plus testele noi (`multicat.test.ts`, testul rutei din `server.test.ts`) și ordonarea tabelului (după `category`, prima categorie a sursei).
+
+# FD-HTMLFEED
+
+Pe site-uri reale (20 oct): CoinDesk Markets din pagină (27 de știri, cu ora exactă din `<time>`); CNBC Markets din pagină (59, cu data din adresă); Benzinga Markets (403) din sitemap-ul lor Google News (291); Reuters refuzat (`robots.txt`: `Disallow: /` pentru orice cititor, inclusiv sitemap-urile; termenii interzic colectarea automată); AP News blocat de Cloudflare.
+
+Găsite pe parcurs, pe paginile reale și în teste:
+- meniurile CoinDesk („See all US stock prices”) treceau drept titluri: `nav` / `header` / `footer` / `aside` / `menu` / `dialog` / `form` ignorate;
+- toate știrile CoinDesk primeau aceeași oră (primul `<time>` al unui container comun): data vine acum din cel mai mic element care leagă doar acest articol (orice markup), cel mult 6 niveluri în sus;
+- un titlu pus în interiorul legăturii (`<a><h2>…</h2></a>`) nu era recunoscut ca titlu;
+- „conține doar acest titlu” număra doar titlurile păstrate: un container mare cu celelalte excluse dădea data altuia; acum numără toate legăturile spre articole;
+- la AP, motivul se repeta de 6 ori: motive unice, cel mult 3 sitemap-uri;
+- Reuters: prima variantă citea sitemap-ul pe care `robots.txt` îl interzice; acum `robots.txt` se respectă și pentru sitemap-uri;
+- data doar din adresă (ziua, ora 12:00 UTC): o știre nouă de seară ar fi cântărit ca una de prânz; după prima citire, o știre nouă de azi intră cu ora la care a fost văzută.
+
+## Runda 152 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | formularul de adăugare | după schimbarea adresei, rezultatul testului vechi rămânea afișat, ca al adresei noi | rezultatul se șterge la schimbarea adresei |
+| 2 | `pageItems` | același titlu la două adrese în aceeași pagină (o variantă a paginii văzută de server) apărea de două ori | o dată, primul |
+| 3 | etichete | tabelul („titlurile paginii”) și testul („titlurile din pagină”) numeau diferit același mod; FD descria alte etichete | aceleași cuvinte peste tot; FD corectat |
+
+Recitite, full scope:
+- `page-reader.ts` (atributele, adresele, site-ul, feed-urile declarate, JSON-LD, titlurile, sitemap-urile cu DOCTYPE scos, `robots.txt` cu grupuri / `Allow` / `Disallow` / `*` / `$`, paginile blocate);
+- `page-feed.ts` (`robots.txt` înaintea paginii, nu și înaintea unei adrese de feed; 404 = permis, 5xx / fără răspuns = mai târziu; doar adrese ale aceluiași site; secțiunea doar la sitemap-ul găsit prin `robots.txt`; `readSource` fără o nouă căutare);
+- `fetcher.ts` (`read_as`: fără cereri condiționate, la 10 minute; `withoutOldUndated` cu `market_cache`; `seenToday`; erorile `PageReadError` în tabel);
+- rutele (testul și adăugarea, `read_as` / `read_url` păstrate; `skipTest` = feed, ca înainte), migrarea 8, `SOURCE_COLUMNS`, `FeedTest`;
+- securitate: adresele găsite (feed declarat, sitemap, copiii unui index) doar ale aceluiași site; legăturile știrilor nu se descarcă niciodată; redirecționările se urmează ca la feed-uri (adresa e a adminului);
+- FD-HTMLFEED, TD-HTMLFEED, ghidul.
+
+## Runda 153 — zero probleme (FD-HTMLFEED)
+Recitite, full scope: ca în runda 152, plus testele (`page-reader.test.ts`, `page-feed.test.ts`) și verificarea din Chrome pe adresele reale.
+
+# FD-AIQUOTA
+
+Cauza, din jurnalul Azure al zilei de 20 oct (utilizatorul 2, Gemini):
+- 12:49 UTC: `402: Your prepayment credits are depleted`;
+- de la 14:12: mesajul general de limită la fiecare 30 de minute, inclusiv cu cheia salvată din nou la 16:51.
+
+Textul exact al Google nu se păstra, așa că nu se putea spune care limită era.
+
+## Runda 154 — 4 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `geminiLimits` | o limită pe minut și una pe zi au aceeași metrică; fără `quotaValue`, limita zilnică lua numărul primului rând (cea pe minut) | rândurile se împerechează în ordine, fiecare o singură dată; test |
+| 2 | avertismentul din Setări | `resetsAt && …` ar fi afișat „0” pentru o valoare 0 | condiție explicită (`!= null`, în viitor) |
+| 3 | FD | ghilimelele textului furnizorului diferă de cele din pagină | „…”, ca în pagină |
+| 4 | ghidul | nu spunea de mesajele precise, de limitele pe proiect, de pauza după repornire și de reîncercarea la salvare | paragraf nou |
+
+Recitite, full scope:
+- `types.ts`: `AiExplained`, `providerWords` (spații, chei ascunse, 600), `detail` doar pentru `quota` / `rate`, `aiErrorLine`;
+- `http.ts`: `explain` cu tipul deja ales;
+- `gemini.ts`:
+  - 402 și 429 „prepayment” → `quota`;
+  - `geminiLimits` (detalii + rânduri);
+  - `explainGemini`, în ordinea: Prepay, limita 0 gratuit / plătit, zilnică gratuit / plătit, altfel nimic;
+  - `nextPacificMidnight`, numerele în română;
+- `ai-scorer.ts`: `restored` (permanent → fără sfârșit; altfel pauza salvată), `resume`, eroarea cu `detail` / `resetsAt`, jurnalul;
+- `service.ts`: `storedState` (comun cu `aiStatus`), `scorerFor` (repornire; scorer în pauză al cărui rând a dispărut → `resume`), `retryNow`;
+- rutele (setări AI schimbate; cheia furnizorului ales salvată), rezumatul (jurnalul);
+- `AiSettings.tsx` (mesaj, ora de resetare în fusul utilizatorului, textul furnizorului rupt pe rânduri pe telefon);
+- impactul:
+  - FD-AIKEYS: starea veche fără câmpuri noi merge; altă cheie înseamnă stare curată;
+  - FD-AICLARITY: cererile refuzate nu se numără;
+  - verificarea cheii la salvare: neschimbată;
+  - lista de modele: fără `explain`, mesajul general;
+- FD-AIQUOTA, TD-AIQUOTA.
+
+## Runda 155 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `describe()` | mesajele care conțin textul furnizorului (permisiune, cerere respinsă, conexiune, altă eroare) nu ascundeau o cheie citată de furnizor (de ex. Google: „Consumer 'api_key:AIza…' has been suspended”), deși ajung în pagină și în jurnal | `providerWords` și acolo; test; FD / TD |
+| 2 | TD | semnătura lui `extra` diferea de cod | `Partial<AiExplained> \| null` |
+
+Recitite, full scope:
+- tot ce a fost în runda 154;
+- în plus, ordinea din rute: `retryNow` înainte de nudge;
+- un scorer păstrat în pauză, când utilizatorul schimbă cheia și revine la ea între două rulări: starea e ștearsă, deci reîncearcă;
+- o eroare a bazei în `storedState`: rularea cade, ca înainte la `SELECT`-ul știrilor;
+- textul din pagină după salvare: avertismentul dispare până la următoarea încercare.
+
+## Runda 156 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | verificarea cheii (`listModels`) | 402 devenise `quota`, iar fără `explain` avertismentul de la salvare ar fi spus doar „contul Google nu mai are credit…” în loc de textul despre Prepay (înainte: „eroare Google 402: Your prepayment credits are depleted…”) | `explain` și în lista de modele, cu modelul opțional (mesajele fără „pentru X”); test cap-coadă; FD §4 / TD §3 |
+
+Verificat în Chrome, pe schema de test:
+- avertismentul din Setări → AI, cu o stare ca a utilizatorului 2: mesajul precis, „Google resetează limita pe 21 oct., 10:00”, textul Google;
+- la 1440 și la 390 px: textul se rupe pe rânduri, pagina are lățimea ecranului, nicio eroare în consolă.
+
+Recitite, full scope: ca în rundele 154–155, plus `models.ts` și avertismentul de la salvarea cheii.
+
+## Runda 157 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `geminiKind` | o limită zilnică plătită numită doar în mesaj („…generate_requests_per_model_per_day, limit: 1500”, fără `details`) nu avea „PerDay”, deci devenea `rate`: reîncercări, pauză de 5 minute, mesajul general, în timp ce `explainGemini` ar fi recunoscut-o drept zilnică | `per_day` contează ca `PerDay`; test; FD §3 / TD §3 |
+
+Recitite, full scope: ca în runda 156; în plus, concordanța dintre `geminiKind` (ce e `quota`) și `explainGemini` (ce e zilnic / limita 0).
+
+## Runda 158 — zero probleme (FD-AIQUOTA)
+Recitite, full scope:
+- `types.ts`, `http.ts`, `gemini.ts` (clasificare, limite, explicații, ora de resetare), `models.ts`;
+- `ai-scorer.ts`, `sentiment/service.ts`, rutele, rezumatul, `AiSettings.tsx`;
+- testele (`quota.test.ts`, ruta din `server.test.ts`);
+- impactul asupra FD-AIKEYS / FD-AICLARITY, verificării cheii și rezumatului;
+- FD-AIQUOTA, TD-AIQUOTA, ghidul.
+
+# FD-AISLOW
+
+## Runda 159 — 4 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `scoreUsers` (lucrătorii în paralel) | `total += await this.scoreUser(…)` citea totalul înainte de așteptare: cu doi utilizatori în paralel, numărul unuia se pierdea (25 în loc de 50), iar jobul ar fi socotit greșit dacă mai are de lucru. Prins de testul cu doi utilizatori | se așteaptă întâi, apoi se adună; comentariu |
+| 2 | `callJson` | cele 3 minute erau pe fiecare încercare: după un 503 / 5xx, un lot putea ține runda până la 3 × 3 minute, peste limita jobului (10 minute); mesajul „nu a răspuns în 3 minute” nu era timpul real | timpul e al întregii cereri; încercările au ce a rămas; o reîncercare a cărei pauză ar trece de timp nu se mai face; teste (fără reîncercare, a doua încercare scurtată) |
+| 3 | `AnthropicClient` | la fel, prin reîncercările SDK-ului (`maxRetries: 2`, `timeout` pe încercare) | un semnal de timp pentru toată cererea, dat SDK-ului; întreruperea lui devine „Anthropic nu a răspuns în …” (trecătoare); oprirea apelantului rămâne oprire; test |
+| 4 | `scorerFor` | după ce pauza trecuse, salvarea cheii (care șterge starea) nu ștergea seria din memorie: următoarea eroare ar fi avut 2, 4… minute în loc de 1 (FD §6) | starea se citește și când scorerul are erori la rând; `resume()` șterge seria; test cu ceasul simulat, verificat că pică fără reparație |
+
+Recitite, full scope:
+- `types.ts` (`passing`, `withinRo`), `http.ts`, `gemini.ts` / `openai.ts` (reîncercarea fără gândire / raționament), `anthropic.ts`, `models.ts`;
+- `ai-scorer.ts`, `sentiment/service.ts`, `jobs/register.ts`, ruta `/api/ai/status`, `api-types.ts`;
+- `AiSettings.tsx`, `ai-progress.ts`;
+- testele noi și cele atinse (`quota.test.ts`, `impact.test.ts`, `ai-reason.test.ts`, `server.test.ts`);
+- impactul asupra Rezumatului zilei (timpul, mesajul), FD-AIQUOTA (pauze, starea salvată), FD-AICLARITY.
+
+## Runda 160 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | ghidul utilizatorului | spunea încă „la alte erori se reîncearcă după 5 minute”; nu spunea de cele 3 minute, de pauza care crește, de eroarea trecătoare care nu se arată prima dată, de rândul de progres | paragraful rescris (listă) |
+| 2 | testele | `progressText` (web) era testat din fișierul de server | mutat în `src/web/components/ai-progress.test.ts`, lângă modul |
+| 3 | FD §6 | reîncercarea fără gândire / raționament (Gemini, OpenAI, după un 400 imediat) e o a doua cerere cu 3 minute ale ei: nu era scrisă | rândul nou în tabel (o singură dată pe cheie și model) |
+
+Recitite, full scope: ca în runda 159; în plus, `Db` (bazinul de 10 conexiuni, tranzacțiile pe context async: `usage.record` în paralel pentru utilizatori diferiți, rânduri diferite) și cititorii stării scorului în web (doar `AiSettings`).
+
+## Runda 161 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `withinRo` (`types.ts`) | ajutorul de plural avea un parametru pentru singular pe care nu-l folosea nimeni (cazul 1 era tratat înainte) și o condiție `n > 0` inutilă | `countRo(n, unit)`, doar pentru 2 și peste; testele `withinRo` neschimbate |
+
+Verificat în Chrome, pe schema de test (Gemini lent de 3 ori la rând, 30 de știri, 12 scorate):
+- avertismentul: „Gemini: Google nu a răspuns în 3 minute (a 3-a eroare la rând). Se reîncearcă automat la 22:45; …alege alt model din listă…”;
+- rândul: „Ultimele 48 h: Gemini a scorat 12 din 30 de titluri; ultimul scor acum 2 min.”;
+- la 1440 și la 390 px: textul se rupe pe rânduri, pagina are lățimea ecranului, nicio eroare în consolă.
+
+Recitite, full scope: ca în runda 160; în plus, concurența în bază (tranzacțiile `usage.record` și salvările de stare ale unor utilizatori diferiți, pe rânduri diferite), numărul de cereri și jurnalul cu reîncercările mai dese, Rezumatul și verificarea cheii cu timpul întregii cereri.
+
+## Runda 162 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | FD §7 | spunea „Rezumatul zilei: neschimbat (3 minute)”, dar acum cele 3 minute includ reîncercările (înainte erau pe fiecare încercare); la fel verificarea cheii | propoziția corectată |
+| 2 | TD Partea I §4 (tabelul joburilor) | `sentiment.ai` lipsea din tabel, deși i se schimbă felul în care rulează | rândul nou: runde, paralel, buget, timpul lotului, pauza |
+
+Recitite, full scope: codul ca în runda 161; în plus, părțile „de azi” din FD și TD (Partea I), ca să nu contrazică FD-AISLOW.
+
+## Runda 163 — zero probleme (FD-AISLOW)
+Recitite, full scope:
+- `types.ts` (`passing`, `withinRo`), `http.ts` (timpul întregii cereri), `anthropic.ts` (semnalul de timp), `gemini.ts` / `openai.ts` (reîncercarea fără gândire), `models.ts` (verificarea cheii);
+- `ai-scorer.ts` (timpul lotului, pauza care crește, seria, jurnalul), `sentiment/service.ts` (lucrătorii, `scoreUser`, `aiProgress`, starea cu seria, `scorerFor`), `jobs/register.ts` (`aiRounds`), ruta `/api/ai/status`, `api-types.ts`;
+- `AiSettings.tsx` (avertismentul de la a doua eroare, rândul de progres), `ai-progress.ts`;
+- testele: `ai-slow.test.ts`, `ai-progress.test.ts`, `server.test.ts`, plus cele atinse (`quota.test.ts`, `impact.test.ts`, `ai-reason.test.ts`, `providers.test.ts`);
+- impactul asupra Rezumatului, verificării cheii, FD-AIQUOTA, FD-AIKEYS, FD-AICLARITY, Stare sistem;
+- FD-AISLOW, TD-AISLOW, TD Partea I §4, ghidul.
+
+## Runda 164 — 1 problemă (reparată), găsită de suita completă
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `sentiment.test.ts` (FD-AIKEYS) | testul vechi aștepta pauza de 5 minute după o supraîncărcare; runda 163 nu l-a recitit, deși e un test atins de schimbare (pauza după o eroare trecătoare e acum 1 minut, crescând) | testul cere acum 1 minut și `passing: true`, apoi 30 de minute la credit; numele spune FD-AISLOW §2 |
+
+Recitite, full scope: ca în runda 163; în plus, toate testele care pornesc `AiScorer`, `scoreUsers` sau citesc `pausedUntil` / `timeoutMs`, căutate după durate vechi (5 minute, 90 de secunde) și după numărul de titluri pe rulare.
+
+## Runda 165 — zero probleme (FD-AISLOW)
+Recitite, full scope: codul, testele (inclusiv toate cele atinse, găsite prin căutare), FD / TD / ghidul, ca în runda 164. Suita completă rulează după această rundă.
+
+# FD-EARNTV
+
+## Runda 166 — 3 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | FD Partea I §4.5 | spunea doar „de la Nasdaq” | sursa: Nasdaq, cu data confirmată de la TradingView (FD-EARNTV) |
+| 2 | TD Partea I (tabelul joburilor și descrierea rezultatelor) | doar Nasdaq; regula datei confirmate și a estimărilor depășite lipsea | completate, cu trimitere la TD-EARNTV |
+| 3 | ghidul utilizatorului | nu spunea de TradingView și de nota „Data e confirmată (TradingView)” | propoziția din Calendar completată |
+
+Recitite, full scope:
+- `sources.ts` (`parseTvEarnings`: ordinea coloanelor, zilele UTC, codurile, rândurile duble / stricate; `fetchTvEarnings`: simbolurile trimise, corpul, statusul);
+- `service.ts` (`earningsEvent` cu `period` în 4 părți, `planEarnings`, `formatEps`, `refreshEarnings` cu TradingView opțional, nota din `query`, ștergerea acțiunilor scoase din favorite);
+- `register.ts`; testele noi și cele vechi ale rezultatelor (`calendar.test.ts`);
+- impactul: evenimentul următor (Azi, banda), exploziile calendarului economic (`nextImportant`, doar `ff` / `tv`), FD-USERS (fiecare cu acțiunile lui), nudge-ul la adăugarea unei acțiuni;
+- verificat pe datele reale (fără scriere): SPCX apare azi, după închidere; TSLA, META, TXN mâine; GOOGL, MSFT, MSTR, SNDK, AAPL pe zilele lor; NVDA (estimare TradingView) neschimbat.
+
+## Runda 167 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `formatEps` | semnul se lua înainte de rotunjire: un EPS de −0,004 ar fi apărut „-$0.00” | rotunjit întâi la cenți, apoi semnul; test (−0,004 → „$0.00”, −0,006 → „-$0.01”); FD §3 |
+
+Recitite, full scope: ca în runda 166.
+
+## Runda 168 — 2 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `parseTvEarnings` | o dată în afara intervalului valid (ex. 1e20 s) arunca `RangeError` la `toISOString`, deci tot răspunsul se pierdea; trimestrul putea ieși „undefined/NaN” | `dateOf` verifică data; una invalidă e lipsă; test |
+| 2 | `parseTvEarnings` | API-ul nedocumentat întoarce o coloană necunoscută ca null, fără eroare: o redenumire ar fi trecut neobservată (doar Nasdaq, fără niciun semn în jurnal) | coloana `type`; acțiuni fără nicio dată = eroare, deci avertisment în jurnal și doar Nasdaq; doar fonduri fără date e normal; teste; FD §3, TD §1 |
+
+Recitite, full scope: ca în runda 166; în plus, comportamentul API-ului la o coloană necunoscută (verificat: 200, valoarea null).
+
+## Runda 169 — zero probleme (FD-EARNTV)
+Recitite, full scope:
+- `sources.ts` (`TV_EARN_COLUMNS` cu `type`, `dateOf` / `utcDay`, `parseTvEarnings` cu verificarea coloanelor, `fetchTvEarnings`);
+- `service.ts` (`earningsEvent`, `planEarnings`, `formatEps`, `refreshEarnings`, nota din `query`), `register.ts`;
+- testele (`earn-tv.test.ts`, `calendar.test.ts`);
+- impactul: Azi / banda (evenimentul următor), `nextImportant`, FD-USERS, nudge-ul la adăugare, evenimentele vechi în `calendar_raw`;
+- FD-EARNTV, TD-EARNTV, FD / TD Partea I, ghidul;
+- din nou pe datele reale, fără scriere: același plan ca în runda 166 (SPCX azi, după închidere).
+
+# FD-WATCHLISTS
+
+## Runda 170 — 5 probleme (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `Watchlists.tsx` | efectul care golea selecția la schimbarea listei golea și mesajul: „Lista „X” e gata.” și „Lista … a fost ștearsă.” dispăreau imediat, pentru că ambele acțiuni deschid altă listă | efectul golește doar selecția; mesajul se golește la deschiderea manuală a unei liste, iar acțiunile își pun mesajul după |
+| 2 | FD / TD Partea I | descriau încă „Favorite” în Setări, panoul graficului cu favoritele și tabelul `watchlist` ca favorite | FD Partea I: simbolurile urmărite = toate listele, panoul cu lista aleasă; TD: `watchlist` = registrul, plus `watch_lists` / `watch_list_items` |
+| 3 | ghidul utilizatorului | Setări → Favorite, „Favorite → Acțiuni / Indici”, panoul graficului; nicio secțiune despre liste | secțiunea nouă „Liste de urmărire” (liste, selecție, copiere / mutare / ștergere, ordine, Date financiare, limite) și pașii corectați |
+| 4 | FD §3 | sumele scrise „28,24 mld. $”, iar aplicația scrie „28,24 mld. USD” (ca în rest) | FD aliniat la `fmtUsd` |
+| 5 | `reconcile` | citea registrul și când nu era nimic de corectat (o citire în plus la fiecare schimbare) | întâi verificarea, apoi registrul |
+
+Recitite, full scope:
+- migrarea 9 și listele `TABLES` / `IDENTITY_TABLES`;
+- `watchlists/service.ts` (corectarea, reuniunea, limitele, numele, copierea / mutarea / ștergerea, rutele vechi);
+- rutele noi și vechi, `afterUnion`;
+- `market/profile.ts`, `NasdaqClient.companyProfile`, `tvScan`, catalogul indicilor, `AiUsage.translate`;
+- setările (`charts.listId`);
+- web: hook-uri, `FavoritesDnd`, `AddSymbol`, `SymbolInfo`, `Watchlists.tsx`, panoul graficului, Setări, meniul, textele „favorite”, consumul AI;
+- importul din SQLite (tabelele noi lipsesc din fișier, deci listele se fac la prima citire);
+- testele noi și vechi (`server.test.ts`, `users.test.ts`).
+
+## Runda 171 — 2 probleme (reparate), găsite în Chrome
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `Watchlists.tsx` (telefon) | grila cu o singură coloană crește după conținutul cel mai lat: tabelul lățea pagina la 1.012 px în loc să se deruleze în cadrul lui | coloana `minmax(0, 1fr)` pe telefon |
+| 2 | tabelul listei și cel al trimestrelor | textul ascuns din antetul ultimei coloane („Date financiare”, `sr-only`, poziționat absolut) nu avea un strămoș poziționat în cadrul care derulează: stătea la capătul tabelului, în afara cadrului, și lățea pagina pe telefon | cadrul tabelului e `relative`; verificat: 390 / 390, popup-ul între 12 și 378 px |
+
+Verificat în Chrome, pe schema de test, cu „Favorite” (BTC, ETH, SOL, TSLA, SPCX, QQQ, SPX) și „Tech & AI” (NVDA, TSLA, SPCX):
+- **1440 px:** listele, tabelul, selecția (SOL, apoi Shift + clic pe TSLA → 2 bifate, bara cu Copiază / Mută / Șterge), popup-ul TSLA (descrierea Nasdaq, 4 trimestre, comparațiile, data următoare) și cel BTC (descrierea CoinGecko, „Monedele nu publică rezultate financiare”); nicio eroare în consolă;
+- **390 px:** la fel, pagina are lățimea ecranului, popup-ul încape, tabelele se derulează în cadrul lor;
+- **Grafice:** dropdown-ul „Favorite (7)” / „Tech & AI (3)”; alegerea celei de-a doua arată NVDA, TSLA, SPCX.
+
+## Runda 172 — 1 problemă (reparată)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | `FavoritesDnd` (mutarea listelor) | cititorul de ecran auzea numărul listei („Ai luat 3, poziția 2 din 2”), iar la indici „^SPX” | `label`: numele listei, respectiv simbolul fără „^” |
+
+Recitite, full scope: ca în runda 170, plus comportamentul pe telefon (grila, cadrele tabelelor, popup-ul), salvarea listei alese în Grafice (`useSaveSettings`) și anunțurile pentru cititoarele de ecran.
+
+## Runda 173 — zero probleme (FD-WATCHLISTS)
+Recitite, full scope:
+- serviciul (corectarea înaintea oricărei schimbări, inclusiv a unui simbol adăugat de o versiune veche chiar înaintea unei schimbări noi; reuniunea; limitele în tranzacție; numele);
+- rutele (cele vechi peste liste; profilul și traducerea, doar pentru utilizatorul autentificat; numele din registru);
+- profilurile (cache-ul, partea eșuată nețiunută minte, moneda necunoscută, traducerea comună);
+- web: importurile nefolosite (niciunul), hook-urile, pagina, popup-ul, panoul din Grafice, Setări, textele;
+- costul în plus al `GET /api/watchlist` (o verificare de echilibru, fără scriere când nu e nimic de corectat);
+- documentele (FD / TD / ghidul, Partea I).
+
+## Runda 174 — 4 probleme găsite de utilizator (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | bara selecției | apărea doar după prima bifă și împingea tabelul în jos | mereu acolo („Niciunul selectat”), cu butoanele dezactivate fără selecție |
+| 2 | mesajele acțiunilor | un rând nou deasupra tabelului, care împingea pagina | mesaj jos, peste pagină (`Toast`), care dispare singur (4,5 s; erorile 8 s) și se poate închide |
+| 3 | „Listă nouă” | stătea la coada listelor, iar câmpul de nume apărea în loc, împingând | butonul **+** în antetul „Listele mele” (și pe telefon, lângă câmp); numele într-o fereastră mică sub buton, peste pagină (în coloana îngustă, aliniată la stânga ca să nu iasă din ecran); redenumirea pe ecrane late în rândul listei |
+| 4 | Indici | grila celor șapte indici apărea sub câmp și împingea tabelul | lista derulantă sub câmp, peste pagină, ca la crypto și acțiuni; se deschide imediat la Indici; cei din listă sunt marcați și dezactivați |
+
+Cauza: în Chrome am verificat că lucrurile apar și funcționează, nu și că nu mută pagina. Acum verificarea măsoară poziția tabelului înainte și după fiecare acțiune.
+
+Verificat în Chrome, pe schema de test (construirea în afara `dist/`), la 1440 și 390 px: tabelul rămâne la aceeași poziție (335 / 609 px) după bifare, Indici și „+”; lista indicilor are SPX „în listă”; fereastra numelui stă în ecran (25–313 / 85–373 px) și se închide cu Esc; nicio depășire, nicio eroare.
+
+## Runda 175 — zero probleme (FD-WATCHLISTS)
+Recitite, full scope: `Watchlists.tsx` (bara, mesajele, `NamePopover`, redenumirea în rând, selecția), `AddSymbol.tsx` (lista sub câmp, focusul, Esc, „în listă”), restul paginii pentru alte elemente care apar în flux (doar alerta rară „Ordinea nu s-a salvat” și lista goală / plină la schimbarea listei, ambele așteptate), FD / ghidul.
+
+## Runda 176 — 3 probleme găsite de utilizator (reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | rândurile alternante | ieșeau cu 4 px din panou de fiecare parte: panoul avea `p-4` (16 px), iar tabelul intră cu `table-bleed` 20 px. Reparația era în cod, dar interfața servită local nu fusese reconstruită, iar raportul a spus „reparat” fără măsurătoare | `px-5`; măsurat în Chrome: rândurile și antetul între 299 și 1415 px, exact marginile interioare ale panoului (și la 2000 px), pe telefon derulate în cadru; interfața locală reconstruită |
+| 2 | adăugarea / ștergerea „nu funcționează sau foarte întârziată” | după fiecare schimbare a simbolurilor urmărite, răspunsul aștepta reetichetarea știrilor ultimelor 7 zile: 20,7 s pentru 10.265 de știri, măsurat pe datele reale de pe Mac (listele în sine: sub 1 s) | reetichetarea în fundal (`RetagQueue`, câte o trecere, cereri adunate); teste: coada, plus cele două teste care citesc etichetele imediat (`ctx.retag.idle()`) |
+| 3 | răspunsul tot de ~1 s de pe Mac | ~15 drumuri până la Azure pe cerere | fiecare schimbare se vede imediat (`watch-guess.ts`, testat), schimbările în ordine, răspunsul aplicat după ultima; măsurat în Chrome: ștergerea în 11 ms, adăugarea în 20 ms, iar listele de pe server se potrivesc după răspuns |
+
+Recitite, full scope: ruta și serviciul (neschimbate), `RetagQueue` și locurile ei (rutele listelor, aliasurile, ștergerea unui utilizator), `Watchlists.tsx` (mutația cu `scope`, ghicirile, mesajele, selecția golită înainte de cerere), `watch-guess.ts`, documentele. Rămâne cunoscut: o reordonare și o altă schimbare trimise în aceeași secundă au două cozi diferite; răspunsul celei de-a doua poate arăta pentru o clipă ordinea veche, până la răspunsul reordonării.
+
+## Runda 177 — zero probleme (FD-WATCHLISTS)
+Recitite, full scope: ca în runda 176; în plus, interfața reconstruită și servită local (aceeași cu cea măsurată).
+
+## Runda 178 — 4 probleme (FD-SLINGSHOT34, reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | setările indicatorului, la 320 px | căsuța „Short: Confirm Only On A Close Below The Cloud” se strângea lângă eticheta lungă, pe două rânduri (problemă generală a formularului, se vedea acum prima dată) | `shrink-0` pe căsuțe; măsurat în Chrome: toate 16×16 px la 320 și 390 |
+| 2 | README, `research.md` | spuneau încă „Slingshot System 3.3” | 3.4, cu SHORT-ul |
+| 3 | TD-SLINGSHOT34 | nu pomenea modulul nou `slingshot-draw.ts` (mutat din `CandleChart.tsx` ca să poată fi testat) și promitea un test pentru textele din Azi, care sunt JSX | TD actualizat: modulul, testele lui, textele din Azi verificate în Chrome |
+| 4 | Pine 3.4 | o intrare (`lenFastEma`) pierduse un spațiu de aliniere | refăcută ca în 3.3 |
+
+Recitite, full scope:
+- **Pine 3.4**, diff complet față de 3.3: ordinea pe bară, oglindirea fiecărei condiții, scopurile variabilelor din tupluri (ca în 3.3), stilurile etichetelor, alertele, `runtime.error`.
+- **Portul**, în aceeași ordine ca Pine.
+- **Parametrii și `refine`**; formularul (blocarea, mesajul regulii); `slingshot-draw.ts`; `Charts.tsx` (tabel, motive, casetă); scanner-ul, Azi, contextul AI; testele; FD / TD / ghidul / `slingshot-port.md`.
+
+Verificat:
+- **3.4 doar cu Long = 3.3:** identic pe toate cele 192 de serii (semnale, etichete cu id-uri, alerte, TP/SL, Market Structure, ultima bară).
+- **SHORT fără regulă = LONG pe prețurile negate:** identic pe 192.
+- **SHORT 3.4 = prototipul din backtest:** identic pe 192. Cifrele din FD se reproduc pe port.
+- **Chrome**, pe schema de test, cu interfața construită în scratchpad:
+  - graficul ETH 4h: SHORT activ albastru, SHORT înlocuit roșu, caseta „(SHORT)”, SL deasupra, TP dedesubt;
+  - setările: Long blocat cât Short e debifat, Short blocat după debifarea lui Long, 400 de la server pentru niciuna;
+  - cardurile din Azi după scanner: „SHORT 19 oct., activ”, „SHORT · TP … SL …”;
+  - la 1440 / 390 / 320 px: nicio depășire, nicio eroare.
+
+## Runda 179 — 2 probleme (FD-SLINGSHOT34, reparate)
+| # | Zonă | Problemă | Reparație |
+|---|---|---|---|
+| 1 | tabelul de semnale | eticheta LONG avea verdele neon al indicatorului (#00FFAA), aproape invizibil pe tema deschisă (caseta TP/SL are un fundal închis tocmai din acest motiv) | LONG folosește verdele temei (`text-bull`); SHORT rămâne în culoarea short-ului. Măsurat în Chrome: LONG #3DDC97 pe închis și #0F7444 pe deschis; SHORT #2196F3 pe ambele |
+| 2 | FD / TD | FD vorbea de „o coloană LONG / SHORT” (partea e o etichetă în prima coloană), iar exemplele de dată din Azi („21.10”) nu aveau formatul afișat („19 oct.”) | formulările aliniate cu ce se vede |
+
+Recitite, full scope: ca în runda 178, cu `Charts.tsx` (tabelul, formularul, caseta), tema deschisă și cea închisă, FD / TD.
+
+## Runda 180 — zero probleme (FD-SLINGSHOT34)
+Recitite, full scope:
+- **Pine 3.4** (din nou, cu diff-ul față de 3.3); portul și ordinea lui; `params.ts` (`refine`, nicio folosire a `.shape` pe schema indicatorului).
+- **Formularul:** blocarea, mesajul regulii, căsuțele.
+- **`slingshot-draw.ts`.**
+- **`Charts.tsx`:** tabelul, motivele, alertele, caseta, culorile pe ambele teme.
+- **Scanner-ul:** cheia de memorare include setările noi.
+- **Azi și contextul AI.**
+- **Testele**, plus FD / TD / ghidul / `slingshot-port.md` / README / `research.md`.
+
+Nimic de schimbat.
+
+## Runda 181 — 3 probleme (FD-SLINGSHOT34 corectat, FD-SS34LIVE, FD-OPACITY; reparate)
+Scope complet:
+- **Pine 3.4:** fără regula „sub nor” și fără legătura dintre părți; invalidarea live; aspectul etichetelor; culorile, mărimea și opacitatea.
+- **Portul**, `params.ts`, desenarea (`slingshot-draw.ts`, `primitives.ts`), `CandleChart`.
+- **`Charts`:** grupurile din setări, tabelul de semnale, caseta TP/SL.
+- **`ColorPicker`** și cele trei locuri care îl folosesc; `color.ts`; LMA.
+- **Scanner-ul și Azi** (`atrShort`), testele și documentația.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `Charts.tsx`, caseta TP/SL | La 320 px, „TAKE PROFIT (SHORT)” se rupea pe două rânduri. Problema exista și cu o singură parte. Cu un preț de 10 caractere, caseta ar fi ieșit din grafic. | Fără rupere de rând. Pe telefon, font, spațiere și margini mai mici. Caseta are o lățime maximă, iar eticheta se scurtează prima. Măsurat în Chrome la 1440 / 390 / 320, cu prețuri de 10 caractere. |
+| 2 | `primitives.ts`, desenarea X-ului | `lineWidth` și `lineCap` rămâneau setate pe context pentru desenele următoare din panou. | `save()` / `restore()` în jurul etichetelor. |
+| 3 | `StudySettings.tsx` | Importul `ColorPicker` stătea între importurile `../`. | Mutat lângă importurile locale. |
+
+Verificat în Chrome și în afara testelor:
+- Esc închide doar panoul (cu o apăsare reală de tastă). Focusul revine pe casetă.
+- Panoul stă în ecran și formularul nu se mută (măsurat).
+- Se salvează `#00FFAA66` / `#7E57C280`.
+- X-ul și mărimea Large apar pe grafic.
+- Cele 192 de serii trec: oglinda, independența, Long = 3.3, auditul regulilor.
+- „Două semnale valide la rând”: 3.3 le avea pe 16 bare din 6408, 3.4 pe niciuna.
+
+## Runda 182 — 2 probleme (aceleași feature-uri, documentație)
+Scope complet, recitit.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | FD-OPACITY / TD-OPACITY | Scriau că panoul de culoare se închide la derulare. Codul îl mută lângă casetă, inclusiv când apare tastatura telefonului, și îl închide doar când caseta iese din ecran. | FD și TD descriu comportamentul real, cu închiderea la Tab în afara panoului și focusul pe glisor. |
+| 2 | TD-SS34LIVE, Teste | Promitea un test „un SHORT în formare nu schimbă un LONG activ”. Independența e de fapt verificată pe datele reale (BTC în teste, 192 de serii în verificare). | TD spune ce verifică testul de fapt. |
+
+## Runda 183 — zero probleme (aceleași feature-uri)
+Scope complet:
+- Pine (verificarea mecanică a oglinzii: 0 diferențe în afara blocului mort `currentCycleLabel`), portul, ordinea pe bară, aspectul la succes și la eșec în timpul unei invalidări live.
+- `ColorPicker`: pointer, Esc, Tab, fereastra de culoare a browserului, portalul în afara formularelor, eticheta care îl conține.
+- `color.ts`, LMA (semantica Pine păstrată), schemele, scanner-ul, Azi, testele, FD / TD / ghidul / `slingshot-port.md`.
+
+Nimic de schimbat.
+
+## Runda 184 — zero probleme (FD-SSSL, FD-SSLIVEBOX, FD-FILLS)
+Scope complet:
+- **Pine 3.4:** eticheta STOP LOSS în ramurile de eșec ale istoricului; ordinea afișării ATR. Verificarea mecanică a oglinzii dă 0 diferențe, în afara blocului mort `currentCycleLabel`.
+- **Portul:** marcajele noi, ordinea creării etichetelor, afișarea „în formare întâi”.
+- **`slingshot-draw.ts`;** `Charts` (câmpurile noi, `resultOf` către setări).
+- **`style.ts`:** `fillKeys`, `styleFills`, redesenarea umplerilor declarate și a celor din rezultat, umplerile liniilor ascunse.
+- **`StudySettings`:** secțiunea „Umpleri”, draft-ul, salvarea, „Valorile implicite”.
+- **Schema și memoria studiilor;** scanner-ul și Azi (`atr` urmează afișarea nouă).
+- **Testele și documentația** (FD / TD / ghidul / `slingshot-port.md`).
+
+Nimic de schimbat. Lista marcajelor care omitea `stopLoss` / `shortStopLoss` (`aliveOf`) a fost prinsă de teste înainte de review.
+
+Verificat și în afara testelor:
+- cele 192 de serii (oglinda, independența, Long = 3.3, auditul regulilor); fiecare LONG eșuat are exact o etichetă STOP LOSS, pe bara eșecului;
+- **Chrome:** STOP LOSS pe SOL 15m (SHORT deasupra, LONG dedesubt); umplerile Bollinger (5 % → ascuns → roșu 30 %) și RSI (banda, fundalul BB, gradientele fără casetă), la 1440 / 390.
+
+## Runda 185 — 10 probleme (FD-ORDEREDIT; reparate)
+Scope complet:
+- **Modelul și schema** (`shared/trading.ts`), citirile noi (`accounts.ts`: OKX algo, Bitget `profit_loss`, `stopLoss` / `takeProfit` / `contractSize`).
+- **Traderii:** `crypto.ts` (citirea ordinelor, planificarea, fiecare fel de pas, înlocuirea), eToro, Alpaca, Trading 212; serviciul (jurnalul, cheia, reluarea) și rutele.
+- **Pagina:** `pnl.ts`, `modify-seeds.ts`, `ModifyTicket`, `Trades`, `trade-drafts.ts`, `TradeDraftBar`, `CandleChart` (tragerea, atingerile, suprapunerile), `DragTargets`, `Charts`, `Toast`.
+- **Testele și documentația** (FD / TD / ghidul).
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `crypto.ts`, înlocuirea unui ordin de declanșare | Copia primea direcția după partea ordinului (cumpărare = urcare, vânzare = coborâre). TP-ul unui long ca ordin de declanșare (vânzare „up” la KuCoin), schimbat din „Modifică”, ar fi plecat ca vânzare „down” peste prețul de acum, adică s-ar fi executat imediat și ar fi închis poziția. | Fiecare pas ține direcția ordinului (KuCoin o spune, altfel din locul declanșării față de preț; un SL / TP de poziție după rol). Un ordin futures care doar închide pleacă drept SL / TP-ul care este (`stopLossPrice` / `takeProfitPrice`); restul ca stop în aceeași direcție, iar unde platforma nu poate numi direcția, înlocuirea e refuzată înainte de anulare. Teste noi. |
+| 2 | `crypto.ts`, verificarea | O declanșare mutată de cealaltă parte a prețului era doar avertisment, și doar la ordinele reduce-only. | Eroare pentru orice ordin de declanșare (modificat direct sau înlocuit): s-ar executa imediat. |
+| 3 | `crypto.ts`, `alpaca.ts`, `trading212.ts` | Un SL / TP de poziție nu verifica că ordinul închide poziția și că se declanșează ca acel nivel. | Refuzat cu explicația („nu închide această poziție”, „nu e stop loss-ul poziției”). |
+| 4 | `crypto.ts`, `openOrdersOn` | O listă de ordine care nu se putea citi făcea ca ordinul să fie anunțat „nu mai e deschis”. | Mesajul spune că o parte din ordine nu s-a putut citi și cere reîncercarea. |
+| 5 | `crypto.ts`, `placeCopy` | Un TP limită al unei poziții, înlocuit, devenea un TP de declanșare la piață (alt fel de execuție). | Rămâne limită reduce-only. |
+| 6 | `crypto.ts`, marja înlocuirii | Marja copiei venea doar din ordin; lipsind, KuCoin presupunea „isolated” chiar la o poziție cross. | Marja ordinului, altfel a poziției pe care o închide (sau la care adaugă). |
+| 7 | `alpaca.ts` | Un stop mutat de cealaltă parte a prețului nu era verificat. | Refuzat la verificare. |
+| 8 | `orderEditFields`, `tradeLinesOf` | Unele platforme repetă nivelul unui ordin SL ca „stop loss” al lui: formularul ar fi oferit TP / SL atașate pe un ordin care e el însuși SL-ul, iar graficul ar fi desenat linia de două ori. | TP / SL atașate doar la ordinele de intrare; serverul refuză TP / SL pe un ordin care doar închide. |
+| 9 | `CandleChart`, atingeri | O atingere pornită lângă o linie neselectată nu mai muta scala prețului (doar timpul). | Mută graficul ca oriunde; o atingere fără mișcare selectează linia. |
+| 10 | `Trades.tsx`, dețineri KuCoin | „SL / TP” apărea și pe rândul „main” al aceleiași dețineri. | O dată pe activ. |
+
+Găsite și reparate înainte de review, la verificarea în Chrome:
+- textul impactului PnL ieșea din casetă la 320 px (`.num` nu se rupe): acum se rupe;
+- la 320 px, bara Confirmă / Renunță acoperea aproape toată lățimea zonei de preț: pe telefon doar iconițele (✓ / ✕), 78 px.
+
+## Runda 186 — 3 probleme (FD-ORDEREDIT; reparate)
+Scope complet, recitit după reparațiile din 185.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `crypto.ts`, „Modifică” pe un ordin limită care doar închide | Se înlocuia „întâi anularea”, deci poziția rămânea o clipă fără acel TP (formularul poziției îl înlocuia „întâi cel nou”). | Orice ordin futures care doar închide se înlocuiește întâi cu cel nou. |
+| 2 | `pnl.ts`, `roleOf` | Pe contul unificat KuCoin, ordinele perpetualelor vin listate cu cele spot: SL / TP-ul poziției nu era recunoscut (nici linie, nici rând în formular, nici PnL). | Un ordin pe un simbol de perpetual e futures oriunde e listat. Test nou. |
+| 3 | `TradeDraftBar` | O linie trasă din nou cât timp verificarea era pe drum: răspunsul verificării ar fi trimis nivelurile vechi. | Răspunsul unei verificări pentru alte niveluri decât cele arătate e ignorat. |
+
+## Runda 187 — 1 problemă (FD-ORDEREDIT, documentație)
+Scope complet, recitit (formularul, eToro, rutele, schema, ghidul, FD / TD).
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `README.md` | Lista funcțiilor nu pomenea modificarea ordinelor și a SL / TP. | Adăugată, cu impactul pe PnL și tragerea pe grafic. |
+
+## Runda 188 — 1 problemă (FD-ORDEREDIT; găsită de rularea completă a testelor)
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `server.test.ts`, TD-TRADING §7 | Garda de securitate interzicea `editOrder(` peste tot (scrisă când Sentiq nu modifica ordine). | `editOrder` și `PATCH` permise doar în `src/server/exchange/trading/`, ca plasarea și anularea; celelalte module de exchange rămân doar de citire (fără `POST` / `DELETE` / `PUT` / `PATCH`). Retragerile, transferurile, `cancelAllOrders` și `closeAllPositions` rămân interzise peste tot. TD actualizat. |
+
+## Runda 189 — zero probleme (FD-ORDEREDIT)
+Scope complet:
+- **Server:** schema, citirile, `crypto.ts` (citirea ordinelor, direcția declanșării, marja, ordinea înlocuirii, fiecare fel de pas), eToro / Alpaca / Trading 212, serviciul (jurnalul, cheia eliberată la refuz), rutele, garda de securitate.
+- **Pagina:** formularele și confirmarea, `modify-seeds`, `trade-drafts`, `TradeDraftBar`, tragerea în `CandleChart` (mouse, deget, redesenarea în timpul tragerii, suprapunerile), `Charts`, `Trades`, `Toast`.
+- **Testele și documentația** (FD / TD / ghidul / README); fără importuri nefolosite (`tsc --noUnusedLocals` pe fișierele atinse).
+
+Nimic de schimbat.
+
+Verificat și în afara testelor (serverul de test, KuCoin și eToro simulate, la 1440 / 390 / 320):
+- **Tranzacții:** „isolated” centrat pe simbol (centre egale); SL și TP mutate împreună (fiecare: ordinul nou, apoi anularea celui vechi); TP-ul unui long ca ordin de declanșare mutat din „Modifică” pleacă drept `takeProfitPrice`, iar mutat sub preț e refuzat; eToro `PATCH` cu `takeProfitRate`; un TP sub preț la un long refuzat; dialogurile încap la 320.
+- **Grafic:** cursorul ↕ pe linie; Confirmă / Renunță pe linia de intrare (centrul la y-ul ei); nimic din pagină nu se mută; eroarea lângă butoane; Renunță; trimiterea; ordinul cu avertismente → fereastra de confirmare; pe telefon, degetul pe o linie neselectată mută graficul, o atingere o selectează, apoi se trage.
+- **„KuCoin”** din antet centrat cu variația pe 24 h (centre egale la 1440 / 390; la 320 trece singur pe rândul următor).
+
+## Runda 190 — 4 probleme (FD-TRADEUI și alinierea; reparate)
+Scope complet:
+- **Server și formulare:** neschimbate față de runda 189, recitite pentru legăturile noi.
+- **Grafic și pagini:** `trade-labels.ts`, `TradeLabels` (desen, pointer, cursor), `CandleChart` (apăsarea pe ×, hover, linia trasă, suprapunerile), `Charts` (liniile, ×), `LineActionDialog`, `lineActionOf`, `trade-seeds`, `TradeDraftBar`, `Toast`, `Modal`, `AccountWizard`, `Trades`, `Watchlists`, `ui.tsx`, `TradingControls`, `Economy`, `AiSettings`, `DaySummary`.
+- **Testele și documentația** (FD / TD / ghidul).
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `CandleChart`, bara Confirmă / Renunță | La 320 px, caseta intrării ocupă aproape toată linia: bara ajungea peste ea. | Fără loc în stânga casetei, bara stă deasupra ei (dedesubt, dacă sus nu încape), aliniată la dreapta; eroarea se deschide în partea opusă. Măsurat la 320 / 390. |
+| 2 | `CandleChart`, același loc | La limită, lățimea PnL-ului (schimbată de preț) ar fi mutat bara înainte și înapoi. | Histerezis de 16 px pe fiecare bară. |
+| 3 | `trade-labels.test` | Titlul unui test promitea un caz eToro pe care nu-l verifica. | Titlul spune ce se verifică. |
+| 4 | FD-TRADEUI | Nu spunea că ×-ul din grafic nu primește focus de la tastatură, și unde sunt aceleași acțiuni. | Adăugat (Tranzacții: Închide, SL / TP, Modifică, Anulează). |
+
+Măsurători făcute înainte de review (reparate pe loc):
+- **Alinierea:** verificarea automată a găsit textul simbolului cu 3,6 px peste butoane (Tranzacții), bifele listelor cu 2 px, radio-urile AI cu 3,5 px, titlul ferestrelor cu sigla cu 2,4 px, iconița rezumatului cu 9,4 px și iconițele alertelor despărțite de nume la 320 px. Acum: zero, la 1440 / 390 / 320.
+- **Casetele** la 2×: ×-ul e centrat exact; cifrele sunt la sub jumătate de pixel fizic. ×-ul mesajului e la 0,5 px de text.
+
+## Runda 191 — zero probleme (FD-TRADEUI și alinierea)
+Scope complet, recitit după runda 190 (casetele, ×-ul fiecărei linii, ferestrele de confirmare, bara pe linie și deasupra casetei, alinierile).
+
+Nimic de schimbat.
+
+## Runda 192 — 1 problemă (FD-TRADEUI: Confirmă / Renunță ca în TradingView, modificarea neconfirmată)
+Scope: `TradeDraftBar` (casetele, ordinea, starea de încărcare), `TradeLabels` (caseta neconfirmată), `chartLineOf` (linia estompată, prețul plin), `CandleChart` (linia în timpul tragerii, `axisLabelColor`, așezarea barei), testele, FD / TD.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `CandleChart`, bara deasupra casetei (320 px) | Bara mai lată decât caseta ajungea la 2 px de marginea stângă a graficului. | Cel puțin 8 px de margine; bara depășește caseta spre dreapta. |
+
+Măsurat în Chrome (2×): „Renunță” și „Confirmă” au 20 px, cât caseta, cu centrul pe linie (430,8 / 430,8) și 6 px între ele și față de casetă. Caseta SL-ului mutat e colorată și estompată, iar linia ei e punctată, cu prețul plin pe scală. Fluxurile de tragere la 1440 (mouse) și 390 / 320 (atingere) trec.
+
+## Runda 193 — zero probleme
+Scope complet al rundei 192, recitit.
+
+Nimic de schimbat.
+
+## Runda 194 — 2 probleme (FD-REVERSE, zona, etichetele de preț; reparate)
+Scope complet:
+- **Server:** `normalizeReverse` / `reverse` (poziția, ordinele, cheile, anulările, Bybit), `cancelOpen` (comun cu modificarea), `claimAction`, `previewReverse` / `reverse`, rutele.
+- **Pagina:** `ReverseDialog`, ⇅ pe grafic (suprapunerea, `clamp`, rândul cu Renunță / Confirmă, eroarea), „Întoarce” în Tranzacții, zona (`zoneFrom`, a doua vedere), eticheta prețului curent, așezarea suprapunerilor pe ecran îngust.
+- **Testele și documentația** (FD / TD / ghidul).
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `CandleChart`, ⇅ pe un ecran de 320 px | Urcat deasupra casetei short-ului (pe linie nu era loc), ⇅ acoperea caseta ordinului „Limită vânzare” de deasupra. | Deasupra sau dedesubt: primul loc care nu acoperă altă casetă, altfel cel cu cea mai mică suprapunere. Eroarea se deschide în partea opusă casetei. |
+| 2 | `ReverseDialog` | Rezultatul scria „Modificat”. | `ModifyOutcome` primește etichetele acțiunii: „Poziția a fost întoarsă”, „Întoarsă în parte”… |
+
+Măsurat:
+- **Întoarcerea** pe KuCoin simulat (hedge): închiderea (vânzare reduce-only, `hedged`), deschiderea (vânzare, 5×, isolated), anularea SL-ului și TP-ului long-ului. SL-ul short-ului rămâne.
+- **⇅** are 20 px și stă centrat pe linia de intrare, înaintea casetei.
+- **Zona** de la intrare la SL-ul tras e portocalie, sub lumânări.
+- **Etichetele de preț:** toate au 123 px fizici la 2×, prețul curent inclus.
+- **Verificarea de aliniere:** zero la 1440 / 390 / 320, inclusiv fereastra nouă.
+
+## Runda 195 — 1 problemă
+Scope complet al rundei 194, recitit, plus `tsc --noUnusedLocals` pe fișierele atinse.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `Trades.tsx` | Importul `PositionRow` rămăsese nefolosit după mutarea `closeSeed` în `trade-seeds.ts`. | Scos. |
+
+## Runda 196 — zero probleme
+Scope complet, recitit; `tsc` (strict și `--noUnusedLocals` pe fișierele atinse) fără observații.
+
+Nimic de schimbat.
+
+## Runda 197 — 13 probleme (FD-CHARTSETTINGS; reparate)
+Scope: `chart-style.ts`, setările serverului, `ColorPicker`, `CandleChart` (aspectul, fundalul, filigranul, resetarea, meniul, butoanele), `primitives` (fundalul casetelor), `StudyLegend`, `chart-look.ts`, `ChartStatusLine`, `ChartMenu`, `ChartSettingsDialog`, `Modal` (`clear`, `flush`), `Toast` (`action`, `autoHide`), `Charts` (legarea, ștergerile, ⌥R), `fullscreen.ts`, testele, FD / TD / ghidul. Verificat în Chrome la 1440 / 390 / 320.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `ChartMenu` | Focusul pe primul rând se punea cât meniul era încă ascuns (măsurat), deci nu ajungea în meniu: săgețile nu mergeau. | Focusul după așezare (efect pe poziție). |
+| 2 | `Charts`, ⌥R pe telefon | Lista de simboluri închisă (`role=dialog`, `inert`) era luată drept fereastră deschisă: ⌥R nu făcea nimic sub 768 px. | `modalOpen()`: doar `aria-modal` care nu e `inert`. |
+| 3 | `ChartSettingsDialog`, tab-urile | `scrollIntoView` întoarce acum un `Promise` în Chrome; efectul scris ca expresie îl dădea lui React drept curățare → „l is not a function”, iar aplicația cădea la schimbarea tab-ului. | Efecte cu acolade (și celelalte efecte noi scrise pe o linie). |
+| 4 | `ChartStatusLine` | Semne minus diferite: „−207,5 (-0,25%)”. | „−” la ambele (`fmtChange`, testat). |
+| 5 | Fereastra, 390 px | Al patrulea tab ieșea din rând. | Pe telefon tab-urile sunt fără iconițe; cel ales e adus în vedere. |
+| 6 | `CandleChart`, lumânările | Cu LMA colorând barele, corpul apărea și cu „Corp” debifat. | Corpul rămâne transparent când e oprit. |
+| 7 | `CandleChart`, click dreapta | Pe Android, apăsarea lungă (cursorul de atingere) ar fi deschis meniul. | Meniul doar la mouse; pe atingere, din ⚙. |
+| 8 | `CandleChart`, resetarea | După o resetare, orice grafic refăcut (alt simbol) se reseta din nou în loc să-și refacă vizualizarea ținută minte. | Doar o cerere nouă (contorul diferit de ultimul aplicat). |
+| 9 | `Charts`, „Anulează” la indicatori | Lista de pus la loc era luată înaintea unei salvări de formular aflate pe drum. | Luată în momentul ștergerii (după `formSave`). |
+| 10 | `ChartSettingsDialog` | Derularea rămânea de la tab-ul anterior; schimbările imbricate citeau ciorna din randarea curentă. | Fiecare tab începe sus; actualizări funcționale. |
+| 11 | `ColorPicker`, `TradeDraftBar` | Panoul de culoare și confirmarea modificării erau puse în `document.body`: în ecran complet nativ nu s-ar fi văzut. | `overlayRoot()`: elementul din ecran complet, altfel pagina. |
+| 12 | `fullscreen.ts` | În ecran complet, Esc ieșea din ecran complet în loc să închidă fereastra deschisă (setările, ordinul, întoarcerea), pentru că ascultătorul ecranului complet venea primul. | Esc nu iese cât e deschisă o fereastră modală. |
+| 13 | `Charts`, panoul graficului | Cu un fundal ales, panoul arăta culoarea temei cât se încărca alt simbol. | Panoul are aceeași culoare de fundal. |
+
+Măsurat:
+- **Meniul:** focus, săgeți, Esc, întors la colț, click în afară; ștergerile și „Anulează” (liniile și indicatorii revin); ⌥R.
+- **Fereastra:** fiecare tab; previzualizarea (grilă, text 14 px, degrade, filigran); „Renunță” readuce scala la 74 px; OK salvează.
+- **Opțiunile:** butoanele (la mouse / niciodată), titlurile, parametrii și valorile, placa la 30 %, precizia 4, New York (semnalele cu 7 h mai devreme).
+- **Ecran complet:** panoul de culoare deasupra; Esc închide întâi panoul, apoi fereastra, iar ecranul complet rămâne.
+- **Etichetele de preț** la 14 px: toate 153 px la 2×, prețul curent inclus.
+- **Tema luminoasă** și comutarea: casetele iau fundalul temei.
+- **Verificarea de aliniere:** zero, în pagina graficului, în cele patru tab-uri și în meniu, la 1440 / 390 / 320.
+
+## Runda 198 — 3 probleme (reparate)
+Scope complet al rundei 197, recitit.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `CandleChart`, `frameOptions` | `rightOffset` (marginea din dreapta) era printre opțiunile aplicate la fiecare schimbare de setări și la schimbarea temei. Biblioteca îl ia drept poziție de derulare, deci vizualizarea derulată în istoric sărea la ultimele lumânări. | Aplicat la creare și doar când se schimbă marginea. Măsurat: derulat înapoi, după o schimbare de grilă, după „Renunță” și după schimbarea temei rămâne înapoi; marginea 40 duce la ultima lumânare. |
+| 2 | `ChartStatusLine` | Cu lumânările colorate după închiderea anterioară, valorile D / Max / Min / Î aveau culoarea după deschidere, nu pe a lumânării. | Aceeași regulă ca lumânarea. |
+| 3 | `ChartStatusLine`, indici | „Vol 0” la indici (fără volum). | Volumul apare doar când lumânările au volum. |
+
+## Runda 199 — 1 problemă (reparată)
+Scope complet, recitit, plus reparațiile rundei 198 (marginea din dreapta, culoarea valorilor, volumul).
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `ChartStatusLine`, punctul pieței | Explicația din `title` începea cu literă mică („piața e deschisă non-stop”), spre deosebire de celelalte explicații din aplicație. | Cu majusculă. |
+
+## Runda 200 — zero probleme
+Scope complet, recitit; `tsc` (strict și `--noUnusedLocals` pe fișierele atinse) fără observații; testele web și cele noi trec.
+
+Nimic de schimbat.
+
+## Runda 201 — 1 problemă (FD-BARCOLORBODY; reparată)
+Scope: `candle-colors.ts` (regula culorilor și geometria corpului), datele seriei în `CandleChart` (LMA), `BarColorPrimitive` (`barcolor` generic), testele, FD / TD / ghidul. Verificat în Chrome la 2×: corpurile în culoarea LMA, marginile și fitilurile în culorile din setări, după direcție; cu „Corp” debifat, lumânări goale.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `candle-colors.ts` / `BarColorPrimitive` | O verificare nouă de transparență (expresie regulată) dubla `isTransparent` al vendor-ului, care citește orice formă de culoare. | Folosit `isTransparent`; verificarea nouă scoasă. |
+
+## Runda 202 — zero probleme
+Scope complet al rundei 201, recitit; `tsc` (strict și `--noUnusedLocals`) fără observații; testele culorilor și ale indicatorilor trec.
+
+Nimic de schimbat.
+
+## Runda 203 — 5 probleme (FD-STYLEUNIFY; reparate)
+Scope:
+- **Parametrii:** Slingshot (stările pe părți, nivelurile ATR, EMA, Market Structure, preluarea setărilor vechi), LMA (pragurile, semnalul), setările graficului (grosimea cursorului).
+- **Desenarea:** `slingshot-draw`, `CandleChart`, `lma-lines`.
+- **Formularele:** `ColorPicker` (grosimea, culoarea fixă), `IndicatorForm` (rândul „look”), `StudySettings`, `HLineSettings`, `ChartSettingsDialog`, caseta TP / SL.
+- **Altele:** fișierul Pine, testele, FD / TD / ghidul / `slingshot-port.md`.
+
+Verificat în Chrome la 1440 / 390 / 320.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | Formularul Slingshot, 320 px | Rândurile se rupeau diferit: la unele, culoarea și mărimea treceau sub nume, la altele nu. | Numele se rupe pe rânduri, controalele rămân în dreapta pe fiecare rând; (i) e pe mijlocul primului rând; lista de mărime are 88 px. |
+| 2 | `CandleChart`, pragurile LMA | Cheia efectului nu cuprindea culoarea și grosimea alese, deci o schimbare a lor nu s-ar fi redesenat. | Cheia e chiar lista liniilor calculate (`lmaHlines`). |
+| 3 | `slingshot-port.md` | Descria încă „Failed / Invalidated Signal Color” comune. | Stările pe părți, cu mărimea pusă la fiecare schimbare de stare. |
+| 4 | `ColorPicker`, caseta TP / SL | Blocurile noi nu erau indentate ca restul fișierelor. | Reindentate. |
+| 5 | FD / TD | „Tip” în text, „Stilul liniei” în panou. | „Stilul liniei” peste tot. |
+
+Măsurat:
+- **Panourile:** 4 px ales și salvat; Market Structure cu 5 px și RSI cu 6 px (grosimi vechi) apar selectate lângă 1–4; EMA-urile și semnalul LMA au nota despre culoare, plus grosimea și stilul; pragul LMA are culoarea scriptului (70 %) și 1 px.
+- **Graficul:** SHORT-ul în culoarea și mărimea lui (Large), invalidatul ca X Huge; liniile ATR ale SHORT-ului în culorile lui.
+- **Verificarea de aliniere:** zero, pe 66 de ecrane (sertarele Slingshot, LMA, RSI, panoul liniei, ferestrele, graficul) la 1440 / 390 / 320.
+
+## Runda 204 — zero probleme
+Scope complet al rundei 203, recitit, cu reparațiile ei; `tsc` (strict și `--noUnusedLocals`) fără observații; testele web și comune trec (323).
+
+Nimic de schimbat în cod. Testul de server nou (setări Slingshot vechi scrise în baza de date, citite înapoi cu aspectul păstrat, apoi o salvare care păstrează restul) a cerut întâi o salvare: într-o bază nouă, rândul utilizatorului apare abia la prima salvare.
+
+## Runda 205 — 8 probleme (FD-TRADESOUND, FD-MACRORULES; reparate)
+Scope:
+- **Sunetul:** `trade-ends.ts`, `trade-sound.ts`, `useTradeEndSound`, setarea din Alerte.
+- **Regulile macro:** `macro.ts`, `categorize.ts` (semnalul Macro, subiectul, cuvintele crypto), `ingest.ts` (`weighItem`, `reclassify` după categoria sursei, în loturi, `upgradeClassification`), `INDEX_VERSION` 3.
+- **Altele:** categoria „Altele” în API, pe pagina de știri și la iconițe; testele; FD / TD / ghidul.
+
+Verificat în Chrome. Regulile au fost verificate și pe știrile reale (3 976 din sursele Macro, ultimele 3 zile, doar citire).
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `macro.ts` | Se numărau cuvintele, nu temele: „Chevron, ExxonMobil Stocks… Brent Crude” ieșea macro (Brent + crude = 2). | Câte o arie o dată; fiecare companie numită contează. |
+| 2 | `categorize.ts`, Crypto | „mining / miners / wallets” trimiteau minele de aur și companiile miniere la Crypto (și la sursele cu mai multe categorii). | Scoase; crypto rămâne prin monede și cuvintele crypto. |
+| 3 | `macro.ts` | „$100 Invested In Royal Gold…”: „gold” din numele companiei ieșea macro. | Tiparele de articole despre o companie („invested in”, „would be worth”) sunt semne de companie. |
+| 4 | `macro.ts` | „wages” singur: „Garnish Wages” ieșea piața muncii. | Doar creșterea salariilor, salariile reale, câștigul orar. |
+| 5 | `macro.ts`, lipsuri văzute în știrile reale | Rămâneau în afară: perechile valutare (USDCAD), „FX”, „Trade ‘Conflict’” (ghilimelele), „Budget Rules / Update”, „Finance Minister”, „Fuel Levy”, LNG, „oil” fără „prices”, ancora fiscală, „AI build-out”. | Adăugate, cu exemplele reale în teste. |
+| 6 | `subjectOf` | Știrile despre companii necunoscute detectorului (firme mici sau străine) ajungeau la Altele. | Semnele unei știri de companie: forma juridică, recomandarea unui analist, actele corporative. |
+| 7 | Verificarea în Chrome | KuCoin-ul simulat nu închide poziția la întoarcere, deci sunetul nu putea fi verificat. | Serverul de audit primește o comandă care închide o poziție pe „bursă”. Măsurat: un singur sunet după 16 s; nimic la deschidere, nimic repetat, nimic pentru ce s-a închis cu fila ascunsă. |
+| 8 | `chart-style.test` | Valoarea implicită a sunetului nu era testată. | Adăugată. |
+
+Măsurat pe știrile reale după reparații (3 976 de știri):
+- **Macro:** 410 (dobânzi, inflație, randamente, petrol, valute, bugete, FMI);
+- **Acțiuni:** 2 203 (rezultate, recomandări, companii);
+- **Geopolitică:** 62; **Crypto:** 38;
+- **Altele:** 558.
+
+Pagina de știri cu „Altele” și tab-ul Alerte: aliniere zero la 1440 / 390 / 320.
+
+## Runda 206 — zero probleme
+Scope complet al rundei 205, recitit; `tsc` fără observații; testele noi (`macro`, `multicat`, `trade-ends`, `trade-sound`, `chart-style`) trec.
+
+Nimic de schimbat.
+
+## Runda 207 — 15 probleme (FD-BOT; reparate)
+Scope:
+- **Server:** `shared/bot.ts`, `server/bots/` (motorul, execuția, grila, DCA, Premium, scorul, citirile, serviciul), rutele, migrarea 10, job-ul, consumul AI („Boți”).
+- **Pagina:** butonul „Bot”, `BotsDialog`, formularul, detaliile.
+- **Testele și documentele:** FD / TD.
+
+Verificat în Chrome (serverul de audit, KuCoin simulat) la 1440 / 390 / 320, cu fluxuri pentru alegere, cele trei formulare, editare, real, pagina unui bot și oprire.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | Migrarea 10 | Coloana `exec` e cuvânt rezervat în T-SQL: migrarea cădea. | `execution`. |
+| 2 | Grila, DCA, Premium | Nivelurile calculate (100 × 1,1 = 110,00000000000001) nu erau atinse de prețul 110. | `reached()`, cu o toleranță de 1e-9, peste tot. |
+| 3 | `RealExec`, `resend` | Un ordin rămas „în trimitere” era retrimis cu rotunjire și verificări noi: unul care ajunsese deja putea ieși „refuzat” (minim, sold liber consumat). | Retrimis exact cum a plecat. Cheia se salvează acum cu cantitatea rotunjită. |
+| 4 | Intrări refuzate | Se reîncercau la 30 s și umpleau jurnalul. | 5 minute fără intrări pe simbol, spus o dată. |
+| 5 | Problemă | Ieșirile continuau: o închidere cu rezultat necunoscut putea fi trimisă a doua oară. | În Problemă nu pleacă niciun ordin până la „Reia”. Reconcilierea merge mai departe. |
+| 6 | Problemă → Pauză | „Pauză” dintr-o Problemă ar fi pornit iar ieșirile pe ocolite. | Pauza doar din Rulează / Programat (API și pagină). |
+| 7 | Prețul lipsă | Problema rămânea până la „Reia”, deși mesajul spunea „până revine”. | Trece singură când prețul revine. |
+| 8 | Jurnalul | Aceeași problemă (reconcilierea grilei), reîncercarea și retrimiterea erau scrise la fiecare verificare. | Scrise o dată. |
+| 9 | Două semnale pe o lumânare | AI-ul era întrebat pentru amândouă. | Regulile pentru fiecare; AI-ul doar pentru cel ales. |
+| 10 | „Pierderea la care se oprește” | Putea transforma o Problemă în închidere. | Nu dintr-o Problemă. |
+| 11 | Rezumatul, jurnalul | Numerele fără separator de mii („84425,3”) față de pagină („84.425,3”). | `Intl` ro-RO pe server. |
+| 12 | Detaliile, 320 px | „Angajat 204,53 / 1.000 USDT” trecea peste „Realizat”. | Maximul trece sub sumă. |
+| 13 | Jurnalul, 320 px | Ora lua rândul, mesajul ieșea din cutie. | Pe telefon, ora deasupra mesajului. |
+| 14 | Formularul, 390 / 320 px | O etichetă pe două rânduri cobora câmpul față de vecinul lui. | O coloană sub 640 px (în afară de limitele grilei). Direcția cu o singură opțiune e text („Long · short doar pe futures”), nu un buton întins. |
+| 15 | Rezumatul, real pe futures | O poziție existentă pe simbol (botul n-ar intra) nu era spusă. | Un avertisment, apoi și în FD. |
+
+Documente aliniate cu codul:
+- FD: editarea (suma grilei, levierul doar la Premium), Problema, prima lumânare, intrarea refuzată;
+- TD: „Duplică” e în pagină, retrimiterea.
+
+Teste noi: refuzul cu pauza de 5 minute, Problema fără ordine și fără pauză, prețul care revine. Botul: 17 + 26 + 4 teste trec. Alinierea: zero, la 1440 / 390 / 320, pe cele cinci ecrane ale boților.
+
+## Runda 208 — 1 problemă (FD-BOT; reparată)
+Scope complet al rundei 207, recitit cu reparațiile ei.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | Grila reală | Cantitatea pe interval nu era rotunjită la pasul platformei (KuCoin BTC perpetuu: 0,001). Contul ar fi ținut mai puțin decât credea botul, iar reconcilierea ar fi găsit diferența: o Problemă falsă. | Unitatea grilei e rotunjită în jos la pas, la pornire. O unitate sub pas oprește grila cu un mesaj clar. Test: o grilă reală pe futures, cu contul care ține exact ce crede botul. |
+
+## Runda 209 — zero probleme
+Scope complet, recitit:
+- motorul (comenzile, perioada, prețurile, retrimiterea, reconcilierea, cele trei strategii, decizia Premium în două etape);
+- serviciul (verificarea, crearea, editarea, pauza / reluarea / oprirea, ștergerea);
+- pagina (formularul, detaliile, fereastra).
+
+`tsc` (și cu `--noUnusedLocals --noUnusedParameters`) fără observații. Testele boților trec: 18 + 26 + 11 + 4, plus consumul AI.
+
+Nimic de schimbat.
+
+## Runda 210 — 3 probleme (FD-BOT §10, acțiunile în real; reparate)
+Scope:
+- **Server:** `shared/bot.ts` (short pe acțiuni), `RealExec` (acțiunile, pozițiile eToro: notarea, căutarea târzie, închiderea doar a lor, short cu SL), motorul (ordinele de închidere, SL-ul short-urilor, grila eToro pe ordine separate, pozițiile pe laturi, reconcilierea), serviciul (verificarea per broker, editarea).
+- **Pagina:** formularul (conturile de acțiuni, direcțiile după broker).
+- **Testele și documentele.**
+
+Verificat în Chrome (eToro-ul simulat al serverului de audit) la 1440 / 390 / 320: „Real” oferit pe AAPL, contul eToro, Long / Short / Ambele, avertismentele, eroarea DCA-ului short fără SL. Nimic mai lat decât ecranul, rândurile la aceeași înălțime, nicio eroare în consolă.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | Reconcilierea la eToro | Se uita la totalul acțiunilor din cont: o poziție a botului închisă de mână nu se vedea când utilizatorul mai avea long-uri pe aceeași acțiune. Botul ar fi aflat abia la ieșire, cu un ordin refuzat. | La eToro, botul se uită la pozițiile lui, după id. Test: poziția lui închisă de mână, cu a utilizatorului rămasă. |
+| 2 | Avertismentul realului | Pomenea levierul și pe acțiuni, unde botul nu folosește levier. | Levierul doar la futures. |
+| 3 | Formularul pe acțiuni | Câmpul de adăugat simboluri arăta „AAPL”, deja ales. | „MSFT”. |
+
+## Runda 211 — zero probleme
+Scope complet al rundei 210, recitit:
+- deschiderea și închiderea la fiecare broker;
+- retrimiterea după o repornire (la eToro, poziția se caută după ora ordinului);
+- refuzurile (SL lipsă, minimul);
+- o poziție apărută târziu;
+- grila eToro pe laturi;
+- conturile din formular.
+
+`tsc` fără observații; testele boților trec (52).
+
+Nimic de schimbat.
+
+## Runda 212 — 1 problemă găsită la verificare (FIX-SLTPDUP; reparată)
+Scope:
+- **Server:** `ModifyStepResult.cancelled` în toți traderii; `TradingService` (anulare, modificare, întoarcere); `AccountsService` (`forgetOrders`, generația, citirea la 3 s).
+- **Pagina:** `portfolio-settle`, `sentLevels` / `withSent`, `Charts.tsx`, Tranzacții.
+- **Testele, FD / TD.**
+
+Verificat în Chrome pe un KuCoin simulat care listează ordinele cu 8 s întârziere: SL-ul mutat și confirmat. După 1 s, o singură linie, la nivelul nou (API-ul ascunde deja ordinul anulat, cel nou nu e listat). După 15 s, ordinul nou listat, aceeași linie, cu ×.
+
+| # | Unde | Problema | Reparația |
+|---|---|---|---|
+| 1 | `AccountsService.portfolio` | O citire pornită înainte de modificare era luată de citirea de după („ia-o pe cea în curs”), apoi intra în cache: lista veche încă 20 s. | `invalidate` uită citirea în curs și mărește generația; o citire veche nu mai intră în cache. Test în `server.test`. |
+
+## Runda 213 — zero probleme
+Scope complet al rundei 212, recitit:
+- toate locurile care anulează un ordin (inclusiv cancel-replace și Alpaca);
+- pseudo-ordinele eToro (refuzate la anulare, deci niciodată ascunse greșit);
+- rezultatul parțial;
+- expirarea după un minut;
+- liniile fără ordin (nici tras, nici ×).
+
+`tsc` fără observații; testele de tranzacționare și de grafic trec.
+
+Nimic de schimbat.
+
+## Runda 214 — zero probleme (FIX-COINSOUND)
+Scope:
+- `trade-ends.ts` (`MAX_GAP_MS`), `useTradeEndSound` (comentariul), `trade-sound.ts` (pregătirea fără sunet);
+- testele;
+- FD / TD.
+
+Cauza confirmată înainte de reparație:
+- patru citiri reale consecutive ale celor trei conturi, la 20 s: nicio „închidere” falsă;
+- botul n-a închis nimic;
+- jurnalul arată o poziție SOL nouă la 22:20, deci cea veche se închisese între timp, cât aplicația nu era urmărită.
+
+Verificat în Chrome:
+- pagina înghețată 70 s (vizibilă), long-ul închis între timp: zero sunete;
+- short-ul închis cât e urmărită: un sunet după 13 s;
+- prima atingere: zero.
+
+Recitit:
+- citirile la 3 s după o acțiune (FIX-SLTPDUP) rămân sub prag;
+- un cont citit doar la închidere (IBKR) nu e comparat oricum;
+- pagina ascunsă, apoi văzută: neschimbat.
+
+Nimic de schimbat.
+
+## Runda 215 — 3 probleme (FD-COLORUNIFY)
+Scope:
+- `color-links.ts`: legăturile, paletele, `linkStyle`;
+- catalogul (paletele);
+- `style.ts` (`pointColor`, `hlineDefault`, `styledEntry`) și `renderer.ts` (paleta pe `colorKey`);
+- `StudySettings`, `StudyLegend`, `Charts` (lista normalizată);
+- testele, FD / TD, ghidul.
+
+Verificat automat pe toți cei 118 indicatori:
+- culorile din Intrări rulate cu o culoare-santinelă;
+- culorile desenate de fiecare linie din Stil, cu valorile implicite și cu fiecare bifă / listă schimbată;
+- liniile orizontale din rezultat față de configurare: aceleași culori și niveluri la valorile implicite, deci aspectul implicit nu se schimbă.
+
+Verificat în Chrome (1440 / 390 / 320), pe serverul de audit:
+- **MA Ribbon:**
+  - roșul salvat înainte în Stil devine culoarea liniei (legenda roșie);
+  - grosimea 3 și tipul întrerupt alese în Intrări apar în Stil;
+  - albastrul ales în Stil apare în Intrări;
+  - salvat ca `inputs.ma1Color` + `plots.plot0 { width, style }`;
+  - linia desenată albastră, întreruptă, 3 px.
+- **MACD:** 4 casete la histogramă; negrul salvat în `palette`.
+- **Technical Ratings:** caseta cu nota.
+- **TSI:** banda urmează „Bullish Color”.
+- **Lățimea:** nimic mai lat decât ecranul.
+
+Probleme găsite:
+1. **Nota Technical Ratings** numea grupul „Colors”; în Intrări, culorile sunt la „Table Settings” (Buy, Neutral, Sell). Corectat în cod și în FD.
+2. **TD-ul** numea helperul `hlineColor(h, i, o, result)`; în cod este `hlineDefault(mod, h, result)`. Corectat.
+3. **`StudySettings`:**
+   - două variabile locale `name` ascundeau numele indicatorului (al formularului): redenumite `boxName` / `title`;
+   - un `} else if` scris pe două rânduri: aliniat la restul fișierului.
+
+## Runda 216 — zero probleme (FD-COLORUNIFY)
+Recitit după corecturi:
+- `tsc` fără observații; cele 239 de teste web trec;
+- `linkStyle` e idempotentă:
+  - o culoare schimbată înapoi la cea implicită dispare din `inputs` (`changedInputs`), la fel ca înainte;
+  - o culoare implicită scrisă cu alte majuscule nu putea fi desenată înainte (potrivire exactă), deci e corect că rămâne cea din Intrări.
+- **Paleta veche a Volume:**
+  - cheile ei (`UP_COLOR` / `DOWN_COLOR`) se potrivesc acum prin `colorKey`;
+  - o paletă aleasă înainte la AO câștigă față de culoarea veche a liniei, iar formularul arată la fel.
+- **Rândul MA din Intrări pe 320 px** se rupe pe trei rânduri, fără depășire; inputurile inactive rămân ca până acum.
+- **Auto Pitchfork** (culoare + grosime + stil ale liniei mediane, ca inputuri pe un rând) urmează inputurile scriptului TradingView. Nu e o dublură între taburi, deci rămâne.
+
+Nimic de schimbat.
+
+## Runda 217 — 1 problemă (FIX-COINSOUND2)
+Scope:
+- `trade-sound.ts`: pregătirea rămâne pe mut; o pauză doar dacă e încă mut;
+- `trade-ends.ts`: `base`;
+- `useTradeEndSound`: conturile de felul graficului, repornirea la alt simbol, citirea imediată;
+- `Charts`; testele; FD / TD; ghidul.
+
+Cauza confirmată înainte de reparație, în WebKit:
+- după primul click, `pause` e raportat, dar clipul merge mai departe până la `ended` (1,1 s);
+- volumul repornit imediat după pauză îl făcea audibil.
+
+Verificat după reparație:
+- **WebKit (mp3 înlocuit cu liniște):**
+  - pregătirea, pe mut până la capăt;
+  - long-ul BTC închis pe graficul BTC: un `play()` cu sunet, o dată.
+- **Chrome (`--mute-audio`):**
+  - primul click: zero;
+  - long-ul BTC pe graficul BTC: un sunet după 14 s;
+  - trecut pe ETH în același tab, short-ul BTC închis: zero.
+
+Problema găsită: FD-ul spunea că un trade închis chiar înainte de trecerea pe simbol nu sună niciodată. Serverul păstrează portofoliul 20 s, deci prima citire de după trecere poate fi dinainte de închidere. Un trade închis cu câteva secunde înainte poate deci suna la citirea următoare, ca la deschiderea graficului. FD-ul descrie acum exact asta.
+
+Notă: primele teste WebKit din această investigație au redat sunetul pe difuzoarele utilizatorului: o dată, apoi de două ori. De atunci, Chrome pornește cu `--mute-audio`, iar WebKit primește un fișier silențios.
+
+## Runda 218 — zero probleme (FIX-COINSOUND2)
+Recitit:
+- **`readyTradeSound` respinsă** (NotAllowedError): `readied` revine la fals, iar elementul rămâne mut. `playTradeSound` îl pornește oricum, deci un sunet legitim nu rămâne mut.
+- **Două tab-uri:** fiecare tab are elementul lui.
+- **Indicii:** fără citiri pentru sunet (`enabled` fals).
+- **Trecerea crypto → acțiune:** sunt citite conturile brokerilor, iar cele vechi nu mai sunt comparate (`seen` golit).
+- **Același simbol:** nicio citire în plus.
+- **Ascunderea paginii, regula de 50 s, sunetul o dată la 1,5 s:** neschimbate.
+
+`tsc` fără observații; testele de sunet și de grafic trec.
+
+Nimic de schimbat.
+
+## Runda 219 — 1 problemă (FIX-PANES)
+Scope: `CandleChart` (`paneScaleOf`, `paneScale`, `addPane` + `applyOptions`), FD / TD.
+
+Cauza confirmată:
+- reprodus în Chrome cu `logScale: true` (setarea utilizatorului): după adăugarea Stoch RSI din listă, LMA arăta −2 … 60, iar Stoch RSI 5000;
+- după reîncărcare era corect;
+- în codul bibliotecii, `_internal_applyPriceScaleOptions` face `merge` în opțiunile graficului, iar `new Pane()` le citește.
+
+Verificat după reparație:
+- Chrome 1440 / 390 / 320 și WebKit, cu preț logaritmic;
+- autoscala prețului oprită prin tragere;
+- adăugare și scoatere;
+- nimic mai lat decât ecranul; nicio eroare în consolă.
+
+Problema găsită: prima formă a TD-ului nu spunea de ce lipsește un test unitar. Biblioteca cere canvas, iar mediul de test e node, fără jsdom. Adăugat în TD.
+
+## Runda 220 — zero probleme (FIX-PANES)
+Recitit:
+- `paneScale` e luat înainte de efectele care pun marginile (`applyOptions({ scaleMargins })`) și logaritmul pe panoul 0. Acestea rulează după efectul de creare, în ordinea declarării.
+- **Tema schimbată** (`chart.applyOptions(frameOptions)`): trimite doar `borderColor`. Culorile panourilor noi vin în continuare din opțiunile generale, deci neatinse.
+- **Panoul 0** nu e niciodată scos sau refăcut. `applyOptions` pe un panou nou nu-l atinge (`pane._internal_applyScaleOptions` doar pe panoul dat).
+- **Panourile create la deschidere** primesc aceleași valori pe care le aveau deja: nicio schimbare.
+- **`scaleMargins` copiat (`{ ...o.scaleMargins }`):** un `merge` ulterior nu-l modifică.
+
+Nimic de schimbat.
+
+## Runda 221 — 2 probleme (FD-BOTTF)
+Scope: `botEditSchema.tf`, `BotService.edit` (refuzurile, coloana `tf`), `PremiumState.tf`, `premiumState()`, `retf` în `go()`, `Purpose.p_open.signalTime` opțional, `BotFormView` (`TfSelect`, câmpul la editare, `patch.tf`), testele noi, FD / TD / ghidul.
+
+Verificat:
+- **Fără cursă între API și motor:** `save()` scrie doar `state`, iar API-ul doar `config` și `tf`. Diferența dintre `config.tf` și `ps.tf` se vede la următoarea verificare.
+- **Ordinea în `go()`:** `retf` rulează înainte de `resend`, deci un `p_open` în așteptare își pierde `signalTime` înainte să devină poziție. Rulează și pe pauză, cu o problemă sau cu bursa închisă.
+- **Testele noi pică pe codul fără `retf`** (4 din 5; al cincilea e doar al API-ului):
+  - lumânarea de 4h deschisă înaintea ultimei lumânări de 1h citite era sărită;
+  - invalidarea unui semnal de 4h cu aceeași oră închidea poziția de 1h.
+- **`formOf` pune `nameTyped: true`:** schimbarea timeframe-ului nu rescrie numele.
+- **Singurul apelant al editării** e formularul. Ruta parsează cu `botEditSchema`.
+- **Chrome** 1440 / 390 / 320 și **WebKit** 390: câmpul pe un rând, aliniat cu „Nume”, nimic mai lat decât ecranul. Salvat 1h → 4h → 1h; detaliile și lista arată timeframe-ul nou; după o verificare a motorului, jurnalul are nota.
+
+Probleme găsite și reparate:
+1. **Textul de sub câmp și ghidul spuneau „după salvare”.** Schimbarea intră la următoarea verificare (≤ 30 s), iar o lumânare care se închide în acest interval e doar notată. Textul spune acum „Botul îl preia la următoarea verificare (≤ 30 s) și ia semnalele de pe lumânările care se închid după ea”; FD-ul și ghidul la fel.
+2. **TD-ul** nu numea `TfSelect` și refuzul la DCA din teste. Completat.
+
+## Runda 222 — 1 problemă (FD-BOTTF)
+Scope: același ca runda 221, plus FD-ul recitit caz cu caz față de cod.
+
+Verificat:
+- **Ieșirile:** fără `signalTime`, `signalFate` dă `null`, deci „flip” și SL / TP-ul marcat de Slingshot nu se mai aplică. SL / TP-ul la preț (`exitAt`), semnalul de TP (`ev.tpSignal`) și semnalul opus rămân. Exact ce spune FD-ul.
+- **Pe acțiuni:** cu bursa închisă, `readPrices` oprește verificarea după `retf`. La deschidere, prima citire notează lumânarea închisă.
+- **Nicio altă parte** (grafic, Tranzacții, MCP) nu citește timeframe-ul unui bot. Promptul AI-ului (`inputs.ts`) îl ia din `input.tf`.
+
+Problema găsită și reparată:
+- FD-ul punea botul **programat** în același rând cu pauza și problema („îl preia la următoarea verificare”). Un bot programat n-are încă stare: pornește direct pe timeframe-ul nou, cu regula de la pornire. Rând separat.
+
+## Runda 223 — zero probleme (FD-BOTTF)
+Scope: același ca rundele 221–222 (motorul, serviciul, schema, starea, formularul, testele, FD / TD / ghidul).
+
+Recitit:
+- **`retf`:**
+  - starea veche e adoptată fără resetare;
+  - nota spune timeframe-ul vechi și pe cel nou;
+  - partea despre poziții apare doar când o poziție (sau o intrare în așteptare) urmărea un semnal.
+- **`edit`:**
+  - refuzurile vin înainte de `UPDATE`, deci un refuz nu schimbă nimic;
+  - un `tf` egal trece la orice strategie;
+  - `UPDATE` scrie `r.data.tf`, valoarea validată de schemă.
+- **Formularul:**
+  - `TfSelect` e același la creare și la editare;
+  - câmpul apare doar la Premium;
+  - textul de sub el e fix, deci nimic nu mișcă pagina.
+
+Nimic de schimbat.
+
+## Runda 224 — 3 probleme (FD-BOTSLRR + FIX-INFOTIP)
+Scope: schema (`shared/bot.ts`), `premium.ts`, `score.ts`, `engine.ts`, `inputs.ts`, `service.ts`, formularul (`bot-form.ts`, `BotFormView`, `BotsDialog`), `InfoTip` cu `StudySettings` și `Charts.tsx`, testele, FD / TD / ghidul.
+
+Verificat:
+- **Cu „Slingshot”, nicio urmă de R:R:** nici verificare, nici scor, nici AI, nici jurnal (`detail.rr` scos).
+- **Prețul trecut de SL / TP** refuză tot, pentru că ordinul nu s-ar putea pune.
+- **Setările vechi** (`minRr`, `rr` numeric) se citesc prin `dropLegacyPremium`, inclusiv de la un tab cu versiunea veche.
+- **În Chrome (1440 / 390 / 320) și WebKit:**
+  - nimic nu depășește;
+  - rândurile formularului sunt la același nivel;
+  - „:” e centrat cu câmpurile raportului;
+  - bula (i) apare la hover, click și tap și stă în ecran;
+  - căsuța nu se bifează;
+  - Esc închide întâi bula, apoi panoul.
+
+Probleme găsite și reparate:
+- **Etichetele câmpurilor raportului** dădeau erori cu două „:” („Câștigul din raportul risc : câștig: lipsește.”) → „Partea de risc / câștig a raportului”.
+- **Bula fixată rămânea lipită de marginea ecranului** când iconița ieșea din vedere la derulare → se închide, ca `ColorPicker`.
+- **FD-ul, TD-ul și ghidul** descriau încă R:R-ul ca un număr R („TP = R × riscul”) → raportul 1:2 peste tot, cu cazurile lui (2:3 păstrat, limitele 2:1–1:10, R vechi → 1:R, tab vechi).
+
+## Runda 225 — 2 probleme (FD-BOTSLRR)
+Scope: același ca runda 224.
+
+Probleme găsite și reparate:
+- **Două comentarii** trimiteau la numerele vechi ale verificărilor din FD-BOT §6, care s-au renumerotat fără verificarea R:R: `confirm` („checks 9–10” → „8–9”) și `areaAgainst` („check 6” → „check 5”).
+- **TD-BOT** avea încă „R:R minim” în lista de teste → „nivelurile Slingshot luate cum sunt, fără R:R”.
+
+## Runda 226 — 1 problemă (FD-BOTSLRR)
+Scope: același ca runda 224, plus alinierea iconiței (i) măsurată în Chrome: centrul iconiței față de primul rând al textului setării, 0,9 px la toate cele 18 iconițe (RSI și Slingshot, 1440 și 390).
+
+Problema găsită și reparată:
+- **Comentariul din formular** spunea încă „a stop and an R” → „a risk : reward”.
+
+## Runda 227 — 1 problemă (FD-BOTSLRR)
+Scope: același ca runda 224.
+
+Problema găsită și reparată:
+- **Un câmp ascuns de alegerea ieșirii** oprea salvarea cu „lipsește” (raportul golit înainte de a alege „Slingshot”; procentul de SL golit cu SL-ul Slingshot). Asta contrazicea FD-ul („raportul ascuns nu contează”), iar pentru `slPct` problema exista și înainte.
+- **Reparat cu `shownExit`:** un câmp ascuns rămâne cum e dacă e valid, altfel primește valoarea implicită. Teste noi în `bot-form.test`.
+
+## Runda 228 — zero probleme (FD-BOTSLRR + FIX-INFOTIP)
+Scope: același ca runda 224 (schema, motorul, scorul, AI-ul, serviciul, formularul, `InfoTip` în ambele ferestre de setări, testele, FD / TD / ghidul).
+
+Recitit:
+- **`shownExit`:**
+  - la „Risc / câștig” cu SL procentual nu atinge nimic vizibil;
+  - la Slingshot, un SL procentual rămas dintr-un formular vechi e tot refuzat de schemă, cu mesajul din FD.
+- **Editarea botului existent:**
+  - `detail` întoarce setările trecute prin schemă, deci R = 2 → 1:2, fără `minRr`;
+  - trecerea pe „Risc / câștig” pornește de la 1:2.
+- **AI-ul:**
+  - promptul are SL-ul, TP-ul și sursa lor;
+  - regula „nu judeca SL / TP / R:R” e în `SYSTEM`;
+  - scorul trimis are la Slingshot doar structura.
+- **`InfoTip`:**
+  - bula e în `document.body`, peste panou (`z-[60]`);
+  - Esc e prins în captură, cu `stopPropagation`;
+  - un click în afara iconiței sau a bulei o închide;
+  - o singură bulă e deschisă odată.
+- **Nicio altă parte** a aplicației (MCP, Tranzacții, graficul) nu citește `rr` / `minRr`.
+
+Nimic de schimbat.
+
+## Runda 229 — 1 problemă (FD-BOTPCT)
+Scope:
+- schema (`levels`, `slPct`, `tpPct`, `upgradePremium`, `rrText`);
+- `levelsFor`, ieșirile marcate de Slingshot, AI-ul, „Verifică”;
+- formularul (`bot-form.ts`, `BotFormView`, `BotsDialog`);
+- testele;
+- FD / TD / ghidul.
+
+Verificat:
+- **Botul SOL** se citește ca înainte: Slingshot, procentele ascunse 2% și 4%.
+- **Setările vechi cu „Risc / câștig”** (SL x% și R, sau x% și 2:3) dau aceleași niveluri.
+- **Un tab cu formularul de dinainte** salvează convertit.
+- **În Chrome (1440 / 390 / 320) și WebKit (390 cu tap, 1440):**
+  - nimic nu depășește, rândurile sunt la același nivel;
+  - raportul urmează procentele scrise (1,5 și 2 → 1:1,33; 0,8 și 2 → 1:2,5).
+
+Problema găsită și reparată:
+- **FD-BOTSLRR, TD-BOTSLRR și ghidul** încă descriau „Risc / câștig” ca SL Slingshot / procent plus raportul în două câmpuri. FD-ul și TD-ul spun acum că partea asta e înlocuită de FD-BOTPCT; ghidul descrie cele două procente.
+
+## Runda 230 — zero probleme (FD-BOTPCT)
+Scope: același ca runda 229.
+
+Recitit:
+- **`levelsFor`:**
+  - la procente, SL-ul e mereu de partea bună a prețului;
+  - un short cu TP de 100% sau mai mult ajunge la „Take profit-ul ar fi la un preț sub zero”, nu la „Prețul a atins deja take profit-ul”;
+  - la Slingshot, procentele nu contează.
+- **`upgradePremium`:**
+  - nu atinge setările noi (`levels` prezent);
+  - din cele vechi scoate toate cheile vechi;
+  - TP-ul = SL × raport, deci nivelurile vechi se păstrează.
+- **`checkBot`:** raportul se verifică doar la procente; mesajul are raportul „1:20”.
+- **Formularul:**
+  - procentele ascunse de „Slingshot” nu opresc salvarea;
+  - raportul afișat e „—” cât lipsește un procent;
+  - explicația e fixă.
+- **Niciun cod** nu mai citește `sl`, `tp`, `rrRisk`, `rrReward`, `minRr` (doar `upgradePremium`, pentru setările vechi).
+
+Nimic de schimbat.
+
+## Runda 231 — 1 problemă (FIX-BROTLI)
+Scope: `net/plain-fetch.ts`, `net/http.ts` (cârligul, `contentFetch` / `apiFetch`, `BROTLI`), testele, FD / TD.
+
+Verificat:
+- **Refuzul vine înaintea oricărui decodor:** un corp br invalid dă eroarea noastră, nu una de decodare.
+- **Redirecționările** sunt ca la `fetch`.
+- **Limita de timp** e `TimeoutError` atât la antete, cât și la corp.
+- **Bomba gzip** e oprită de limita de mărime.
+- **Proxy-ul din mediu** e folosit de `node:https` (Node 24.14 și 25.9, verificat în sandbox).
+- **Testele care înlocuiesc `globalThis.fetch`** sunt doar ale interfeței web, deci neatinse.
+- **48 de surse reale:** aceleași răspunsuri ca prin `fetch`.
+
+Problema găsită și reparată:
+- **FD-ul nu spunea că protecția acoperă doar breșa Brotli.** Problemele TLS / DNS / keep-alive din același aviz rămân pe ambele căi până la Node 24.22.1. Adăugat, cu motivul pentru care ating Sentiq mai puțin.
+
+## Runda 232 — zero probleme (FIX-BROTLI)
+Scope: același ca runda 231.
+
+Recitit:
+- **`plainFetch`:**
+  - antetele sunt trecute în litere mici, iar `accept-encoding` se pune doar dacă lipsește;
+  - un `Location` greșit dă o eroare de rețea;
+  - corpul 3xx e distrus nedecodat.
+- **`send`:**
+  - semnalul e scos după răspuns și pus pe corp, apoi scos la `close`;
+  - o eroare după răspuns ajunge prin `pipeline` la corp.
+- **`toResponse`:**
+  - un status în afara 200–599 e refuzat;
+  - 204 / 205 / 304 au corp `null`;
+  - lista de codări e decodată de la ultima la prima;
+  - un token necunoscut lasă corpul brut, ca `undici`.
+- **`http.ts`:** `fetchText` / `fetchJson` folosesc noul transport; `httpRequest` (brokeri, ordine, e-mail, API-uri de piață) rămâne pe `fetch`; cârligul testelor le acoperă pe amândouă.
+
+Nimic de schimbat.
+
+## Runda 233 — 4 probleme (FD-BOTDIR)
+Scope: `shared/bot.ts` (schema, `upgradePremium`, `ScorePart`, `BotScore`), `bots/score.ts`, `bots/engine.ts` (`decide`, `onBar`), `bots/inputs.ts`, `bots/service.ts`, `bot-form.ts`, `BotFormView`, `BotDetailView`, `BotsDialog`, testele, FD / TD / ghidul.
+
+Verificat:
+- **Scorul pieței e același pentru long și short:** fiecare parte are semnul pieței, nu al laturii. Pragurile se compară cu scorul rotunjit, cel afișat, deci un refuz nu poate scrie „61 e peste 61”.
+- **Conversia setărilor vechi:** `minScore` M devine long M și short 100 − M. Pe scara pieței dă exact intrările de dinainte (scorul unui short era 100 − scorul pieței). Singura excepție e o egalitate de rotunjire la x,x5, cu 0,1 puncte, scrisă în FD.
+- **Două semnale pe aceeași lumânare:** se încearcă întâi latura favorizată de piață. La 50, sortarea e stabilă, deci rămâne ordinea Slingshot.
+- **Evenimentele vechi** din jurnal (`min`, fără `limit`) se afișează cu textul lor.
+- **Niciun cod** nu mai citește `minScore` sau `score.min`, în afară de conversie și de afișarea evenimentelor vechi.
+- **În Chrome**, la 1440 / 390 / 320 px, pe o schemă de test ștearsă la sfârșit:
+  - formularul cu long, ambele și short: fără depășire, câmpurile aliniate, celula goală doar pe desktop;
+  - jurnalul, cu formatul nou și cel vechi.
+
+Probleme găsite și reparate:
+- **`ScorePart.note`** avea ca exemplu „structura în direcție”, textul vechi. Acum e „ultima rupere în sus”.
+- **Comentariul lui `scoreReach`** spunea că o parte fără date „doar scade” scorul maxim. Cu ponderea Slingshot 0, nu-l schimbă. Acum: „never raises it”.
+- **Formularul alegea pragurile după direcția din stare, nu după cea afișată.** La acțiuni reale, înainte de alegerea contului, direcția arătată e „doar long”, dar starea putea rămâne „Ambele”. Acum pragurile și propoziția urmează direcția afișată.
+- **FD-ul avea două diferențe față de cod:**
+  - scria scorul trimis AI-ului cu virgulă, deși pleacă cu punct;
+  - nu spunea propoziția „AI-ul confirmă fiecare intrare.” din „Verifică”.
+  - Corectate amândouă.
+
+## Runda 234 — 1 problemă (FD-BOTDIR)
+Scope: același ca runda 233.
+
+Recitit:
+- `upgradePremium` (ambele treceri, cazul cu ambele forme, un minim care nu e număr);
+- `marketScore` / `passes` / `favoured` / `scoreReach`;
+- `decide` și sortarea din `onBar`;
+- `aiPrompt`;
+- „Verifică” și avertismentele;
+- `shownPremium` / `zoneText`;
+- secțiunea „Filtrul Sentiq”, `Journal`, textul din `BotsDialog`;
+- testele, FD / TD / ghidul.
+
+Problema găsită și reparată:
+- **O parte aproape neutră** (de exemplu un indice de 50,2, înclinare 0,004) apărea „spre long 0”. Acum, ce se rotunjește la 0,00 apare „neutru”.
+
+## Runda 235 — 1 problemă (FD-BOTDIR)
+Scope: același ca runda 233.
+
+Recitit codul, testele, FD-ul, ghidul și TD-ul, față de reparațiile din rundele 233–234.
+
+Problema găsită și reparată:
+- **TD-ul nu spunea** că formularul folosește direcția afișată și nici regula „neutru” pentru o parte care se rotunjește la 0,00. Adăugate.
+
+## Runda 236 — 2 probleme (FD-BOTDIR)
+Scope: același ca runda 233.
+
+Recitit FD-ul rând cu rând, față de cod.
+
+Probleme găsite și reparate (doar în FD):
+- **Culorile părților** erau date fără prag. Ele apar doar peste 0,05; până la el numărul e în culoarea textului, iar ce se rotunjește la 0,00 e „neutru”.
+- **Avertismentul de prag de neatins** nu spunea că privește doar direcțiile pe care le face botul.
+
+## Runda 237 — 2 probleme (FD-BOTDIR)
+Scope: același ca runda 233. `tsc` curat; testele unitare (36) trec.
+
+Probleme găsite și reparate (doar în TD):
+- **Conversia era descrisă „cu `minScore` număr”.** Codul convertește orice `minScore`, iar unul care nu e număr pică drept pragul long. Descrierea urmează acum codul.
+- **`limitOf`** lipsea din lista funcțiilor din `score.ts`.
+
+## Runda 238 — 1 problemă (FD-BOTDIR)
+Scope: același ca runda 233.
+
+Problema găsită și reparată:
+- **Lista de teste din TD** spunea că `bot-form.test` verifică setările vechi. Nu le verifică (o fac `strategies.test` și `shared/bot.test`). Lista spune acum ce verifică testul de fapt.
+
+## Runda 239 — zero probleme (FD-BOTDIR)
+Scope: același ca runda 233.
+
+Recitit din nou:
+- **Codul:** schema și conversia, scorul pieței și funcțiile lui, `decide` / `onBar`, prompt-ul AI, „Verifică”, formularul (direcția afișată, celula goală, propoziția), jurnalul (formatul nou, „neutru” sub 0,005, formatul vechi), textul din `BotsDialog`.
+- **Testele:** 36 unitare, 32 ale motorului.
+- **Documentația:** FD-BOTDIR, FD-BOT §6 (setări, pasul 6, tabelul scorului, pragurile implicite, cazul cu două semnale), TD-BOTDIR, ghidul.
+
+Nimic de schimbat.
+
+## Runda 240 — 1 problemă (FD-NEWSWIN)
+Scope: `BotFormView` („Filtrul Sentiq”), etichetele erorilor (`shared/bot.ts`, `bot-form.ts`), `bot-form.test`, FD-NEWSWIN, FD-BOT §6, TD-NEWSWIN, ghidul.
+
+Verificat:
+- **Numele vechi** nu mai apare nicăieri în cod sau în ghid.
+- **Valorile salvate** (`newsWindowMin`) și motorul sunt neatinse.
+- **15 minute după știre** e `AFTER_EVENT_MS` din motor.
+- **În Chrome, la 1440 / 390 / 320 px**, pe o schemă de test ștearsă la sfârșit:
+  - la 1440, numele pe un rând, iar câmpul exact cât coloana din stânga (351–714, ca „Scorul minim pentru long”);
+  - pe telefon, numele pe două rânduri și câmpul pe toată lățimea;
+  - nicio depășire; „Pauză după o pierdere” e pe rândul următor, aliniată la stânga.
+
+Problema găsită și reparată:
+- **Explicația de sub câmp și ghidul** spuneau „știre economică cu impact mare”, fără „pentru dolar”. Botul ia în seamă doar evenimentele USD. Adăugat în formular, în FD și în ghid.
+
+## Runda 241 — zero probleme (FD-NEWSWIN)
+Scope: același ca runda 240.
+
+Recitit:
+- numele, explicația (acum cu „pentru dolar”), clasele câmpului (`sm:col-span-2`, `sm:w-[calc(50%-6px)]`);
+- etichetele erorilor și testul lor;
+- FD-NEWSWIN cu tabelul de cazuri, rândul din FD-BOT §6, TD-ul și ghidul.
+- `tsc` e curat.
+
+Nimic de schimbat.
+
+## Runda 242 — 1 problemă (FIX-PINESYNC)
+Scope: `Sling Shot System/sling-shot-system-3.4.pine` (antetul, `indicator(…)`, prețurile din etichetele nivelurilor și din tabel), FIX-PINESYNC, TD-PINESYNC, `slingshot-port.md`, notele din FD-DENAMES și FD-SLINGSHOT34.
+
+Verificat:
+- **Etichetele, comparate pe ieșire:**
+  - în Sentiq, o captură a graficului SOL/USDT 15m cu setările utilizatorului, pe o schemă de test ștearsă la sfârșit;
+  - în Pine, apelurile `label.new` / `label.set_*` / `table.cell`.
+  - La un SHORT care își atinge stop loss-ul: în ambele, eticheta SHORT trece în „eșuat” (triunghi), iar pe bara stop loss-ului apare „STOP LOSS” cu triunghi în jos. X-ul e doar pentru invalidat.
+- **Numele** din `indicator(…)` sunt exact `SLINGSHOT_TITLE` / `SLINGSHOT_SHORT_TITLE` din `params.ts`.
+- **`#.##` nu mai apare:** cele 8 prețuri (4 etichete, 4 celule) folosesc `format.mintick`.
+- **Restul fișierului** e neatins: logica, intrările, alertele, culorile.
+
+Problema găsită și reparată:
+- **FD-ul (și răspunsul anterior către utilizator) spunea „70 de intrări”.** Pine are 79. Sentiq are 83, cu grosimea și tipul celor două EMA în plus, pe care TradingView le pune în tab-ul Stil. Corectat în FD.
+
+## Runda 243 — 1 problemă (FIX-PINESYNC)
+Scope: același ca runda 242.
+
+Problema găsită și reparată:
+- **Tabelul de cazuri dădea BTC cu tick 0,01.** Pe KuCoin, BTC are tick 0,1 (Sentiq îl arată 80.562,6). Rândul spune acum: SOL două zecimale, BTC una.
+
+## Runda 244 — 1 problemă (FIX-PINESYNC)
+Scope: același ca runda 242.
+
+Problema găsită și reparată:
+- **Rândul despre compilare din FD** spunea că schimbările folosesc lucruri „deja folosite în Pine v5”, ceea ce era neclar. Acum spune: `format.mintick` e o constantă din Pine v5.
+
+## Runda 245 — zero probleme (FIX-PINESYNC)
+Scope: același ca runda 242.
+
+Recitit:
+- antetul Pine și `indicator(…)`;
+- cele 8 prețuri;
+- FIX-PINESYNC rând cu rând;
+- TD-PINESYNC, `slingshot-port.md`, notele din FD-DENAMES și FD-SLINGSHOT34.
+
+Nimic de schimbat.

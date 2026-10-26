@@ -36,6 +36,7 @@ export function IndicatorPicker({
   premium,
   premiumOn,
   studyCount,
+  studiesOn = {},
   favorites,
   favoriteError,
   onAddPremium,
@@ -48,6 +49,8 @@ export function IndicatorPicker({
   premiumOn: Readonly<Record<PremiumKey, PremiumState>>;
   /** Standard indicators on the charts now (the limit is STUDY_MAX). */
   studyCount: number;
+  /** How many times each standard indicator is on the chart (FD-CHARTAUDIT §3). */
+  studiesOn?: Readonly<Record<string, number>>;
   onAddPremium: (key: PremiumKey) => void;
   /** The starred ones, in the order they were starred (FD-STUDYUX §1). */
   favorites: readonly FavoriteId[];
@@ -165,6 +168,9 @@ export function IndicatorPicker({
                   const description = r.kind === 'premium' ? r.item.description : r.description;
                   const note = r.kind === 'premium' ? premiumNote(premiumOn[r.item.key]) : null;
                   const on = note !== null;
+                  // A standard one stays addable (several, with other settings): only said, not disabled.
+                  const times = r.kind === 'study' ? (studiesOn[r.id] ?? 0) : 0;
+                  const onChart = times > 1 ? `Pe grafic × ${times}` : times === 1 ? 'Pe grafic' : null;
                   const disabled = on || (r.kind === 'study' && full);
                   const fav = starred.has(key);
                   return (
@@ -191,7 +197,7 @@ export function IndicatorPicker({
                           </span>
                         </span>
                         <span className="shrink-0 text-[12px]">
-                          {added === key ? <span className="text-bull">Adăugat</span> : note ? <span className="text-faint">{note}</span> : null}
+                          {added === key ? <span className="text-bull">Adăugat</span> : note || onChart ? <span className="text-faint">{note ?? onChart}</span> : null}
                         </span>
                       </button>
                       <button

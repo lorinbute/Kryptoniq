@@ -1,6 +1,6 @@
 // Type-only bridge: the web app imports server DTO types from here (erased at build time).
-export type { DaySentiment, HistoryPoint } from '../server/sentiment/daily.ts';
-export type { Driver, IndexResult, SubIndex, Confidence } from '../server/sentiment/daily-index.ts';
+export type { DaySentiment, HistoryPoint, TodayExplain } from '../server/sentiment/daily.ts';
+export type { Driver, IndexResult, ScoreWhy, SubIndex, Confidence } from '../server/sentiment/daily-index.ts';
 export type { NewsItemDto, NewsPage } from '../server/news/query.ts';
 export type { EconIndicator, EconomyView } from '../server/economy/service.ts';
 export type { StoredSummary, SummaryContent } from '../server/summary/service.ts';
@@ -93,6 +93,9 @@ export interface Health {
 export type { AiModelList } from '../server/ai/service.ts';
 export type { AiUsageDay, UsageCounts } from '../server/ai/usage.ts';
 export type { AiScorerStatus } from '../server/sentiment/ai-scorer.ts';
+export type { AiProgress } from '../server/sentiment/service.ts';
+export type { WatchListView, WatchView } from '../server/watchlists/service.ts';
+export type { ProfileQuarter, SymbolProfile } from '../server/market/profile.ts';
 
 /** GET /api/ai/status: the user's own AI. */
 export interface AiStatus {
@@ -104,6 +107,8 @@ export interface AiStatus {
   /** How the scoring goes (null when it is not on). */
   scorer: import('../server/sentiment/ai-scorer.ts').AiScorerStatus | null;
   usage: import('../server/ai/usage.ts').AiUsageDay;
+  /** How far the scoring got with the last 48 h (FD-AISLOW §4); null when it is not on (absent from older servers). */
+  progress?: import('../server/sentiment/service.ts').AiProgress | null;
 }
 
 /** GET / POST /api/summary. */
@@ -127,6 +132,10 @@ export interface FeedTest {
   count: number;
   sample: string[];
   error?: string;
+  /** FD-HTMLFEED: how the address reads ("feed RSS", "titlurile din pagină"…), how many items have a date, and a remark. */
+  method?: string;
+  dated?: number;
+  note?: string;
 }
 
 // ── FD-USERS ──────────────────────────────────────────────────────────────────────────────────────────

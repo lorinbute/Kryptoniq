@@ -1,9 +1,29 @@
-// Full screen for the chart (TD-CHARTUX §5): the system's full screen when the browser allows it, otherwise the
-// element covers the app window ("css" mode). Esc leaves the css mode; in the native mode the browser handles Esc.
+// Full screen for the chart (TD-CHARTUX §5): the system's full screen when the browser allows it (never on an iPhone
+// or iPad, FD-IPADFS2), otherwise the element covers the app window ("css" mode). Esc leaves the css mode; in the
+// native mode the browser handles Esc.
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { lockScroll } from '../scroll-lock.ts';
 
 export type FullscreenMode = 'off' | 'native' | 'css';
+
+/**
+ * An iPhone, an iPod or an iPad. iPadOS (and an iPhone asking for desktop sites) says "Macintosh" in its user agent; a
+ * Mac has no touch points.
+ */
+export function isAppleTouch(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /iPhone|iPod|iPad/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+}
+
+/**
+ * Whether to ask for the system's full screen (FD-IPADFS2): not on an iPhone or iPad. There every browser's (WebKit's)
+ * full screen leaves on any pull down, on purpose: no page can stop it (not `preventDefault`, not `touch-action`), and
+ * scrolling the symbol list up is a pull down. It also covers the whole screen, under the camera's cut-out, where
+ * the top of the symbol list's panel was lost. The chart covers the browser's window instead.
+ */
+export function nativeFullscreenAllowed(): boolean {
+  return !isAppleTouch();
+}
 
 /** Sent by the app (e.g. ⌘K) when something must be visible above the chart. */
 export const EXIT_FULLSCREEN_EVENT = 'sentiq:exit-fullscreen';
@@ -12,6 +32,12 @@ type FsDocument = Document & { webkitFullscreenElement?: Element | null; webkitE
 type FsElement = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
 
 const fullscreenElement = (): Element | null => document.fullscreenElement ?? (document as FsDocument).webkitFullscreenElement ?? null;
+
+/** A window is open (a closed panel stays in the page, inert): its Esc and shortcuts are its own. */
+export const modalOpen = (): boolean => [...document.querySelectorAll('[aria-modal="true"]')].some((d) => !d.closest('[inert]'));
+
+/** Where something floating is put: the element in full screen (nothing outside it shows then), else the page. */
+export const overlayRoot = (): HTMLElement => (fullscreenElement() as HTMLElement | null) ?? document.body;
 
 export function useFullscreen(ref: RefObject<HTMLElement | null>, opts: { blockEsc: boolean }) {
   const [mode, setMode] = useState<FullscreenMode>('off');
@@ -49,7 +75,8 @@ export function useFullscreen(ref: RefObject<HTMLElement | null>, opts: { blockE
     entering.current = true;
     entered.current = el;
     try {
-      const request = el.requestFullscreen ? () => el.requestFullscreen() : el.webkitRequestFullscreen ? () => el.webkitRequestFullscreen?.() : null;
+      const ask = el.requestFullscreen ? () => el.requestFullscreen() : el.webkitRequestFullscreen ? () => el.webkitRequestFullscreen?.() : null;
+      const request = nativeFullscreenAllowed() ? ask : null;
       if (request) {
         try {
           await request();
@@ -84,7 +111,8 @@ export function useFullscreen(ref: RefObject<HTMLElement | null>, opts: { blockE
   useEffect(() => {
     if (mode === 'off') return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented || modeRef.current === 'off' || blockEsc.current) return;
+      // A window opened in full screen (an order, the chart's settings) closes first: its own listener comes later.
+      if (e.key !== 'Escape' || e.defaultPrevented || modeRef.current === 'off' || blockEsc.current || modalOpen()) return;
       e.preventDefault();
       exit();
     };

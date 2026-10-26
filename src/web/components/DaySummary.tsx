@@ -11,6 +11,7 @@ import { api, ApiError, errorMessage } from '../api.ts';
 import { fmtEconPeriod, fmtEconValue, toneOf } from '../econ-format.ts';
 import { fmtAgo, fmtIn, fmtTime } from '../format.ts';
 import { lockScroll } from '../scroll-lock.ts';
+import { useVisibleArea } from '../visible-area.ts';
 import { useNow, useTz } from '../hooks.ts';
 
 const KEY = ['summary'] as const;
@@ -200,6 +201,7 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
   const tz = useTz();
   const now = useNow(1000);
   const dialog = useRef<HTMLDivElement>(null);
+  const area = useVisibleArea();
   const q = useQuery({ queryKey: KEY, queryFn: () => api.get<SummaryState>('/api/summary'), staleTime: 0 });
   const gen = useMutation({
     mutationFn: () => api.post<SummaryState>('/api/summary'),
@@ -259,18 +261,22 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
   const writer = q.data?.ai ? AI_PROVIDER_INFO[q.data.ai.provider].product : productOf(s?.model);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-scrim p-0 backdrop-blur-sm sm:p-4 sm:pt-[3vh]" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    // FD-MODALFIT: as tall as the part of the window seen at most (`vh` is more than that on iPhone / iPad).
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-scrim p-0 backdrop-blur-sm sm:p-4 sm:pt-[3vh]" style={area} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-labelledby="summary-title"
         tabIndex={-1}
-        className="flex h-full w-full max-w-[1120px] flex-col overflow-hidden border border-line-strong bg-panel shadow-modal outline-none sm:h-auto sm:max-h-[94vh] sm:rounded-[20px]"
+        className="flex h-full w-full max-w-[1120px] flex-col overflow-hidden border border-line-strong bg-panel shadow-modal outline-none sm:h-auto sm:max-h-full sm:rounded-[20px]"
       >
         <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-5 py-3.5">
-          <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            <Sparkles size={18} className="shrink-0 text-accent" aria-hidden />
+          <div className="flex min-w-0 flex-1 items-start gap-2.5">
+            {/* On the title's line (not between it and the line under it): as tall as a line of the title. */}
+            <span className="flex h-[1lh] shrink-0 items-center text-[17px]">
+              <Sparkles size={18} className="text-accent" aria-hidden />
+            </span>
             <div className="min-w-0">
               <h2 id="summary-title" className="text-[17px] font-[650] tracking-[-0.01em]">
                 Rezumatul zilei
@@ -320,7 +326,7 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
           {busy && (
             <div className="mb-4 flex items-center gap-2.5 rounded-[12px] border border-accent-dim/60 bg-accent/[0.06] px-4 py-3 text-[13.5px]" role="status">
               <Loader2 size={16} className="shrink-0 animate-spin text-accent" aria-hidden />
-              {writer} citește ziua: sentimentul, știrile, calendarul, indicatorii economici și favoritele tale. Durează de obicei 20–60 de secunde.
+              {writer} citește ziua: sentimentul, știrile, calendarul, indicatorii economici și simbolurile tale urmărite. Durează de obicei 20–60 de secunde.
             </div>
           )}
           {/* No key and too soon have their own messages (above and on the button). */}
@@ -338,7 +344,7 @@ export function DaySummary({ onClose }: { onClose: () => void }) {
         </div>
 
         <footer className="border-t border-line px-5 py-2.5 text-[11.5px] text-faint">
-          Scris de {s ? `${productOf(s.model)} (${s.model})` : q.data?.hasKey ? writer : 'AI-ul tău'} din datele Sentiq de azi (sentiment, știri, calendar, indicatori economici, contextul pieței, favoritele tale), cu
+          Scris de {s ? `${productOf(s.model)} (${s.model})` : q.data?.hasKey ? writer : 'AI-ul tău'} din datele Sentiq de azi (sentiment, știri, calendar, indicatori economici, contextul pieței, simbolurile tale urmărite), cu
           cheia ta API; cifrele graficelor sunt ale aplicației. Nu este un sfat de investiții.
         </footer>
       </div>

@@ -7,15 +7,16 @@ import { readJobData, writeJobData } from '../jobs/scheduler.ts';
 import type { SettingsService } from '../settings.ts';
 import type { AiService } from '../ai/service.ts';
 import { MAX_ITEM_AGE_MS } from '../news/normalize.ts';
-import { computeIndex, DEFAULT_INDEX_PARAMS, intradaySeries, type Driver, type IndexItem, type IndexResult } from './daily-index.ts';
+import { computeIndex, DEFAULT_INDEX_PARAMS, effects, explainIndex, INDEX_RULES, intradaySeries, type Driver, type ExplainItem, type IndexExplain, type IndexItem, type IndexParams, type IndexResult, type ScoreWhy } from './daily-index.ts';
 import { stockScopeSql, usersWithStockScope, type StockScope } from '../news/stock-scope.ts';
 
 export const MAX_FINALIZE_DAYS = 120;
 /**
  * Version of the way the index weighs news. A higher one than the history was built with recomputes it once
- * (`upgradeHistory`). 2 = FD-IMPACT: Claude's importance, geopolitics at 0.8.
+ * (`upgradeHistory`). 2 = FD-IMPACT: Claude's importance, geopolitics at 0.8. 3 = FD-MACRORULES: macro by the user's
+ * rules, the other news moved to their subject.
  */
-export const INDEX_VERSION = 2;
+export const INDEX_VERSION = 3;
 export const DAILY_JOB = 'sentiment.daily';
 /** Job data of the maintenance job: the latest retention threshold applied (news older than it are gone). */
 export const MAINTENANCE_JOB = 'maintenance';
@@ -28,6 +29,21 @@ export interface DaySentiment extends IndexResult {
   asOf: number;
   final: boolean;
   intraday: { t: number; index: number; count: number }[];
+}
+
+/** FD-INDEXWHY: items shown in full in "Cum s-a calculat?"; the rest are summed up. */
+export const EXPLAIN_ITEMS = 100;
+
+export interface TodayExplain extends Omit<IndexExplain, 'items'> {
+  day: string;
+  tz: string;
+  asOf: number;
+  params: IndexParams;
+  rules: typeof INDEX_RULES;
+  /** `without`: the index without the item (unrounded); `effect`: how much it moved it (FD-WHYPLAIN). */
+  items: (ExplainItem & { why: ScoreWhy | null; without: number; effect: number })[];
+  /** The items past `EXPLAIN_ITEMS`: how many, their part of the weight and of the mean. */
+  rest: { count: number; share: number; contribution: number };
 }
 
 export interface HistoryPoint {
@@ -54,12 +70,37 @@ interface NewsRow {
   sentiment: number | null;
 }
 
+const toItem = (r: NewsRow): IndexItem => ({
+  id: r.id,
+  title: r.title,
+  url: r.url,
+  sourceId: r.source_id,
+  sourceName: r.source_name,
+  sourceWeight: r.source_weight,
+  category: r.category,
+  publishedAt: r.published_at,
+  relevance: r.relevance,
+  impact: r.impact,
+  flags: parseFlags(r.flags),
+  clusterId: r.cluster_id,
+  sentiment: r.sentiment,
+});
+
 function parseFlags(s: string): string[] {
   try {
     const v = JSON.parse(s) as unknown;
     return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
   } catch {
     return [];
+  }
+}
+
+function parseMeta(s: string | null): unknown {
+  if (!s) return null;
+  try {
+    return JSON.parse(s) as unknown;
+  } catch {
+    return null;
   }
 }
 
@@ -123,27 +164,36 @@ export class DailySentimentService {
            ORDER BY n.published_at, n.id`,
       scope === null ? [start, end] : [scope, start, end, ...(filter ? [filter.param] : [])],
     );
-    return rows.map((r) => ({
-      id: r.id,
-      title: r.title,
-      url: r.url,
-      sourceId: r.source_id,
-      sourceName: r.source_name,
-      sourceWeight: r.source_weight,
-      category: r.category,
-      publishedAt: r.published_at,
-      relevance: r.relevance,
-      impact: r.impact,
-      flags: parseFlags(r.flags),
-      clusterId: r.cluster_id,
-      sentiment: r.sentiment,
-    }));
+    return rows.map(toItem);
+  }
+
+  /**
+   * The news about one coin or share (FD-BOT §6: the symbol's own index), with the user's AI scores where they gave
+   * one. Not limited by the stock news filter: the symbol's news are the point.
+   */
+  async coinItems(coin: string, start: number, end: number, scope: IndexScope = null): Promise<IndexItem[]> {
+    const rows = await this.db.all<NewsRow>(
+      `SELECT n.id, n.title, n.url, n.source_id, s.name AS source_name, s.weight AS source_weight, n.category, n.published_at, n.relevance,
+              ${scope === null ? 'COALESCE(n.sentiment_impact, n.impact)' : 'COALESCE(a.impact, n.sentiment_impact, n.impact)'} AS impact, n.flags, n.cluster_id,
+              ${scope === null ? 'n.sentiment' : 'COALESCE(a.score, n.sentiment)'} AS sentiment
+       FROM news n JOIN sources s ON s.id = n.source_id JOIN news_coins c ON c.news_id = n.id AND c.coin = ?
+       ${scope === null ? '' : 'LEFT JOIN news_ai_scores a ON a.news_id = n.id AND a.user_id = ?'}
+       WHERE s.enabled = 1 AND n.published_at >= ? AND n.published_at < ?
+       ORDER BY n.published_at, n.id`,
+      scope === null ? [coin, start, end] : [coin, scope, start, end],
+    );
+    return rows.map(toItem);
   }
 
   async computeDay(day: string, tz: string, now: number, withIntraday = true, scope: IndexScope = null): Promise<DaySentiment> {
     const window = dayBounds(day, tz);
+    return this.dayFrom(await this.loadItems(window.start, window.end, scope), day, tz, now, withIntraday);
+  }
+
+  /** The day from its items (loaded once by the caller). */
+  private async dayFrom(items: IndexItem[], day: string, tz: string, now: number, withIntraday: boolean): Promise<DaySentiment> {
+    const window = dayBounds(day, tz);
     const asOf = Math.min(now, window.end);
-    const items = await this.loadItems(window.start, window.end, scope);
     const res = computeIndex(items, window, asOf, DEFAULT_INDEX_PARAMS);
     await this.attachCoins([...res.drivers.positive, ...res.drivers.negative]);
     return {
@@ -166,11 +216,112 @@ export class DailySentimentService {
     for (const d of drivers) d.coins = rows.filter((r) => r.news_id === d.id).map((r) => r.coin);
   }
 
+  /**
+   * FD-SCOREWHY: what gave each driver its score, as the News page tells it: the same score the index used (the user's
+   * AI's where it gave one, else the common one). For the day as served; never stored with the snapshot.
+   */
+  async explainDrivers(day: DaySentiment, scope: IndexScope = null, loaded?: IndexItem[]): Promise<void> {
+    const drivers = [...day.drivers.positive, ...day.drivers.negative];
+    if (drivers.length === 0) return;
+    const ids = drivers.map((d) => d.id);
+    const why = await this.whyOf(ids, scope);
+    // FD-WHYPLAIN: the same items, window and moment as the day: why each weighs, and how much it moved the index.
+    const window = dayBounds(day.day, day.tz);
+    const items = loaded ?? (await this.loadItems(window.start, window.end, scope));
+    const terms = new Map(explainIndex(items, window, day.asOf, DEFAULT_INDEX_PARAMS).items.map((it) => [it.id, it]));
+    const moved = effects(items, window, day.asOf, ids, DEFAULT_INDEX_PARAMS);
+    for (const d of drivers) {
+      const w = why.get(d.id);
+      if (w) d.why = w;
+      const t = terms.get(d.id);
+      if (t) d.weighs = { relevance: t.relevance, impact: t.impact, sourceWeight: t.sourceWeight, spec: t.spec, flags: t.flags, decay: t.decay, clusterN: t.clusterN, cap: t.cap, share: t.share };
+      const m = moved.get(d.id);
+      if (m) {
+        d.without = m.without;
+        d.effect = m.effect;
+      }
+    }
+  }
+
+  /** The engine, its details and the importance's origin of these items, for the score the index used. */
+  private async whyOf(ids: string[], scope: IndexScope): Promise<Map<string, ScoreWhy>> {
+    const out = new Map<string, ScoreWhy>();
+    if (ids.length === 0) return out;
+    // A list kept short by the callers (10 drivers, 100 explained items): one query, its ids as parameters.
+    const marks = ids.map(() => '?').join(',');
+    type Row = { id: string; relevance: number; impact: number; sentiment_impact: number | null; engine: string | null; meta: string | null; reason: string | null };
+    const rows = await this.db.all<Row>(
+      scope === null
+        ? `SELECT n.id, n.relevance, n.impact, n.sentiment_impact, n.sentiment_engine AS engine, n.sentiment_meta AS meta, NULL AS reason
+           FROM news n WHERE n.id IN (${marks})`
+        : `SELECT n.id, n.relevance, n.impact, COALESCE(a.impact, n.sentiment_impact) AS sentiment_impact,
+                  CASE WHEN a.score IS NOT NULL THEN a.engine ELSE n.sentiment_engine END AS engine,
+                  CASE WHEN a.score IS NOT NULL THEN NULL ELSE n.sentiment_meta END AS meta,
+                  CASE WHEN a.score IS NOT NULL THEN a.reason ELSE NULL END AS reason
+           FROM news n LEFT JOIN news_ai_scores a ON a.news_id = n.id AND a.user_id = ?
+           WHERE n.id IN (${marks})`,
+      scope === null ? ids : [scope, ...ids],
+    );
+    for (const r of rows) {
+      if (r.engine === null) continue;
+      out.set(r.id, {
+        engine: r.engine,
+        meta: parseMeta(r.meta),
+        relevance: r.relevance,
+        impact: r.sentiment_impact ?? r.impact,
+        impactSource: r.sentiment_impact !== null ? 'ai' : 'rules',
+        ruleImpact: r.impact,
+        reason: r.reason,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * FD-INDEXWHY: how today's index was computed, from the same items and functions as the index: the heaviest
+   * `EXPLAIN_ITEMS` items in full (with their score's details), the rest summed up.
+   */
+  async explainToday(tz: string, now = Date.now(), scope: IndexScope = null): Promise<TodayExplain> {
+    const day = dayKey(now, tz);
+    const window = dayBounds(day, tz);
+    const asOf = Math.min(now, window.end);
+    const items = await this.loadItems(window.start, window.end, scope);
+    const e = explainIndex(items, window, asOf, DEFAULT_INDEX_PARAMS);
+    const shown = e.items.slice(0, EXPLAIN_ITEMS);
+    const rest = e.items.slice(EXPLAIN_ITEMS);
+    const why = await this.whyOf(shown.map((it) => it.id), scope);
+    const moved = effects(items, window, asOf, shown.map((it) => it.id), DEFAULT_INDEX_PARAMS);
+    return {
+      ...e,
+      day,
+      tz,
+      asOf,
+      params: DEFAULT_INDEX_PARAMS,
+      rules: INDEX_RULES,
+      items: shown.map((it) => ({ ...it, why: why.get(it.id) ?? null, ...(moved.get(it.id) ?? { without: e.total.value, effect: 0 }) })),
+      rest: { count: rest.length, share: rest.reduce((a, it) => a + it.share, 0), contribution: rest.reduce((a, it) => a + it.contribution, 0) },
+    };
+  }
+
   /** Today in `tz` (every user sees the day of their own time zone, FD-USERS §2), in the common index or a user's. */
   async today(tz: string, now = Date.now(), scope: IndexScope = null): Promise<DaySentiment> {
     const day = dayKey(now, tz);
     const res = await this.computeDay(day, tz, now, true, scope);
     await this.save(res, false, scope);
+    return res;
+  }
+
+  /**
+   * `today` as the Today page gets it (every minute): saved, then its drivers explained (FD-SCOREWHY, FD-WHYPLAIN) from
+   * the same items, loaded once. The explanation is never stored with the snapshot.
+   */
+  async todayExplained(tz: string, now = Date.now(), scope: IndexScope = null): Promise<DaySentiment> {
+    const day = dayKey(now, tz);
+    const window = dayBounds(day, tz);
+    const items = await this.loadItems(window.start, window.end, scope);
+    const res = await this.dayFrom(items, day, tz, now, true);
+    await this.save(res, false, scope);
+    await this.explainDrivers(res, scope, items);
     return res;
   }
 

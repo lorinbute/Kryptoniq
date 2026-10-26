@@ -10,9 +10,10 @@ import { readContext } from '../market/context.ts';
 import { coinLogo } from '../market/logos.ts';
 import { STATS_PERIODS } from '../exchange/trade-stats.ts';
 import { CreditBudget, defaultStockAliases, STOCK_SYMBOL_RE, TwelveDataClient } from '../market/stocks.ts';
-import { fetchText } from '../net/http.ts';
-import { retagRecent } from '../news/ingest.ts';
-import { parseFeed } from '../news/parser.ts';
+import { reclassifySource } from '../news/ingest.ts';
+import { encodeCategories, sourceCategories } from '../news/categorize.ts';
+import { READ_AS_LABEL, resolveSource, type ReadAs } from '../news/page-feed.ts';
+import type { FeedTest } from '../../shared/api-types.ts';
 import { queryNews, newsQuerySchema } from '../news/query.ts';
 import { stockScopeFor } from '../news/stock-scope.ts';
 import { FILTER_INDICES } from '../../shared/stock-indices.ts';
@@ -21,7 +22,7 @@ import { SOURCE_COLUMNS, syncStockSources, type SourceRow } from '../news/source
 import { BIN } from '../db/schema.ts';
 import { formatIssues, TWELVEDATA_KEY_INVALID, TWELVEDATA_KEY_RE, ValidationError } from '../settings.ts';
 import { AI_PROVIDERS } from '../../shared/ai.ts';
-import { orderTicketSchema } from '../../shared/trading.ts';
+import { modifyTicketSchema, orderTicketSchema, reverseTicketSchema } from '../../shared/trading.ts';
 import { COOLDOWN_MS, minutes } from '../auth/throttle.ts';
 import { CHALLENGE_TTL_MS, WEBAUTHN_COOKIE } from '../auth/passkeys.ts';
 import { TradingError } from '../exchange/trading/types.ts';
@@ -29,6 +30,8 @@ import { me } from './auth.ts';
 import { relyingParty } from './auth-routes.ts';
 import { readCookie, setCookie } from './cookies.ts';
 import { ConflictError, NotFoundError } from './errors.ts';
+import { MAX_LISTS, MAX_WATCHED, type UnionChange } from '../watchlists/service.ts';
+import { describeAiError } from '../ai/types.ts';
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 const coinRe = /^[A-Z0-9]{1,15}$/;
@@ -55,7 +58,8 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
   const afterWatchlistChange = async (added?: string, reenable = false) => {
     ctx.coins.invalidate();
     for (const sym of await syncStockSources(db, reenable ? added : undefined)) ctx.log.info(`news: removed the automatic feed of ${sym} (in nobody's favourites)`);
-    await retagRecent(db, await ctx.coins.get(), Date.now() - 7 * DAY, await ctx.coins.classifier());
+    // FD-WATCHLISTS: in the background (seconds on 7 days of news); the answer does not wait.
+    ctx.retag.request();
     ctx.scheduler.nudge('scanner', 1000);
     if (added) {
       ctx.scheduler.nudge('news.fetch', 1000);
@@ -88,6 +92,7 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
         id: s.id,
         name: s.name,
         category: s.category,
+        categories: sourceCategories(s),
         enabled: s.enabled === 1,
         lastAttemptAt: s.last_attempt_at,
         lastSuccessAt: s.last_success_at,
@@ -112,7 +117,11 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
   const scope = (req: FastifyRequest) => ctx.daily.scopeFor(me(req).id);
   /** The user's own AI scores the news (FD-AIKEYS): its score is shown where it gave one. */
   const ownAiScores = async (req: FastifyRequest) => ctx.ai.isScoring(me(req).id);
-  app.get('/api/sentiment/today', async (req) => ctx.daily.today((await mine(req)).timezone, Date.now(), await scope(req)));
+  // FD-SCOREWHY / FD-WHYPLAIN: with "Ce mișcă piața" explained (after the snapshot is saved: never stored with it).
+  app.get('/api/sentiment/today', async (req) => ctx.daily.todayExplained((await mine(req)).timezone, Date.now(), await scope(req)));
+
+  // FD-INDEXWHY: "Cum s-a calculat?": today's index step by step, for the same user and items as the card.
+  app.get('/api/sentiment/today/explain', async (req) => ctx.daily.explainToday((await mine(req)).timezone, Date.now(), await scope(req)));
 
   app.get('/api/sentiment/history', async (req) => {
     const { days } = parse(z.object({ days: z.coerce.number().int().min(1).max(365).default(30) }), req.query);
@@ -146,22 +155,35 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
   );
 
   // ---------------- sources ----------------
+  const CATEGORY = z.enum(['crypto', 'macro', 'geopolitics', 'stocks']);
+  // FD-MULTICAT: one category, or several (`categories`; "General" is all four).
+  const CATEGORIES = z.array(CATEGORY, { error: 'Alege cel puțin o categorie' }).min(1, 'Alege cel puțin o categorie').max(4);
   const sourceInput = z.object({
     name: z.string().trim().min(1).max(80),
     url: z.string().trim().url().max(500),
-    category: z.enum(['crypto', 'macro', 'geopolitics', 'stocks']),
+    category: CATEGORY.optional(),
+    categories: CATEGORIES.optional(),
     weight: z.number().min(0.5).max(1.5).default(1),
   });
 
-  async function testFeed(url: string): Promise<{ ok: boolean; count: number; sample: string[]; error?: string }> {
+  /** FD-HTMLFEED: a feed, or a site's page read through its feed, sitemap, JSON-LD or headlines; what was found and how. */
+  async function testFeed(url: string): Promise<FeedTest & { readAs: ReadAs | null; readUrl: string | null }> {
     const safe = safeHttpUrl(url);
-    if (!safe) return { ok: false, count: 0, sample: [], error: 'Sunt acceptate doar adrese http(s)' };
+    if (!safe) return { ok: false, count: 0, sample: [], error: 'Sunt acceptate doar adrese http(s)', readAs: null, readUrl: null };
     try {
-      const res = await fetchText(safe, { timeoutMs: 15_000 });
-      const items = parseFeed(res.body);
-      return { ok: items.length > 0, count: items.length, sample: items.slice(0, 5).map((i) => i.title), ...(items.length ? {} : { error: 'Feed-ul nu conține articole' }) };
+      const r = await resolveSource(safe);
+      return {
+        ok: true,
+        count: r.items.length,
+        sample: r.items.slice(0, 5).map((i) => i.title),
+        method: READ_AS_LABEL[r.readAs ?? 'feed'],
+        dated: r.items.filter((i) => i.publishedAt !== null).length,
+        ...(r.note ? { note: r.note } : {}),
+        readAs: r.readAs,
+        readUrl: r.readUrl,
+      };
     } catch (err) {
-      return { ok: false, count: 0, sample: [], error: (err as Error).message };
+      return { ok: false, count: 0, sample: [], error: (err as Error).message, readAs: null, readUrl: null };
     }
   }
 
@@ -169,24 +191,41 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
 
   app.post('/api/sources/test', async (req) => {
     const { url } = parse(z.object({ url: z.string().trim().url().max(500) }), req.body);
-    return testFeed(url);
+    const { readAs: _r, readUrl: _u, ...t } = await testFeed(url);
+    return t;
   });
 
   app.post('/api/sources', async (req) => {
-    const s = parse(sourceInput.extend({ skipTest: z.boolean().default(false) }), req.body);
+    const s = parse(
+      sourceInput.extend({ skipTest: z.boolean().default(false) }).refine((x) => x.category !== undefined || x.categories !== undefined, { message: 'Alege cel puțin o categorie', path: ['categories'] }),
+      req.body,
+    );
     const url = safeHttpUrl(s.url);
     if (!url) throw new ValidationError('Sunt acceptate doar adrese http(s)');
     const taken = () => db.get('SELECT id FROM sources WHERE url = ?', [url]);
     if (await taken()) throw new ConflictError('Feed-ul este deja adăugat');
+    // FD-HTMLFEED: how it reads (a feed, or a site's page), kept for every reading after.
+    let how: { readAs: ReadAs | null; readUrl: string | null } = { readAs: null, readUrl: null };
     if (!s.skipTest) {
       const t = await testFeed(url);
-      if (!t.ok) throw new ValidationError(`Feed-ul nu poate fi citit: ${t.error ?? 'nu conține articole'}`);
+      if (!t.ok) throw new ValidationError(`Sursa nu poate fi citită: ${t.error ?? 'nu conține articole'}`);
+      how = t;
     }
     const id = `custom-${createHash('sha1').update(url).digest('hex').slice(0, 10)}`;
     // Checked again with the insert: the same feed added twice at once is added once.
     await db.tx(async () => {
       if ((await taken()) || (await sourceById(id))) throw new ConflictError('Feed-ul este deja adăugat');
-      await db.run('INSERT INTO sources(id, name, url, category, enabled, weight, builtin) VALUES (?, ?, ?, ?, 1, ?, 0)', [id, s.name, url, s.category, s.weight]);
+      const cats = encodeCategories(s.categories ?? [s.category as NonNullable<typeof s.category>]);
+      await db.run('INSERT INTO sources(id, name, url, category, categories, read_as, read_url, enabled, weight, builtin) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 0)', [
+        id,
+        s.name,
+        url,
+        cats.category,
+        cats.categories,
+        how.readAs,
+        how.readUrl,
+        s.weight,
+      ]);
     });
     ctx.scheduler.nudge('news.fetch', 500);
     return sourceById(id);
@@ -199,30 +238,41 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
         enabled: z.boolean().optional(),
         weight: z.number().min(0.5).max(1.5).optional(),
         name: z.string().trim().min(1).max(80).optional(),
-        category: z.enum(['crypto', 'macro', 'geopolitics', 'stocks']).optional(),
+        category: CATEGORY.optional(),
+        categories: CATEGORIES.optional(),
       }),
       req.body,
     );
+    const wanted = patch.categories ?? (patch.category !== undefined ? [patch.category] : undefined);
+    let changed = false;
     await db.tx(async () => {
       const src = await sourceById(id);
       if (!src) throw new NotFoundError(`Sursa ${id} nu există`);
-      if (src.builtin && (patch.name !== undefined || patch.category !== undefined)) throw new ValidationError('La sursele implicite poți schimba doar activarea și ponderea');
+      if (src.builtin && (patch.name !== undefined || wanted !== undefined)) throw new ValidationError('La sursele implicite poți schimba doar activarea și ponderea');
+      const cats = wanted ? encodeCategories(wanted) : null;
+      changed = cats !== null && sourceCategories(cats).join(',') !== sourceCategories(src).join(',');
       await db.run(
         `UPDATE sources SET enabled = COALESCE(?, enabled), weight = COALESCE(?, weight), name = COALESCE(?, name), category = COALESCE(?, category),
+           categories = CASE WHEN ? = 1 THEN ? ELSE categories END,
            next_fetch_at = CASE WHEN ? = 1 THEN 0 ELSE next_fetch_at END, failures = CASE WHEN ? = 1 THEN 0 ELSE failures END
          WHERE id = ?`,
         [
           patch.enabled === undefined ? null : patch.enabled ? 1 : 0,
           patch.weight ?? null,
           patch.name ?? null,
-          patch.category ?? null,
+          cats?.category ?? null,
+          cats ? 1 : 0,
+          cats?.categories ?? null,
           patch.enabled ? 1 : 0,
           patch.enabled ? 1 : 0,
           id,
         ],
       );
-      if (patch.category !== undefined && patch.category !== src.category) await db.run('UPDATE news SET category = ? WHERE source_id = ?', [patch.category, id]);
+      // One category for all: the stored news take it now (their weighing follows below, as for several).
+      if (changed && cats && !cats.categories) await db.run('UPDATE news SET category = ? WHERE source_id = ?', [cats.category, id]);
     });
+    // FD-MULTICAT: other categories, so the stored news are classified again (category, relevance, importance, flags).
+    if (changed) await reclassifySource(db, id, await ctx.coins.get(), await ctx.coins.classifier());
     if (patch.enabled) ctx.scheduler.nudge('news.fetch', 500);
     return sourceById(id);
   });
@@ -239,110 +289,61 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
   });
 
   // ---------------- watchlist (coins and, since FD-SENTIQ §4.1, stocks; since FD-INDICES, indices) ----------------
+  // FD-WATCHLISTS: the symbols live in named lists; `/api/watchlist` is all of them together (what the rest of the app
+  // follows) and its older changing routes work on the lists, for a tab opened before the update.
   const aliasesSchema = z.array(z.string().trim().min(3).max(40)).max(10);
   // A ticker of any kind (BTC, AAPL, BRK.B, ^SPX), for the routes that address an existing row.
   const symbolRe = /^\^?[A-Z0-9][A-Z0-9.-]{0,14}$/;
-  type WatchRow = { coin: string; quote: string; position: number; aliases: string; kind: string; name: string | null; exchange: string | null };
-  const listWatchlist = async (userId: number) =>
-    (await db.all<WatchRow>('SELECT coin, quote, position, aliases, kind, name, exchange FROM watchlist WHERE user_id = ? ORDER BY position, coin', [userId])).map((w) => ({
-      ...w,
-      // Rows saved before FD-SENTIQ §4.1 have no other kind than crypto.
-      kind: w.kind === 'stock' || w.kind === 'index' ? w.kind : ('crypto' as const),
-      aliases: (() => {
-        try {
-          return JSON.parse(w.aliases) as string[];
-        } catch {
-          return [];
-        }
-      })(),
-    }));
-  const kindLabel = (kind: string) => (kind === 'stock' ? 'acțiune' : kind === 'index' ? 'indice' : 'monedă');
+  const watchAddSchema = z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('crypto'),
+      coin: z.string().trim().toUpperCase().regex(coinRe),
+      quote: z.string().trim().toUpperCase().regex(coinRe).default('USDT'),
+      aliases: aliasesSchema.default([]),
+    }),
+    z.object({
+      kind: z.literal('stock'),
+      coin: z.string().trim().toUpperCase().regex(STOCK_SYMBOL_RE),
+      name: z.string().trim().max(120).optional(),
+      exchange: z.string().trim().toUpperCase().max(20).optional(),
+      aliases: aliasesSchema.optional(),
+    }),
+    // FD-INDICES: one of the catalog's, by its symbol ("SPX") or id ("^SPX"); kept under the id.
+    z.object({
+      kind: z.literal('index'),
+      coin: z
+        .string()
+        .max(10)
+        .transform((v, c) => indexId(v) ?? (c.addIssue({ code: 'custom', message: 'Indice necunoscut' }), z.NEVER)),
+      aliases: aliasesSchema.optional(),
+    }),
+  ]);
+  // Older clients send no kind.
+  const watchAdd = (body: unknown) => parse(watchAddSchema, { kind: 'crypto', ...((body ?? {}) as object) });
+  const listWatchlist = async (userId: number) => (await ctx.watchlists.view(userId)).items;
+  /** The rest of the app hears of a symbol new to the user or no longer followed (FD-AUTOFEED, FD-WATCHLISTS §6). */
+  const afterUnion = async (user: { role: string }, change: UnionChange) => {
+    const stock = change.added.find((a) => a.kind === 'stock');
+    if (stock) await afterWatchlistChange(stock.coin, user.role === 'admin');
+    else if (change.added.length > 0 || change.gone.length > 0) await afterWatchlistChange();
+  };
+  const listParam = (req: FastifyRequest) => parse(z.object({ id: z.coerce.number().int().positive() }), req.params).id;
+  const coinsBody = z.object({ coins: z.array(z.string().regex(symbolRe)).min(1).max(MAX_WATCHED) });
 
   app.get('/api/watchlist', async (req) => listWatchlist(me(req).id));
 
   app.post('/api/watchlist', async (req) => {
     const user = me(req);
-    const w = parse(
-      z.discriminatedUnion('kind', [
-        z.object({
-          kind: z.literal('crypto'),
-          coin: z.string().trim().toUpperCase().regex(coinRe),
-          quote: z.string().trim().toUpperCase().regex(coinRe).default('USDT'),
-          aliases: aliasesSchema.default([]),
-        }),
-        z.object({
-          kind: z.literal('stock'),
-          coin: z.string().trim().toUpperCase().regex(STOCK_SYMBOL_RE),
-          name: z.string().trim().max(120).optional(),
-          exchange: z.string().trim().toUpperCase().max(20).optional(),
-          aliases: aliasesSchema.optional(),
-        }),
-        // FD-INDICES: one of the catalog's, by its symbol ("SPX") or id ("^SPX"); kept under the id.
-        z.object({
-          kind: z.literal('index'),
-          coin: z
-            .string()
-            .max(10)
-            .transform((v, c) => indexId(v) ?? (c.addIssue({ code: 'custom', message: 'Indice necunoscut' }), z.NEVER)),
-          aliases: aliasesSchema.optional(),
-        }),
-      ]),
-      // Older clients send no kind.
-      { kind: 'crypto', ...((req.body ?? {}) as object) },
-    );
-    // Checked, placed and added in one transaction: two adds at once never pass the limit or share a position.
-    await db.tx(async () => {
-      const existing = await db.get<{ kind: string }>('SELECT kind FROM watchlist WHERE user_id = ? AND coin = ?', [user.id, w.coin]);
-      if (existing) throw new ConflictError(`${w.coin.replace(/^\^/, '')} este deja în favorite (ca ${kindLabel(existing.kind)})`);
-      if (((await db.get<{ n: number }>('SELECT count(*) AS n FROM watchlist WHERE user_id = ?', [user.id]))?.n ?? 0) >= 50) {
-        throw new ValidationError('Lista de favorite are maximum 50 de simboluri');
-      }
-      const pos = ((await db.get<{ p: number | null }>('SELECT max(position) AS p FROM watchlist WHERE user_id = ?', [user.id]))?.p ?? -1) + 1;
-      if (w.kind === 'crypto') {
-        await db.run("INSERT INTO watchlist(user_id, coin, quote, position, aliases, added_at, kind) VALUES (?, ?, ?, ?, ?, ?, N'crypto')", [
-          user.id,
-          w.coin,
-          w.quote,
-          pos,
-          JSON.stringify(w.aliases),
-          Date.now(),
-        ]);
-      } else if (w.kind === 'index') {
-        const info = indexById(w.coin);
-        await db.run("INSERT INTO watchlist(user_id, coin, quote, position, aliases, added_at, kind, name, exchange) VALUES (?, ?, N'USD', ?, ?, ?, N'index', ?, NULL)", [
-          user.id,
-          w.coin,
-          pos,
-          JSON.stringify(w.aliases ?? info?.aliases ?? []),
-          Date.now(),
-          info?.name ?? null,
-        ]);
-      } else {
-        const name = w.name || null;
-        const aliases = w.aliases ?? defaultStockAliases(name);
-        await db.run("INSERT INTO watchlist(user_id, coin, quote, position, aliases, added_at, kind, name, exchange) VALUES (?, ?, N'USD', ?, ?, ?, N'stock', ?, ?)", [
-          user.id,
-          w.coin,
-          pos,
-          JSON.stringify(aliases),
-          Date.now(),
-          name,
-          w.exchange || null,
-        ]);
-      }
-    });
-    // A new stock may need its news feed and its results (FD-AUTOFEED); a coin or an index only the retagging.
-    if (w.kind === 'stock') await afterWatchlistChange(w.coin, user.role === 'admin');
-    else await afterWatchlistChange();
-    return listWatchlist(user.id);
+    const w = watchAdd(req.body);
+    const r = await ctx.watchlists.add(user.id, await ctx.watchlists.firstListId(user.id), w);
+    await afterUnion(user, r);
+    return r.items;
   });
 
   app.put('/api/watchlist/order', async (req) => {
     const user = me(req);
-    const { coins } = parse(z.object({ coins: z.array(z.string().regex(symbolRe)).max(50) }), req.body);
-    // One statement: each listed symbol gets its index (OPENJSON's [key]) as position.
-    await db.run(`UPDATE w SET position = CAST(j.[key] AS int) FROM watchlist w JOIN OPENJSON(?) j ON w.coin = j.value COLLATE ${BIN} WHERE w.user_id = ?`, [JSON.stringify(coins), user.id]);
-    return listWatchlist(user.id);
+    const { coins } = parse(z.object({ coins: z.array(z.string().regex(symbolRe)).max(MAX_WATCHED) }), req.body);
+    return (await ctx.watchlists.orderItems(user.id, await ctx.watchlists.firstListId(user.id), coins)).items;
   });
 
   app.put('/api/watchlist/:coin', async (req) => {
@@ -351,7 +352,7 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     const patch = parse(z.object({ quote: z.string().trim().toUpperCase().regex(coinRe).optional(), aliases: aliasesSchema.optional() }), req.body);
     await db.tx(async () => {
       const row = await db.get<{ kind: string }>('SELECT kind FROM watchlist WHERE user_id = ? AND coin = ?', [user.id, coin]);
-      if (!row) throw new NotFoundError(`${coin} nu este în favorite`);
+      if (!row) throw new NotFoundError(`${coin} nu este urmărit`);
       if (row.kind !== 'crypto' && patch.quote !== undefined && patch.quote !== 'USD') throw new ValidationError(row.kind === 'index' ? 'Indicii sunt cotați în USD' : 'Acțiunile sunt cotate în USD');
       await db.run('UPDATE watchlist SET quote = COALESCE(?, quote), aliases = COALESCE(?, aliases) WHERE user_id = ? AND coin = ?', [
         patch.quote ?? null,
@@ -367,9 +368,84 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
   app.delete('/api/watchlist/:coin', async (req) => {
     const user = me(req);
     const { coin } = parse(z.object({ coin: z.string().toUpperCase().regex(symbolRe) }), req.params);
-    if ((await db.run('DELETE FROM watchlist WHERE user_id = ? AND coin = ?', [user.id, coin])).changes === 0) throw new NotFoundError(`${coin} nu este în favorite`);
-    await afterWatchlistChange();
-    return listWatchlist(user.id);
+    const r = await ctx.watchlists.removeEverywhere(user.id, coin);
+    if (r.done === 0) throw new NotFoundError(`${coin} nu este urmărit`);
+    await afterUnion(user, r);
+    return r.items;
+  });
+
+  // ---------------- watch lists (FD-WATCHLISTS) ----------------
+  const listNameBody = z.object({ name: z.string().max(200) });
+
+  app.get('/api/watchlists', async (req) => ctx.watchlists.view(me(req).id));
+
+  app.post('/api/watchlists', async (req) => ctx.watchlists.create(me(req).id, parse(listNameBody, req.body).name));
+
+  app.put('/api/watchlists/order', async (req) => {
+    const { ids } = parse(z.object({ ids: z.array(z.number().int().positive()).max(MAX_LISTS) }), req.body);
+    return ctx.watchlists.orderLists(me(req).id, ids);
+  });
+
+  app.put('/api/watchlists/:id', async (req) => ctx.watchlists.rename(me(req).id, listParam(req), parse(listNameBody, req.body).name));
+
+  app.delete('/api/watchlists/:id', async (req) => {
+    const user = me(req);
+    const r = await ctx.watchlists.remove(user.id, listParam(req));
+    await afterUnion(user, r);
+    return r;
+  });
+
+  app.post('/api/watchlists/:id/items', async (req) => {
+    const user = me(req);
+    const r = await ctx.watchlists.add(user.id, listParam(req), watchAdd(req.body));
+    await afterUnion(user, r);
+    return r;
+  });
+
+  app.put('/api/watchlists/:id/items/order', async (req) => {
+    const { coins } = parse(z.object({ coins: z.array(z.string().regex(symbolRe)).max(MAX_WATCHED) }), req.body);
+    return ctx.watchlists.orderItems(me(req).id, listParam(req), coins);
+  });
+
+  app.post('/api/watchlists/:id/items/copy', async (req) => {
+    const { coins, to } = parse(coinsBody.extend({ to: z.number().int().positive() }), req.body);
+    return ctx.watchlists.copy(me(req).id, listParam(req), to, coins);
+  });
+
+  app.post('/api/watchlists/:id/items/move', async (req) => {
+    const { coins, to } = parse(coinsBody.extend({ to: z.number().int().positive() }), req.body);
+    return ctx.watchlists.move(me(req).id, listParam(req), to, coins);
+  });
+
+  app.post('/api/watchlists/:id/items/delete', async (req) => {
+    const user = me(req);
+    const { coins } = parse(coinsBody, req.body);
+    const r = await ctx.watchlists.removeItems(user.id, listParam(req), coins);
+    await afterUnion(user, r);
+    return r;
+  });
+
+  // FD-WATCHLISTS §3: the "Date financiare" popup of a symbol, and its description in Romanian with the user's AI.
+  const profileQuery = z.object({ kind: z.enum(['crypto', 'stock', 'index']), symbol: z.string().trim().toUpperCase().regex(symbolRe) });
+  const nameOf = async (userId: number, coin: string) => (await db.get<{ name: string | null }>('SELECT name FROM watchlist WHERE user_id = ? AND coin = ?', [userId, coin]))?.name ?? null;
+
+  app.get('/api/symbols/profile', async (req) => {
+    const q = parse(profileQuery, req.query);
+    return ctx.profiles.profile(q.kind, q.symbol, await nameOf(me(req).id, q.symbol));
+  });
+
+  app.post('/api/symbols/translate', async (req) => {
+    const user = me(req);
+    const q = parse(profileQuery, req.body);
+    const p = await ctx.profiles.profile(q.kind, q.symbol, await nameOf(user.id, q.symbol));
+    if (!p.description || p.description.lang !== 'en') throw new ValidationError('Nu e nimic de tradus');
+    try {
+      return { text: await ctx.profiles.translate(user.id, p.description.text), error: null };
+    } catch (err) {
+      if (err instanceof ValidationError) throw err;
+      // The provider's refusal (no credit, a limit, too slow) is said as it is; the original stays on screen.
+      return { text: null, error: describeAiError(err) };
+    }
   });
 
   // ---------------- calendar ----------------
@@ -585,8 +661,10 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     // Global keys (retention, market data) only for the admin: 403 for anybody else.
     const next = await ctx.settings.updateFor(u.id, u.role === 'admin', req.body);
     if (JSON.stringify(prev.ai) !== JSON.stringify(next.ai)) {
-      // FD-AIKEYS: another provider, model or scoring choice: the scorer and the index follow at once.
+      // FD-AIKEYS: another provider, model or scoring choice: the scorer and the index follow at once (FD-AIQUOTA §2:
+      // without the pause of the choice before).
       ctx.ai.forgetChoice(u.id);
+      await ctx.sentiment.retryNow(u.id);
       ctx.scheduler.nudge('sentiment.ai', 500);
       ctx.scheduler.nudge('sentiment.daily', 2000);
     }
@@ -650,6 +728,8 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     const u = me(req);
     const { provider, key } = parse(providerParam.extend({ key: z.string().max(400).nullable() }), req.body);
     const { warning } = await ctx.ai.setKey(u.id, provider, key);
+    // FD-AIQUOTA §2: the key of the AI in use saved (the same one too) is tried again at once, without the pause.
+    if ((await ctx.ai.config(u.id)).provider === provider) await ctx.sentiment.retryNow(u.id);
     ctx.scheduler.nudge('sentiment.ai', 500);
     ctx.scheduler.nudge('sentiment.daily', 2000);
     return { ...(await view(req)), aiKeyWarning: warning };
@@ -665,7 +745,9 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
   app.get('/api/ai/status', async (req) => {
     const u = me(req);
     const [c, scoring, usage] = await Promise.all([ctx.ai.config(u.id), ctx.sentiment.aiStatus(u.id), ctx.ai.usage.today(u.id)]);
-    return { provider: c.provider, model: c.model, keySet: c.key !== null, scoring: c.scoring, scorer: scoring, usage };
+    // FD-AISLOW §4: how far it got, while it scores.
+    const progress = scoring ? await ctx.sentiment.aiProgress(u.id) : null;
+    return { provider: c.provider, model: c.model, keySet: c.key !== null, scoring: c.scoring, scorer: scoring, usage, progress };
   });
 
   /** The user's AI scores the last hours' news again (after another model, say). */
@@ -834,6 +916,44 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext): Pro
     const { id } = parse(idParam, req.params);
     await ownAccount(req, id);
     return ctx.trading.place(me(req).id, ticketFor(id, req.body));
+  });
+
+  // FD-ORDEREDIT: changing open orders and a position's stop loss / take profit (checked, then sent once).
+  const modifyFor = (id: number, body: unknown) => {
+    const t = parse(modifyTicketSchema, body);
+    if (t.accountId !== id) throw new ValidationError('Formularul e pentru alt cont.');
+    return t;
+  };
+
+  app.post('/api/trading/:id/modify/preview', async (req) => {
+    const { id } = parse(idParam, req.params);
+    await ownAccount(req, id);
+    return ctx.trading.previewModify(me(req).id, modifyFor(id, req.body));
+  });
+
+  app.post('/api/trading/:id/modify', async (req) => {
+    const { id } = parse(idParam, req.params);
+    await ownAccount(req, id);
+    return ctx.trading.modify(me(req).id, modifyFor(id, req.body));
+  });
+
+  // FD-REVERSE: a futures position turned the other way (checked, then sent once).
+  const reverseFor = (id: number, body: unknown) => {
+    const t = parse(reverseTicketSchema, body);
+    if (t.accountId !== id) throw new ValidationError('Formularul e pentru alt cont.');
+    return t;
+  };
+
+  app.post('/api/trading/:id/reverse/preview', async (req) => {
+    const { id } = parse(idParam, req.params);
+    await ownAccount(req, id);
+    return ctx.trading.previewReverse(me(req).id, reverseFor(id, req.body));
+  });
+
+  app.post('/api/trading/:id/reverse', async (req) => {
+    const { id } = parse(idParam, req.params);
+    await ownAccount(req, id);
+    return ctx.trading.reverse(me(req).id, reverseFor(id, req.body));
   });
 
   app.post('/api/trading/:id/cancel', async (req) => {

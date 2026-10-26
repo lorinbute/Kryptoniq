@@ -3,8 +3,8 @@
 Asistent de day-trading (*sentiment* + *IQ*, fostul Kryptoniq), cu datele în **Azure SQL Database**. Rulează pe Mac-ul tău și se deschide din rețeaua de acasă; e pregătit și pentru Azure App Service ([pașii](docs/deploy-azure.md)):
 - știri crypto, acțiuni, macro și geopolitică, cu **sentimentul zilei** (model local, sau AI-ul fiecăruia) și **rezumatul zilei** scris de AI-ul ales de fiecare (Claude, ChatGPT sau Gemini, pe cheia proprie);
 - **calendar economic** cu rezultatele companiilor și pagina **Economie** (indicatorii pe 9 țări / zone);
-- **grafice** cu Slingshot System 3.3 și [DI] LMA (Premium) plus oricare dintre cei 117 indicatori standard TradingView și Volume, pentru monede, acțiuni și indici americani (S&P 500, Nasdaq, Dow…), cu pozițiile tale și PnL; acțiunile pe 1m – 4h cu cheia Twelve Data a fiecăruia;
-- **portofolii** de la 7 exchange-uri crypto și 4 brokeri, cu **ordine din Sentiq** (spot, futures, acțiuni; pornite pe cont cu parola și 2FA, fiecare ordin confirmat; fără retrageri sau transferuri) pe toate în afară de Interactive Brokers;
+- **grafice** cu Slingshot System 3.4 (LONG și, opțional, SHORT) și [DI] LMA (Premium) plus oricare dintre cei 117 indicatori standard TradingView și Volume, pentru monede, acțiuni și indici americani (S&P 500, Nasdaq, Dow…), cu pozițiile tale și PnL; acțiunile pe 1m – 4h cu cheia Twelve Data a fiecăruia;
+- **portofolii** de la 7 exchange-uri crypto și 4 brokeri, cu **ordine din Sentiq** (spot, futures, acțiuni; pornite pe cont cu parola și 2FA, fiecare ordin confirmat; fără retrageri sau transferuri) pe toate în afară de Interactive Brokers, inclusiv **modificarea ordinelor și a SL / TP** (cu impactul pe PnL; pe grafic, prin tragerea liniilor);
 - temă întunecată și temă luminoasă.
 
 ```bash
